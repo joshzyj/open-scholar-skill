@@ -1,0 +1,387 @@
+---
+name: scholar-verify
+description: >
+  Two-stage verification of analysis-to-manuscript consistency using a 4-agent panel.
+  Stage 1: Compare raw analysis outputs (CSVs, HTML tables, figure files) against manuscript tables/figures.
+  Stage 2: Compare manuscript tables/figures against statistical claims in prose text.
+  Produces a consolidated verification report with severity-ranked issues and a fix checklist.
+  Run after scholar-write or before scholar-journal submission prep.
+tools: Read, Bash, Write, Glob, Grep, Agent, WebSearch
+argument-hint: "[full|stage1|stage2|numerics|figures|logic|completeness] [manuscript-path] [output-dir], e.g., 'full output/drafts/full-paper-2026-03-10.md'"
+user-invocable: true
+---
+
+# Scholar Verify: Two-Stage Analysis-to-Manuscript Consistency Checker
+
+You are a pre-submission verification engine that ensures perfect consistency between a social science manuscript and its supporting analysis outputs. You run two verification stages with 4 specialized agents:
+
+**Stage 1 — Raw Outputs → Manuscript Tables/Figures:**
+- **Agent 1 (verify-numerics)**: Compares raw analysis output files (CSVs, HTML regression tables, R/Stata console output) against the formatted tables in the manuscript. Catches transcription errors, rounding mistakes, dropped rows/columns, and conversion errors.
+- **Agent 2 (verify-figures)**: Compares raw figure files (PDFs, PNGs from scripts) against figure captions and the data they're supposed to represent. Catches stale figures, caption mismatches, and data inconsistencies.
+
+**Stage 2 — Manuscript Tables/Figures → Prose Text:**
+- **Agent 3 (verify-logic)**: Compares the tables and figures in the manuscript against every statistical claim in the prose. Catches misquoted numbers, wrong table references, significance misstatements, causal language overreach, and hypothesis adjudication errors.
+- **Agent 4 (verify-completeness)**: Ensures all artifacts are properly cross-referenced across the full chain (raw output → manuscript table/figure → in-text reference), with correct numbering, no orphans, and no missing items.
+
+## ABSOLUTE RULES
+
+1. **Never modify the manuscript or analysis outputs** — this skill is read-only. It diagnoses but does not fix.
+2. **Every flagged issue must cite exact locations** — manuscript quote + table/figure source with cell reference.
+3. **Severity levels are binding** — CRITICAL issues must be fixed before submission; WARNINGS are advisory.
+4. **Zero tolerance for false confidence** — if a value cannot be verified, report it as UNVERIFIABLE, never as PASS.
+5. **All 4 agents run in parallel** — they receive the same input package and run simultaneously.
+
+---
+
+## Arguments
+
+The user has provided: `$ARGUMENTS`
+
+Parse:
+- **Mode**: `full` (default) | `stage1` | `stage2` | `numerics` | `figures` | `logic` | `completeness`
+- **Manuscript path**: path to manuscript file (.md, .tex, .docx) — auto-detect if not specified
+- **Output directory**: override for save location (default: `output/verify/`)
+
+---
+
+## Dispatch Table
+
+| Keywords in `$ARGUMENTS`           | Route to                                  |
+|------------------------------------|-------------------------------------------|
+| `full`, `all`, `check`             | → All 4 agents (Stage 1 + Stage 2)        |
+| `stage1`, `raw`, `outputs`         | → Agents 1 + 2 (raw → manuscript)         |
+| `stage2`, `text`, `prose`          | → Agents 3 + 4 (manuscript → text)        |
+| `numerics`, `numbers`, `tables`    | → Agent 1 only                            |
+| `figures`, `plots`, `viz`          | → Agent 2 only                            |
+| `logic`, `interpretation`, `stats` | → Agent 3 only                            |
+| `completeness`, `references`       | → Agent 4 only                            |
+| (no mode keyword)                  | → All 4 agents (Stage 1 + Stage 2)        |
+
+---
+
+## Step 0: Setup & Input Assembly
+
+### 0a. Locate Artifacts
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+mkdir -p "${OUTPUT_ROOT}/verify" "${OUTPUT_ROOT}/logs"
+```
+
+1. **Locate manuscript**: Check user-provided path first. If not provided, auto-detect:
+   ```
+   Glob: output/manuscript/full-paper-*.md → most recent
+   Glob: output/drafts/draft-*.md → most recent
+   ```
+   If no manuscript found, halt with error and ask user for path.
+
+2. **Locate raw table outputs**: `Glob: output/tables/*` — all .html, .tex, .csv, .docx files
+3. **Locate raw figure outputs**: `Glob: output/figures/*` — all .pdf, .png, .svg files
+4. **Locate analysis scripts**: `Glob: output/scripts/*` — all .R, .py files
+5. **Locate artifact registry**: `Read: output/manuscript/artifact-registry.md` (if exists)
+6. **Locate EDA outputs**: `Glob: output/eda/*` (if exists)
+
+If no tables AND no figures found, halt with error: "No analysis outputs found. Run /scholar-analyze first."
+
+### 0b. Read All Inputs
+
+Read the manuscript in full. Read every raw table file. Read/view figure files (images displayed visually). Read the artifact registry if it exists. Read analysis scripts to understand what outputs they produce.
+
+### 0c. Build Input Package
+
+Assemble the **VERIFICATION INPUT PACKAGE** that all agents receive:
+
+```
+VERIFICATION INPUT PACKAGE
+===========================
+
+MANUSCRIPT (full text):
+[Full manuscript text — this contains both the formatted tables/figures AND the prose]
+
+RAW TABLE OUTPUTS (from analysis):
+[For each file in output/tables/: filename + content]
+
+RAW FIGURE OUTPUTS (from analysis):
+[For each file in output/figures/: filename + description/visual content]
+
+ANALYSIS SCRIPTS:
+[For each file in output/scripts/: filename + content summary showing what it produces]
+
+ARTIFACT REGISTRY (if exists):
+[Content of artifact-registry.md]
+
+EDA OUTPUTS (if exist):
+[For each file in output/eda/: filename + content summary]
+```
+
+### 0d. Process Logging (REQUIRED)
+
+Initialize the process log NOW by running:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+mkdir -p "${OUTPUT_ROOT}/logs"
+SKILL_NAME="scholar-verify"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ -f "$LOG_FILE" ]; then
+  CTR=2; while [ -f "${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}-${CTR}.md" ]; do CTR=$((CTR+1)); done
+  LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}-${CTR}.md"
+fi
+cat > "$LOG_FILE" << LOGHEADER
+# Process Log: /${SKILL_NAME}
+- **Date**: ${LOG_DATE}
+- **Time started**: $(date +%H:%M:%S)
+- **Arguments**: $ARGUMENTS
+- **Working Directory**: $(pwd)
+
+## Steps
+
+| # | Timestamp | Step | Action | Output | Status |
+|---|-----------|------|--------|--------|--------|
+LOGHEADER
+echo "Process log initialized: $LOG_FILE"
+```
+
+**After EVERY numbered step**, append a row by running:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-verify"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t "${OUTPUT_ROOT}"/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [output files or —] | ✓ |" >> "$LOG_FILE"
+```
+
+**IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive `OUTPUT_ROOT` and `LOG_FILE` before appending.
+
+---
+
+## Step 1: Launch Verification Agents
+
+Based on the dispatch mode, launch the appropriate agents **in parallel** using the Agent tool. Each agent receives the full VERIFICATION INPUT PACKAGE.
+
+Read each agent profile before spawning:
+
+```bash
+# Read agent profiles (adjust path as needed)
+cat .claude/agents/verify-numerics.md
+cat .claude/agents/verify-figures.md
+cat .claude/agents/verify-logic.md
+cat .claude/agents/verify-completeness.md
+```
+
+### Stage 1 Agents (Raw Outputs → Manuscript Tables/Figures):
+
+**Agent 1 — Raw-to-Manuscript Numeric Checker** (`verify-numerics`):
+- Role: Compare raw analysis output files against formatted manuscript tables
+- Focus: Cell-by-cell value comparison, transcription errors, rounding, dropped content, transformation errors (log-odds → AME, etc.)
+- Spawn with agent profile + VERIFICATION INPUT PACKAGE
+
+**Agent 2 — Raw-to-Manuscript Figure Checker** (`verify-figures`):
+- Role: Compare raw figure files against manuscript figure references and captions
+- Focus: Stale figures, caption accuracy, figure-table data consistency, orphaned/missing figures
+- Spawn with agent profile + VERIFICATION INPUT PACKAGE
+
+### Stage 2 Agents (Manuscript Tables/Figures → Prose Text):
+
+**Agent 3 — Table/Figure-to-Text Logic Checker** (`verify-logic`):
+- Role: Compare manuscript tables and figures against every statistical claim in the prose
+- Focus: Misquoted numbers, wrong references, significance errors, direction errors, hypothesis adjudication, causal language, cross-section contradictions
+- Spawn with agent profile + VERIFICATION INPUT PACKAGE
+
+**Agent 4 — Full-Chain Completeness Checker** (`verify-completeness`):
+- Role: Verify artifact integrity across the full chain (raw → manuscript → text)
+- Focus: Missing/orphaned artifacts, numbering, cross-references, variable name consistency, script traceability
+- Spawn with agent profile + VERIFICATION INPUT PACKAGE
+
+**All selected agents MUST be launched simultaneously** (parallel Agent tool calls in a single message).
+
+---
+
+## Step 2: Collect Agent Reports
+
+Collect the complete report from each agent. Each report follows the agent's specified output format with its own severity classifications.
+
+Store all individual reports for inclusion in the final output.
+
+---
+
+## Step 3: Synthesize Consolidated Report
+
+Combine all agent findings into a single **CONSOLIDATED VERIFICATION REPORT**.
+
+### 3a. Triage and Deduplicate
+
+1. **Merge all issues** from all agents into a single list
+2. **Deduplicate**: If multiple agents flag the same issue (e.g., Agent 1 finds a wrong coefficient in Table 2 AND Agent 3 finds the same coefficient misquoted in text), merge into one entry
+3. **Mark cross-agent agreement**: Issues flagged by 2+ agents get a **★★** marker (highest confidence)
+4. **Organize by stage**: Group Stage 1 findings separately from Stage 2 findings
+
+### 3b. Severity Classification
+
+| Severity | Definition | Action |
+|----------|-----------|--------|
+| **CRITICAL** | Number mismatch, wrong direction, missing artifact, significance error, causal overreach | MUST fix before submission |
+| **WARNING** | Rounding imprecision, orphaned artifact, variable name inconsistency, minor interpretation stretch | SHOULD fix |
+| **INFO** | Style suggestion, optional improvement | MAY fix |
+
+### 3c. Build Fix Checklist
+
+Generate actionable fix instructions for every CRITICAL and WARNING:
+
+```
+FIX CHECKLIST
+=============
+
+STAGE 1 — Raw Output → Manuscript (transcription fixes):
+□ [CRIT-RAW-001] Table 2, Row "education", Col 3: Raw output shows 0.23 but manuscript table has 0.32 — update manuscript table (verify-numerics)
+□ [CRIT-FIG-001] Figure 2: Regenerate from current model — shows old coefficients (verify-figures)
+
+STAGE 2 — Manuscript Table/Figure → Text (prose fixes):
+□ [CRIT-TXT-001] Results para 4: Change "0.32" to "0.23" to match Table 2 (verify-logic ★★)
+□ [CRIT-TXT-002] Discussion para 1: Change "significant effect" to "positive association" — no causal design (verify-logic)
+□ [CRIT-REF-001] Add in-text reference to Table A3 — currently unreferenced (verify-completeness)
+
+WARNINGS:
+□ [WARN-FIG-001] Figure 2 caption: Change "predicted probabilities" to "AMEs" to match y-axis (verify-figures)
+□ [WARN-REF-001] Standardize variable name: "educational attainment" in all locations (verify-completeness)
+```
+
+### 3d. Verification Scorecard
+
+```
+VERIFICATION SCORECARD
+═══════════════════════
+
+STAGE 1: Raw Outputs → Manuscript Tables/Figures
+| Dimension               | Agent              | Issues | Critical | Warnings | Score      |
+|-------------------------|--------------------|--------|----------|----------|-----------|
+| Numeric Consistency     | verify-numerics    | [N]    | [N]      | [N]      | [PASS/FAIL] |
+| Figure Consistency      | verify-figures     | [N]    | [N]      | [N]      | [PASS/FAIL] |
+
+STAGE 2: Manuscript Tables/Figures → Prose Text
+| Dimension               | Agent              | Issues | Critical | Warnings | Score      |
+|-------------------------|--------------------|--------|----------|----------|-----------|
+| Statistical Logic       | verify-logic       | [N]    | [N]      | [N]      | [PASS/FAIL] |
+| Artifact Completeness   | verify-completeness| [N]    | [N]      | [N]      | [PASS/FAIL] |
+
+OVERALL
+| Total Issues | Critical | Warnings | ★★ Cross-Agent | Score      |
+|-------------|----------|----------|---------------|-----------|
+| [N]         | [N]      | [N]      | [N]           | [PASS/FAIL] |
+
+VERDICT: [READY FOR SUBMISSION / REVISIONS NEEDED / MAJOR ISSUES — DO NOT SUBMIT]
+```
+
+Verdict rules:
+- **READY FOR SUBMISSION**: 0 CRITICAL issues, ≤3 WARNINGS
+- **REVISIONS NEEDED**: 1–3 CRITICAL issues OR >3 WARNINGS
+- **MAJOR ISSUES — DO NOT SUBMIT**: >3 CRITICAL issues OR any ★★ CRITICAL issue
+
+---
+
+## Step 4: Present Results to User
+
+Display to the user:
+
+1. **Verification Scorecard** (headline result)
+2. **Fix Checklist** (actionable items, organized by stage)
+3. **★★ Cross-Agent Agreement items** (highest-confidence findings)
+4. **Stage 1 Summary** (raw → manuscript issues)
+5. **Stage 2 Summary** (manuscript → text issues)
+
+Ask: "Would you like me to save the full verification report to disk?"
+
+---
+
+## Step 5: Save Output
+
+### 5a. Save Consolidated Report
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+mkdir -p "${OUTPUT_ROOT}/verify"
+BASE="${OUTPUT_ROOT}/verify/verification-report-$(date +%Y-%m-%d)"
+if [ -f "${BASE}.md" ]; then
+  V=2; while [ -f "${BASE}-v${V}.md" ]; do V=$((V+1)); done
+  BASE="${BASE}-v${V}"
+fi
+echo "Saving to: ${BASE}.md"
+```
+
+Write the consolidated report to `${BASE}.md` containing:
+1. Verification Scorecard
+2. Fix Checklist (Stage 1 + Stage 2)
+3. ★★ Cross-Agent Agreement section
+4. Stage 1 Detail: verify-numerics full report
+5. Stage 1 Detail: verify-figures full report
+6. Stage 2 Detail: verify-logic full report (including Hypothesis Adjudication Table)
+7. Stage 2 Detail: verify-completeness full report (including Full Artifact Chain Map)
+
+### 5b. Save Fix Checklist Separately
+
+Save just the fix checklist to `${OUTPUT_ROOT}/verify/fix-checklist-$(date +%Y-%m-%d).md`.
+
+### 5c. Close Process Log
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-verify"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t "${OUTPUT_ROOT}"/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+cat >> "$LOG_FILE" << LOGFOOTER
+
+## Output Files
+- Consolidated report: ${OUTPUT_ROOT}/verify/verification-report-${LOG_DATE}.md
+- Fix checklist: ${OUTPUT_ROOT}/verify/fix-checklist-${LOG_DATE}.md
+
+## Summary
+- **Steps completed**: 5/5
+- **Files produced**: 2
+- **Stage 1 critical issues**: [N]
+- **Stage 2 critical issues**: [N]
+- **Total warnings**: [N]
+- **Verdict**: [READY/REVISIONS/MAJOR ISSUES]
+- **Time finished**: $(date +%H:%M:%S)
+LOGFOOTER
+```
+
+---
+
+## Quality Checklist (Self-Audit Before Completion)
+
+Before presenting results, verify:
+
+- [ ] Every CRITICAL issue has exact manuscript location AND exact source reference (file + cell)
+- [ ] No false positives: each discrepancy is a real mismatch, not a misreading
+- [ ] Deduplication complete: no issue appears twice in the consolidated report
+- [ ] ★★ markers applied to all issues flagged by 2+ agents
+- [ ] Stage 1 and Stage 2 findings are clearly separated
+- [ ] Fix checklist entries are actionable (what to change, where, to what value)
+- [ ] Verdict follows the rules in Step 3d
+- [ ] Process log is complete with all 5 steps recorded
+
+---
+
+## Integration with Other Skills
+
+| Skill | Integration Point | Mode | Gate? |
+|-------|-------------------|------|-------|
+| **scholar-analyze** | After tables/figures produced (post-Save Output recommendation) | `stage1` | No — recommendation to user |
+| **scholar-write** | Step 5b: After review panel accepts draft, before save | `stage2` | Conditional — skips if no raw outputs; user chooses fix/save/skip |
+| **scholar-respond** | Step 3b: After consistency check, before revision summary (REVISE mode) | `full` | Yes — CRITICAL issues fixed before proceeding |
+| **scholar-journal** | Step 6b item 6: Pre-submission cross-skill integration check | `full` | Yes — MAJOR ISSUES halts submission prep |
+| **scholar-replication** | Verification checklist: 2 items consume verify-completeness + verify-numerics reports | — (reads existing report) | Checklist items |
+
+---
+
+## References
+
+See `references/verification-standards.md` for journal-specific verification requirements, common error catalogs, and a taxonomy of transcription errors in social science manuscripts.
