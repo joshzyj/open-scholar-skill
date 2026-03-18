@@ -1,7 +1,7 @@
 # Open Scholar Skill — User Guide
 
 A Claude Code project for social scientists writing for top-tier journals.
-23 skills + 1 utility covering the full research pipeline from idea exploration to collaboration.
+24 skills + 1 utility covering the full research pipeline from idea exploration to collaboration.
 
 ---
 
@@ -12,14 +12,14 @@ Skills and agents live in the `.claude/` directory:
 ```
 open-scholar-skill/
 ├── .claude/
-│   ├── skills/           ← 23 skills (scholar-*) + 1 utility (sync-docs)
+│   ├── skills/           ← 24 skills (scholar-*) + 1 utility (sync-docs)
 │   ├── agents/           ← 9 reviewer agents (peer-reviewer-*) + 4 verification agents (verify-*)
 │   └── settings.local.json
 ├── README.md
 └── USAGE.md
 ```
 
-All 24 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
+All 25 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
 
 ---
 
@@ -65,6 +65,7 @@ The text after the skill name is passed directly as context. The more specific t
 | `/scholar-ling` | Sociolinguistics work | `variationist analysis of t-deletion` |
 | `/scholar-ethics` | Research ethics compliance | `pre-submission ethics check for Demography` |
 | `/scholar-safety` | Real-time data privacy protection | `scan data.csv before analysis` |
+| `/scholar-knowledge` | Build and query cross-project knowledge graph | `search theories of spatial assimilation` |
 | `/scholar-verify` | Verify analysis-to-manuscript consistency | `full output/drafts/full-paper-2026-03-10.md` |
 | `/scholar-auto-improve` | Post-skill quality audit | `observe output/drafts/` |
 | `/sync-docs` | Synchronize slides, script, and manuscript | `slides.tex script.tex manuscript.tex` |
@@ -423,6 +424,65 @@ Saves 2–3 files to `output/citations/` (+ optional `.bib` in EXPORT mode):
 
 ---
 
+### 10B. Knowledge Graph — `/scholar-knowledge`
+
+```
+/scholar-knowledge ingest from zotero collection segregation
+/scholar-knowledge ingest doi 10.1093/sf/soaa123
+/scholar-knowledge search theories of spatial assimilation
+/scholar-knowledge search methods difference-in-differences
+/scholar-knowledge relate Massey 1993 contradicts Clark 1986
+/scholar-knowledge status
+/scholar-knowledge export for mobility-health project as markdown
+```
+
+A **user-scoped, cross-project knowledge graph** that persists extracted intellectual content — findings, mechanisms, theories, methods, and inter-paper relationships — across projects and sessions. Stored at `~/.claude/scholar-knowledge/` (configurable via `SCHOLAR_KNOWLEDGE_DIR`). Layers on top of Zotero: Zotero stores bibliographic metadata; the knowledge graph stores what you've extracted and learned from each paper.
+
+**Data model:** Three NDJSON files — `papers.ndjson` (paper metadata + extracted findings/theories/methods), `concepts.ndjson` (theories, methods, mechanisms as nodes), `edges.ndjson` (inter-paper and paper-concept relationships).
+
+#### Five modes
+
+**`ingest`** — Add papers and extract intellectual content:
+- Sources: Zotero (by collection, tag, or search), PDF files, DOI lookup, lit-review output files, or manual entry
+- Extracts: key findings, theoretical frameworks used, methods, mechanisms proposed, scope conditions
+- Deduplicates against existing graph entries
+
+**`search`** — Query the knowledge graph:
+- By topic, author, theory, method, or finding
+- Special queries: `contradictions` (find contested findings), `gaps` (find under-studied areas), `methods for [topic]`
+- Returns structured results with paper metadata + extracted content
+
+**`relate`** — Add or view inter-paper relationships:
+- Relationship types: `cites`, `contradicts`, `extends`, `replicates`, `uses-method`, `uses-theory`
+- View all relationships for a given paper or between two papers
+- Build citation chains and theoretical lineages
+
+**`status`** — Graph statistics and coverage dashboard:
+- Total papers, concepts, and edges
+- Coverage by topic area, theory, and method
+- Recent additions
+- Gap analysis: topics with few papers, theories with no empirical tests
+
+**`export`** — Export a project-specific subset:
+- Formats: markdown summary, NDJSON (for programmatic use), BibTeX (bibliography only)
+- Filter by topic, date range, theory, or method
+- Useful for generating project-specific literature summaries
+
+#### Integration with other skills
+
+The knowledge graph is automatically queried by 5 skills when it exists (all hooks are guarded — skills work identically without it):
+- **scholar-lit-review** (Step 1a-pre): checks graph before web search
+- **scholar-lit-review-hypothesis** (Step 0b-pre): checks graph before web search
+- **scholar-write** (Step 0 Tier 0): pulls relevant findings/theories for drafting context
+- **scholar-hypothesis** (pre-search): retrieves theoretical frameworks and mechanisms
+- **scholar-citation** (Tier 0.5): unified `scholar_search()` queries graph before Zotero
+
+#### Configuration
+
+Set `SCHOLAR_KNOWLEDGE_DIR` in `.env` to override the default `~/.claude/scholar-knowledge/` location. The knowledge graph is user-scoped (shared across all projects) by default.
+
+---
+
 ### 11. Journal Formatting — `/scholar-journal`
 
 ```
@@ -693,7 +753,7 @@ Use after editing one document (e.g., updating a figure in slides) to propagate 
 
 ## Zotero Integration
 
-Skills `/scholar-lit-review`, `/scholar-write`, and `/scholar-citation` all query your
+Skills `/scholar-lit-review`, `/scholar-write`, `/scholar-citation`, and `/scholar-knowledge` all query your
 Zotero library automatically — no API keys or running Zotero required.
 
 **Library location:**
@@ -797,6 +857,6 @@ theoretical traditions (coloniality, Ubuntu, guanxi). Invoke with the specific a
 
 ## Version
 
-Current version: **5.3.0**
+Current version: **5.5.0**
 Project location: this repository's root directory
-Skills: 23 + 1 utility (in `.claude/skills/`) | Agents: 13 (9 peer-reviewer + 4 verification, in `.claude/agents/`) | Reference files: ~44 | Asset articles: ~127 (pre-indexed in article-knowledge-base.md)
+Skills: 24 + 1 utility (in `.claude/skills/`) | Agents: 13 (9 peer-reviewer + 4 verification, in `.claude/agents/`) | Reference files: ~44 | Asset articles: ~127 (pre-indexed in article-knowledge-base.md)

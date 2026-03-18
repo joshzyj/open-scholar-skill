@@ -20,7 +20,7 @@ Open-scholar-skill is designed to **assist** researchers, not replace them. If y
 
 This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, or `scholar-presentation`. The first three were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
 
-However, the 23 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
+However, the 24 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
 
 ```
 /scholar-idea  →  /scholar-lit-review-hypothesis  →  /scholar-design
@@ -50,7 +50,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (23 skills + 1 utility)
+## Skills Overview (24 skills + 1 utility)
 
 ### Core Pipeline Skills
 
@@ -65,6 +65,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-analyze` | `/scholar-analyze` | Data analysis (OLS, logit, Bayesian brms, LCA, SEM, sequence analysis, quantile regression) + publication-quality tables/figures |
 | `scholar-write` | `/scholar-write` | Full paper drafting with section-by-section guidance |
 | `scholar-citation` | `/scholar-citation` | In-text citation insertion, reference list assembly, consistency audit |
+| `scholar-knowledge` | `/scholar-knowledge` | User-scoped, cross-project knowledge graph for extracted findings, theories, mechanisms, and paper relationships |
 | `scholar-journal` | `/scholar-journal` | Journal-specific formatting and submission prep (22 journals, Nature Reporting Summary) |
 | `scholar-respond` | `/scholar-respond` | Simulate peer review, respond to reviewers, revise manuscript |
 | `scholar-verify` | `/scholar-verify` | Two-stage analysis-to-manuscript consistency verification (4-agent panel: numerics, figures, logic, completeness) |
@@ -131,7 +132,7 @@ bash setup.sh
 1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
 2. Auto-detect your Zotero library (or prompt for path)
 3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 24 skills + 13 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
+4. Install all 25 skills + 13 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
 5. Write a `.env` file with your configuration
 
 After setup, all `/scholar-*` commands work from any directory.
@@ -188,6 +189,13 @@ This one prompt builds the entire knowledge base automatically from your PDFs.
 /scholar-write introduction section on stratification
 /scholar-citation insert ASA citations and build reference list
 /scholar-journal prepare manuscript for Nature Human Behaviour
+
+# Knowledge graph
+/scholar-knowledge ingest from zotero collection segregation
+/scholar-knowledge search theories of spatial assimilation
+/scholar-knowledge relate Massey 1993 contradicts Clark 1986
+/scholar-knowledge status
+/scholar-knowledge export for mobility-health project
 
 # Extended pipeline
 /scholar-data find dataset for immigration and labor market outcomes
@@ -261,6 +269,9 @@ Research Question
        ├─► /scholar-verify            ← 4-agent analysis-to-manuscript consistency check
        │
        ├─► /scholar-citation          ← Insert citations, build reference list, audit
+       │
+       ├─► /scholar-knowledge         ← Persist extracted findings, theories, relationships
+       │                                  across projects (layers on Zotero)
        │
        ├─► /sync-docs                 ← Synchronize slides, script, and manuscript
        │

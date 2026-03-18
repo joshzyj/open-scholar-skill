@@ -60,7 +60,7 @@ open-scholar-skill/
 │   │   ├── verify-figures.md
 │   │   ├── verify-logic.md
 │   │   └── verify-completeness.md
-│   └── skills/                      # Active skills (23 directories)
+│   └── skills/                      # Active skills (24 directories)
 │       ├── _shared/                 # Shared protocols (process-logger.md)
 │       ├── scholar-brainstorm/       # Data-driven RQ generation from codebooks/questionnaires/datasets
 │       ├── scholar-idea/            # Broad idea → formal RQ (5-agent evaluation panel)
