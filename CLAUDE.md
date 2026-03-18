@@ -31,7 +31,7 @@ ln -sf .claude/agents agents
 
 A Claude Code plugin for academic paper writing in social sciences (sociology, demography, linguistics, computational social science). Targets journals: ASR, AJS, Demography, Science Advances, Nature Human Behaviour, Nature Computational Science.
 
-**Version**: v5.4.0 — 23 skills, 13 agents (9 peer-reviewer + 4 verification)
+**Version**: v5.5.0 — 24 skills, 13 agents (9 peer-reviewer + 4 verification)
 
 ---
 
@@ -77,6 +77,7 @@ open-scholar-skill/
 │       ├── scholar-write/           # Section drafting (5-agent review panel)
 │       ├── scholar-verify/          # Two-stage analysis-to-manuscript consistency (4-agent panel)
 │       ├── scholar-citation/        # Citation management + verification
+│       ├── scholar-knowledge/        # User-scoped knowledge graph (INGEST, SEARCH, RELATE, STATUS, EXPORT)
 │       ├── scholar-journal/         # Submission prep (22 journals)
 │       ├── scholar-respond/         # Peer review simulation + R&R
 │       ├── scholar-open/            # Open science practices
@@ -130,6 +131,14 @@ Each skill directory contains `SKILL.md` (main workflow) and `references/` (supp
 
 All citation-dependent skills use a **unified reference search layer** defined in `.claude/skills/scholar-citation/references/refmanager-backends.md`. The unified `scholar_search` dispatcher queries all local backends AND external APIs in a single call, returning relevance-ranked results.
 
+### Knowledge Graph Layer (Tier 0)
+
+| Backend | Source | Detection | Features |
+|---------|--------|-----------|----------|
+| **Knowledge Graph** | NDJSON files (`papers.ndjson`, `concepts.ndjson`, `edges.ndjson`) | `$SCHOLAR_KNOWLEDGE_DIR` or `~/.claude/scholar-knowledge/` | Pre-extracted findings, theories, mechanisms, methods, inter-paper relationships; cross-project persistence; user-scoped |
+
+Skills that query the knowledge graph: `scholar-lit-review` (Step 1a-pre), `scholar-lit-review-hypothesis` (Step 0b-pre), `scholar-write` (Step 0 Tier 0), `scholar-citation` (Tier 0.5 in `scholar_search()`), `scholar-hypothesis` (pre-search). All integration hooks are guarded — skills work identically when `scholar-knowledge` is not installed.
+
 ### Local backends (Tier 1 — limit 100)
 
 | Backend | Source | Detection | Features |
@@ -160,6 +169,7 @@ All citation-dependent skills use a **unified reference search layer** defined i
 - No API keys or running Zotero required — pure SQLite + pdftotext
 
 ### Configuration
+- `SCHOLAR_KNOWLEDGE_DIR` — knowledge graph storage directory (default: `~/.claude/scholar-knowledge/`; user-scoped, cross-project)
 - `SCHOLAR_BIB_PATH` — path to a `.bib` file (overrides auto-scan)
 - `SCHOLAR_ENDNOTE_XML` — path to an EndNote `.xml` export (overrides auto-scan)
 - `SCHOLAR_CROSSREF_EMAIL` — email for CrossRef/OpenAlex polite pool (optional but recommended)
@@ -171,6 +181,18 @@ All citation-dependent skills use a **unified reference search layer** defined i
 - `assets/index.md` — Full catalog with Quick Selection Guide
 - `assets/article-knowledge-base.md` — Pre-extracted annotations for example papers
 - `assets/section-snippets.md` — Verbatim quote library by 9 rhetorical functions
+
+---
+
+## v5.5.0 Improvements (2026-03-18)
+
+### New Skill: scholar-knowledge
+- **User-scoped, cross-project knowledge graph** stored at `~/.claude/scholar-knowledge/` (configurable via `SCHOLAR_KNOWLEDGE_DIR`)
+- **5 modes**: INGEST (from Zotero/PDF/DOI/lit-review output/manual), SEARCH (topic/author/theory/method/finding/contradictions/gaps), RELATE (add/view inter-paper relationships), STATUS (dashboard with coverage analysis), EXPORT (markdown/NDJSON/BibTeX subsets)
+- **NDJSON data model**: 3 files — `papers.ndjson`, `concepts.ndjson`, `edges.ndjson`
+- **Layers on top of Zotero**: Zotero stores bibliographic metadata; knowledge graph stores extracted intellectual content
+- **Integration hooks** in 5 skills: scholar-lit-review, scholar-lit-review-hypothesis, scholar-write, scholar-hypothesis, scholar-citation (unified search)
+- All hooks backward-compatible — guarded by file existence check
 
 ---
 

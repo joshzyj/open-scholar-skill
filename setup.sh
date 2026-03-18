@@ -99,6 +99,19 @@ fi
 
 echo ""
 
+# ── 3b. Knowledge graph directory ────────────────────────────────
+echo "▸ Knowledge graph setup..."
+
+KNOWLEDGE_DIR="${HOME}/.claude/scholar-knowledge"
+read -rp "  Knowledge graph directory [$KNOWLEDGE_DIR]: " user_kg_dir
+if [ -n "$user_kg_dir" ]; then
+  KNOWLEDGE_DIR="$user_kg_dir"
+fi
+mkdir -p "$KNOWLEDGE_DIR"
+echo "  ✓ Knowledge graph: $KNOWLEDGE_DIR"
+
+echo ""
+
 # ── 4. Write .env file ───────────────────────────────────────────
 echo "▸ Writing .env file..."
 
@@ -121,6 +134,10 @@ SCHOLAR_ENDNOTE_XML="${ENDNOTE_XML}"
 
 # CrossRef / OpenAlex polite pool email (optional but recommended)
 SCHOLAR_CROSSREF_EMAIL="${CROSSREF_EMAIL}"
+
+# Knowledge graph directory (user-scoped, cross-project)
+# Default: ~/.claude/scholar-knowledge
+SCHOLAR_KNOWLEDGE_DIR="${KNOWLEDGE_DIR}"
 ENVEOF
 
 echo "  ✓ Wrote $ENV_FILE"
@@ -164,7 +181,7 @@ done
 
 # Symlink each agent file
 agent_count=0
-for agent_file in "$SCRIPT_DIR/.claude/agents"/peer-reviewer-*.md "$SCRIPT_DIR/.claude/agents"/verify-*.md; do
+for agent_file in "$SCRIPT_DIR/.claude/agents"/peer-reviewer-*.md; do
   [ -f "$agent_file" ] || continue
   name="$(basename "$agent_file")"
   target="$PERSONAL_AGENTS_DIR/$name"

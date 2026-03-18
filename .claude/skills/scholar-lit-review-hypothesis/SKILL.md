@@ -144,6 +144,43 @@ This file is your **insurance against context compaction**. Even if the conversa
 
 ---
 
+### Step 0b-pre: Query Knowledge Graph (if available)
+
+Before searching Zotero, check the user-scoped knowledge graph for pre-extracted intellectual content — findings, mechanisms, theories, and inter-paper relationships.
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available; then
+    echo "=== Knowledge Graph: topic search ==="
+    kg_search_papers "[TOPIC]" 20 | kg_format_papers
+    echo ""
+    echo "=== Knowledge Graph: theories ==="
+    kg_search_concepts "[TOPIC]" 10 theory
+    echo ""
+    echo "=== Knowledge Graph: mechanisms ==="
+    kg_search_concepts "[TOPIC]" 10 mechanism
+    echo ""
+    echo "[KG] $(kg_count) — pre-extracted findings and relationships available"
+  else
+    echo "[KG] Knowledge graph empty or not configured — proceeding to Zotero"
+  fi
+else
+  echo "[KG] scholar-knowledge not installed — proceeding to Zotero"
+fi
+```
+
+Use KG results to: (1) identify already-known theories and mechanisms for hypothesis development, (2) find contested findings that motivate hypotheses, (3) avoid re-searching for papers already in the graph. Add KG-found papers to your working bibliography with source tag `knowledge-graph`.
+
+**After KG query — append to search log:**
+```bash
+cat >> "$SEARCH_LOG" << ROW
+| 0 | Knowledge-Graph | [topic] | [hit count] | [papers retained] | [key papers from KG] |
+ROW
+```
+
 ### Step 0b: Search Local Reference Library (Always Do First)
 
 Before searching the web, query your **local reference library** (Zotero, Mendeley, BibTeX, or EndNote XML). This surfaces already-collected literature, avoids re-discovering known work, and gives access to attached PDFs.
@@ -868,13 +905,17 @@ After Step 10 is complete, write the entire output to a Markdown file using the 
 ---
 
 ## Hypothesis Placement
-- **Mode**: [BLENDED / SEPARATE / SEPARATE-PREDICTIONS]
+- **Mode**: [BLENDED / SEPARATE / SEPARATE-PREDICTIONS / INTEGRATED-RQ]
 - **Journal norm**: [journal → rationale]
-- **Number of hypotheses**: [N]
+- **Number of hypotheses/RQs**: [N]
 
-## Hypotheses
+## Hypotheses / Research Questions
 
-### Derivation Chain Table
+*Format depends on placement mode:*
+
+### If BLENDED / SEPARATE / SEPARATE-PREDICTIONS:
+
+#### Derivation Chain Table
 
 *Every hypothesis must trace through: literature gap → framework prediction → mechanism link → hypothesis.*
 
@@ -883,7 +924,7 @@ After Step 10 is complete, write the entire output to a Markdown file using the 
 | H1 | [gap statement] | [type] | [framework prediction] | [mechanism step] | [H1 formal statement] |
 | H2 | [gap statement] | [type] | [framework prediction] | [mechanism step] | [H2 formal statement] |
 
-### Hypothesis Summary
+#### Hypothesis Summary
 
 *Write each hypothesis in full with theoretical derivation sentence.*
 
@@ -891,6 +932,19 @@ After Step 10 is complete, write the entire output to a Markdown file using the 
 |---|-----------|-----------|---------------|-------------------|----------------|
 | H1 | [full statement] | [+/−] | [which gap] | [Theory, Author Year] | [which mechanism step] |
 | H2 | [full statement] | [+/−] | [which gap] | [Theory, Author Year] | [mediation/moderation from Step 7] |
+
+### If INTEGRATED-RQ (sociolinguistic pattern):
+
+#### Research Questions
+
+| RQ# | Question | Literature basis | Expected pattern | Theoretical reasoning |
+|-----|----------|-----------------|------------------|----------------------|
+| RQ1 | [full question] | [key citations that motivate this question] | [what prior work leads us to expect] | [which framework/finding generates this expectation] |
+| RQ2 | [full question] | [key citations] | [expected pattern] | [theoretical reasoning] |
+
+#### "The Present Study" Preview
+
+*Summarize: (1) what the review established, (2) what remains unexamined, (3) the RQs this study addresses, (4) expected patterns and why, (5) brief analytic preview. This becomes the closing subsection of the draft.*
 
 ---
 
@@ -996,9 +1050,10 @@ Before finalizing, verify:
 - [ ] The draft prose is an integrated argument — lit review flows into theory flows into hypotheses with no "topic pivot" between sections
 - [ ] No "laundry list" paragraphs — all citations are synthesized into claims
 - [ ] Word count of the draft prose matches the target journal's norms
-- [ ] **Hypothesis placement** matches journal norms (Step 9c): BLENDED for ASR/AJS/Social Forces; SEPARATE for Demography (BLENDED if 3+ H); SEPARATE-PREDICTIONS for NHB/NCS/SciAdv
+- [ ] **Hypothesis placement** matches journal norms (Step 9c): BLENDED for ASR/AJS/Social Forces; SEPARATE for Demography (BLENDED if 3+ H); SEPARATE-PREDICTIONS for NHB/NCS/SciAdv; INTEGRATED-RQ for Language in Society/J. Sociolinguistics/Applied Linguistics/Language
 - [ ] **If BLENDED**: thematic subsection headings are substantive (not "Hypothesis 1"); each subsection weaves literature + theory + derived H
 - [ ] **If SEPARATE**: hypotheses appear as a block after the full theoretical argument
+- [ ] **If INTEGRATED-RQ**: no formal H1/H2 labels; theoretical expectations woven into thematic subsections as natural-language reasoning; section ends with a "The Present Study" subsection containing restated RQs, summarized expectations, and analytic preview
 - [ ] The draft section is full prose — no bullet lists, no placeholders, no outlines
 - [ ] Working bibliography is complete and in ASA format
 - [ ] Output is saved to a `.md` file via the Write tool — the skill is not complete until the file exists

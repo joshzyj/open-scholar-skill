@@ -62,7 +62,7 @@ SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
 cat "$SKILL_DIR/scholar-write/assets/article-knowledge-base.md"
 ```
 
-This file contains pre-extracted structured annotations for example papers. For each fully-annotated paper it provides:
+This file contains pre-extracted structured annotations for ~127 papers (32 user1-articles + 8 user2-articles + 87 top-journal exemplars). For each fully-annotated paper it provides:
 - **Opening line** (verbatim first sentence of the introduction)
 - **Gap sentence** (verbatim gap statement)
 - **Contribution claim** (verbatim contribution statement)
@@ -72,7 +72,8 @@ This file contains pre-extracted structured annotations for example papers. For 
 - **Best for** guidance
 
 **Select from the knowledge base**:
-- Choose **1–2 example-articles** whose domain/method most closely matches → defines the author's voice
+- Choose **1–2 user1-articles** whose domain/method most closely matches → defines the author's voice
+- Choose **1–2 user2-articles** if the paper involves applied linguistics, sociolinguistics, language ideology, study abroad, heritage language, intercultural communication, conversation analysis, or discourse analysis → defines discipline-specific voice and framing
 - Choose **1–2 top-journal articles** that match the target journal → defines required structural depth and citation density
 
 ### Tier 2: Read the Section Snippets Library (Fast — Do for Targeted Sections)
@@ -101,8 +102,11 @@ If a specific paper's full text is needed beyond what the knowledge base provide
 ```bash
 ASSETS="$SKILL_DIR/scholar-write/assets"
 
-# Read one of your articles (first 300 lines = abstract + intro + early theory + methods)
-pdftotext "$ASSETS/example-articles/[FILENAME].pdf" - | head -300
+# Read a user1-article (first 300 lines = abstract + intro + early theory + methods)
+pdftotext "$ASSETS/user1-articles/[FILENAME].pdf" - | head -300
+
+# Read a user2-article (applied linguistics, sociolinguistics, study abroad, discourse analysis)
+pdftotext "$ASSETS/user2-articles/[FILENAME].pdf" - | head -300
 
 # Read a top-journal article
 pdftotext "$ASSETS/top-journal-articles/[FILENAME].pdf" - | head -300
@@ -117,6 +121,39 @@ After loading the knowledge base:
 - **Contribution language**: Copy the grammatical pattern from the matching contribution claim in Tier 2 (e.g., "Here, we..." for Nature/PNAS; "In this article, we argue..." for ASR/Demography)
 
 #### Retrieve Citations from Local Reference Library (MANDATORY — Run Before Drafting)
+
+### Tier 0: Query Knowledge Graph for Topic Findings (Fast — Always Try)
+
+Before building the Verified Citation Pool from Zotero, check the knowledge graph for pre-extracted findings and theoretical framings on this section's topic.
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available; then
+    echo "=== Knowledge Graph: findings for [SECTION TOPIC] ==="
+    kg_search_papers "[SECTION TOPIC]" 15 | kg_format_papers
+    echo ""
+    echo "=== Knowledge Graph: theories ==="
+    kg_search_concepts "[SECTION TOPIC]" 10 theory
+    echo ""
+    echo "[KG] $(kg_count)"
+  else
+    echo "[KG] Knowledge graph empty — proceeding to Zotero"
+  fi
+else
+  echo "[KG] scholar-knowledge not installed — proceeding to Zotero"
+fi
+```
+
+Use KG results to:
+- Pre-populate the Verified Citation Pool with papers whose findings are relevant
+- Identify which theories/mechanisms to foreground in the section
+- Find contradiction pairs that strengthen the "gap" argument
+- **Do NOT use KG findings as direct prose** — use them to guide which Zotero PDFs to read for verbatim quotes
+
+### Tier 0b: Build Verified Citation Pool from Local Reference Library
 
 Query the user's local reference library to find stored papers for use as citations. The search infrastructure supports multiple backends (Zotero, Mendeley, BibTeX, EndNote) and auto-detects which are available.
 
@@ -1132,81 +1169,15 @@ After saving the main section text, append all tables and figures from the ARTIF
 
 **When to append**: Always for full-paper drafts. For individual section drafts (e.g., just Results), append only the tables/figures referenced in that section.
 
-**Append to the draft markdown file** (`draft-[section]-[slug]-[YYYY-MM-DD].md`) using the following structure:
+**CRITICAL RULE: Every table and figure MUST be embedded with actual content — never leave a placeholder like `[Insert table content here]` or `[Table content]` or just a file path. Read the source file and render the actual data.**
 
-```markdown
----
+**Append to the draft markdown file** (`draft-[section]-[slug]-[YYYY-MM-DD].md`) using the procedure below.
 
-<!-- ============================================================ -->
-<!-- TABLES                                                        -->
-<!-- ============================================================ -->
+**Procedure for TABLES** — for each table in the ARTIFACT REGISTRY:
 
-## Table 1: [Descriptive Title]
-
-<!-- Source: ${OUTPUT_ROOT}/tables/table1-descriptives.html -->
-<!-- Also available: .tex, .docx -->
-
-[Insert table content here — read from the .html or .tex source file and render as markdown table, OR embed as-is for LaTeX/HTML pass-through]
-
-**Notes**: [Table notes — sample size, significance levels, source description]
-
----
-
-## Table 2: [Descriptive Title]
-
-<!-- Source: ${OUTPUT_ROOT}/tables/table2-regression.html -->
-
-[Table content]
-
-**Notes**: [Standard errors in parentheses. * p < 0.05, ** p < 0.01, *** p < 0.001.]
-
----
-
-[Continue for all main-body tables...]
-
-## Appendix Table A1: [Descriptive Title]
-
-<!-- Source: ${OUTPUT_ROOT}/tables/tableA1-robustness.html -->
-
-[Table content]
-
-**Notes**: [...]
-
----
-
-<!-- ============================================================ -->
-<!-- FIGURES                                                        -->
-<!-- ============================================================ -->
-
-## Figure 1: [Descriptive Caption]
-
-<!-- Source: ${OUTPUT_ROOT}/figures/fig-coef-plot.pdf -->
-<!-- PNG version: ${OUTPUT_ROOT}/figures/fig-coef-plot.png -->
-
-![Figure 1: Descriptive Caption](${OUTPUT_ROOT}/figures/fig-coef-plot.png)
-
-**Notes**: [Figure notes — data source, sample, confidence interval description]
-
----
-
-## Figure 2: [Descriptive Caption]
-
-<!-- Source: ${OUTPUT_ROOT}/figures/fig-ame-interaction.pdf -->
-
-![Figure 2: Descriptive Caption](${OUTPUT_ROOT}/figures/fig-ame-interaction.png)
-
-**Notes**: [...]
-
----
-
-[Continue for all main-body figures, then appendix figures...]
-```
-
-**Implementation steps**:
-
-1. **Read each table file** from the ARTIFACT REGISTRY. For HTML tables, convert to a clean markdown table using:
+1. **Read the source file** using the Read tool or Bash (e.g., `cat ${OUTPUT_ROOT}/tables/table1-descriptives.html`).
+2. **Convert to markdown table**. For HTML tables, use this converter:
    ```bash
-   # Convert HTML table to markdown (best effort — preserves structure)
    python3 -c "
    import sys
    from html.parser import HTMLParser
@@ -1242,20 +1213,56 @@ After saving the main section text, append all tables and figures from the ARTIF
        parser = TableExtractor()
        parser.feed(f.read())
        if parser.rows:
-           # Print markdown table
            header = parser.rows[0]
            print('| ' + ' | '.join(header) + ' |')
            print('|' + '|'.join(['---'] * len(header)) + '|')
            for row in parser.rows[1:]:
-               # Pad row to header length
                while len(row) < len(header):
                    row.append('')
                print('| ' + ' | '.join(row[:len(header)]) + ' |')
-   " "OUTPUT_TABLE_PATH"
+   " "TABLE_PATH_HERE"
    ```
-   If HTML conversion fails or for complex tables, include the raw HTML in a `<details>` block and note `<!-- See .tex or .docx version for formatted table -->`.
+   If HTML conversion fails or for complex tables (merged cells, multi-level headers), include the raw HTML in a `<details>` block and note `<!-- See .tex or .docx version for formatted table -->`.
+3. **Write the converted markdown table** into the draft file with this structure:
+   ```markdown
+   ---
 
-2. **For figures**: Use markdown image syntax pointing to the PNG version (for markdown rendering) with a comment noting the PDF source (for print/submission). The `![caption](path)` syntax ensures figures render in markdown viewers and convert properly via pandoc.
+   ## Table 1: [Descriptive Title]
+
+   <!-- Source: ${OUTPUT_ROOT}/tables/table1-descriptives.html -->
+
+   | Variable | Mean | SD | Min | Max |
+   |----------|------|----|-----|-----|
+   | Age      | 42.3 | 12.1 | 18 | 89 |
+   | Income   | 54200 | 31000 | 0 | 250000 |
+
+   **Notes**: N = 5,234. Data from [source]. Standard errors in parentheses. * p < 0.05, ** p < 0.01, *** p < 0.001.
+   ```
+   The pipe-delimited table above is an EXAMPLE — replace with the ACTUAL converted content from the source file.
+
+**Procedure for FIGURES** — for each figure in the ARTIFACT REGISTRY:
+
+1. **Verify the PNG file exists** using `ls` or Glob. If only PDF exists, convert: `convert "${OUTPUT_ROOT}/figures/fig-coef-plot.pdf" "${OUTPUT_ROOT}/figures/fig-coef-plot.png"` (ImageMagick) or `pdftoppm -png -singlefile "${OUTPUT_ROOT}/figures/fig-coef-plot.pdf" "${OUTPUT_ROOT}/figures/fig-coef-plot"` (poppler).
+2. **Use an absolute path** in the markdown image syntax so pandoc can find the file during conversion:
+   ```markdown
+   ---
+
+   ## Figure 1: [Descriptive Caption]
+
+   <!-- Source PDF: ${OUTPUT_ROOT}/figures/fig-coef-plot.pdf -->
+
+   ![Figure 1: Descriptive Caption](/absolute/path/to/output/figures/fig-coef-plot.png)
+
+   **Notes**: [Figure notes — data source, sample, confidence interval description]
+   ```
+   **IMPORTANT**: The path inside `![caption](path)` MUST be an absolute path (e.g., `/Users/.../output/slug/figures/fig-coef-plot.png`), NOT a relative path or shell variable. Resolve `${OUTPUT_ROOT}` to its actual value before writing. This ensures pandoc embeds the image when converting to docx/pdf.
+
+3. **After pandoc conversion to docx/pdf**, verify figures are actually embedded by checking file size — a docx with embedded figures will be significantly larger than one without. If the docx is suspiciously small (<50KB for a paper with figures), the paths were likely wrong.
+
+**Verification after appending (MANDATORY)**:
+- Grep the saved draft for `[Insert table content here]`, `[Table content]`, `${OUTPUT_ROOT}` — if any are found, the embedding is incomplete. Go back and replace with actual content.
+- Grep for `![` lines and verify each path points to an existing file using `ls`.
+- Count markdown table delimiters (`|`) to confirm tables have actual rows of data, not just headers.
 
 3. **Table/figure captions**: Generate descriptive captions following journal conventions:
    - **ASR/AJS/Demography**: Table title above; notes below (sample size, significance levels, data source)
@@ -1346,8 +1353,9 @@ Confirm all saved file paths to the user, including:
 - [ ] **Artifact Registry saved to disk** — `output/[slug]/manuscript/artifact-registry.md` written for `scholar-replication` VERIFY consumption
 - [ ] **Every main-body artifact referenced in text** — each Table N and Figure N appears at least once in prose
 - [ ] **Placement markers present** — `[Table N about here]` / `[Figure N about here]` on own line after first referencing paragraph
-- [ ] **Tables appended at manuscript end** — each table on separate "page" with title, content, and notes
-- [ ] **Figures appended at manuscript end** — each figure on separate "page" with caption and source path
+- [ ] **Tables appended at manuscript end** — each table on separate "page" with title, ACTUAL DATA CONTENT as markdown pipe table (not a placeholder or file path), and notes
+- [ ] **Figures appended at manuscript end** — each figure on separate "page" with caption and ABSOLUTE path in `![caption](/absolute/path/to/file.png)` syntax (no `${OUTPUT_ROOT}` shell variables — resolve to actual path)
+- [ ] **No unresolved placeholders** — grep draft for `[Insert table content here]`, `[Table content]`, `${OUTPUT_ROOT}` and confirm zero matches
 - [ ] **Table notes complete** — sample size, significance levels, data source, model specifications noted
 - [ ] **Figure captions descriptive** — self-contained; reader can understand figure without reading main text
 - [ ] **Appendix items labeled correctly** — `Table A1`, `Figure A1` etc. for robustness/supplementary material
@@ -1368,4 +1376,4 @@ Confirm all saved file paths to the user, including:
 
 See [references/paper-structure.md](references/paper-structure.md) for journal-specific structural templates and paragraph-level writing templates.
 See [references/academic-writing.md](references/academic-writing.md) for writing style guides, revision guidance, and transition library.
-See [assets/index.md](assets/index.md) for the catalog of example articles (example-articles + top-journal-articles).
+See [assets/index.md](assets/index.md) for the catalog of example articles (user1-articles + top-journal-articles).

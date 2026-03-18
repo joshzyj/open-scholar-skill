@@ -189,6 +189,44 @@ Update after each search phase. **Also append to `$SEARCH_LOG` on disk after eac
 
 Before searching the web, query your **local reference library** (Zotero, Mendeley, BibTeX, or EndNote XML). This surfaces already-collected literature, avoids re-discovering known work, and gives access to attached PDFs for deeper reading.
 
+### 1a-pre. Query knowledge graph (if available)
+
+Before searching Zotero, check the user-scoped knowledge graph for pre-extracted intellectual content on this topic. This provides findings, mechanisms, and theories — richer than bibliographic metadata alone.
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available; then
+    echo "=== Knowledge Graph: topic search ==="
+    kg_search_papers "[TOPIC]" 20 | kg_format_papers
+    echo ""
+    echo "=== Knowledge Graph: theory search ==="
+    kg_search_concepts "[TOPIC]" 10 theory
+    echo ""
+    echo "=== Knowledge Graph: method search ==="
+    kg_search_concepts "[TOPIC]" 10 method
+    echo ""
+    echo "[KG] $(kg_count) — graph has pre-extracted findings and relationships"
+  else
+    echo "[KG] Knowledge graph empty or not configured — proceeding to Zotero"
+  fi
+else
+  echo "[KG] scholar-knowledge not installed — proceeding to Zotero"
+fi
+```
+
+**Key rule**: Knowledge graph results provide pre-extracted findings and relationships — use them to guide your search strategy and theoretical framing. Papers found in the KG still need bibliographic verification via Zotero/CrossRef for citation formatting. Add KG-found papers to your working bibliography with source tag `knowledge-graph`.
+
+**After KG query — append to search log:**
+
+```bash
+cat >> "$SEARCH_LOG" << ROW
+| 0 | Knowledge-Graph | [topic] | [hit count] | [papers retained] | [key papers from KG] |
+ROW
+```
+
 ### 1a–1c. Load reference manager + keyword/author searches
 
 **IMPORTANT — Run the entire block below as a SINGLE Bash command.** Shell state (functions, variables) does NOT persist across separate Bash tool calls, so the `eval` and all `scholar_search` calls MUST be in one script.

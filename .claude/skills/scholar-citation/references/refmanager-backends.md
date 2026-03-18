@@ -22,7 +22,7 @@ REF_SOURCES=""
 REF_PRIMARY=""
 
 # ── 1. Zotero ────────────────────────────────────────────────────
-# Load from .env if present (SCHOLAR_SKILL_DIR points to the open-scholar-skill installation)
+# Load from .env if present (SCHOLAR_SKILL_DIR points to the scholar-skill installation)
 [ -f "${SCHOLAR_SKILL_DIR:-.}/.env" ] && . "${SCHOLAR_SKILL_DIR:-.}/.env" 2>/dev/null || true
 # Also check global Claude .env
 [ -f "$HOME/.claude/.env" ] && . "$HOME/.claude/.env" 2>/dev/null || true
@@ -736,6 +736,26 @@ scholar_search() {
 
   local RESULTS=""
 
+  # --- Tier 0.5: Knowledge Graph (pre-extracted intellectual content) ---
+  local SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+  local KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+  if [ -f "$KG_REF" ]; then
+    # Load KG functions (safe to re-eval)
+    eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+    if kg_available 2>/dev/null; then
+      local KG_RESULTS=""
+      if [ "$MODE" = "author" ]; then
+        KG_RESULTS="$(kg_search_papers_author "$QUERY" "$LIMIT" 2>/dev/null)"
+      else
+        KG_RESULTS="$(kg_search_papers "$QUERY" "$LIMIT" 2>/dev/null)"
+      fi
+      if [ -n "$KG_RESULTS" ]; then
+        RESULTS="${RESULTS}${KG_RESULTS}"$'\n'
+      fi
+    fi
+  fi
+
+  # --- Tier 1: Local reference managers ---
   for src in $(echo $REF_SOURCES); do
     case "$src" in
       zotero)

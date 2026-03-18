@@ -4988,15 +4988,20 @@ Be specific and quote key phrases when relevant."""
 **Option B — GPT-4o Audio (OpenAI)**
 
 ```python
-import openai, base64, json
+import openai, base64, json, os
 client = openai.OpenAI()
+
+# Model selection: set OPENAI_AUDIO_MODEL env var or change default
+# Audio-capable models: "gpt-4o-audio-preview", "gpt-5", "gpt-5-mini"
+OPENAI_AUDIO_MODEL = os.getenv("OPENAI_AUDIO_MODEL", "gpt-4o-audio-preview")
 
 def encode_audio_b64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
-def analyze_audio_gpt4o(audio_path: str, prompt: str,
-                          model: str = "gpt-4o-audio-preview") -> dict:
+def analyze_audio_openai(audio_path: str, prompt: str,
+                          model: str = None) -> dict:
+    model = model or OPENAI_AUDIO_MODEL
     """
     Send audio directly to GPT-4o audio model.
     Supports WAV / MP3 / M4A (max ~25MB per file).

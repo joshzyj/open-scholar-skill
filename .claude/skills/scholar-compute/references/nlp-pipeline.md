@@ -600,7 +600,7 @@ print(f"Run-to-run κ: {cohen_kappa_score(run1, run2):.3f}")
 *Definition*: Future researchers cannot reproduce the same annotations because the model has been updated, retrained, or discontinued.
 
 **Mitigation checklist**:
-- [ ] Record the **exact model ID** including version suffix (e.g., `claude-sonnet-4-6`, `gpt-4o-2024-11-20`)
+- [ ] Record the **exact model ID** including version suffix (e.g., `claude-sonnet-4-6`, `gpt-4.1-mini`, `gpt-5-nano`)
 - [ ] Record the **date of annotation** (model behavior can change across releases without version change)
 - [ ] Archive the **full system prompt and user prompt** verbatim (as supplementary appendix)
 - [ ] Save raw LLM outputs (full JSON response, not just derived label) to a CSV alongside the dataset

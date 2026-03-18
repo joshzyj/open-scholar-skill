@@ -268,19 +268,24 @@ df_out.to_csv("${OUTPUT_ROOT}/tables/vision-llm-annotations.csv", index=False)
 print(f"Annotated: {df_out['protest_present'].notna().sum()} / {len(df_out)}")
 ```
 
-### GPT-4o (OpenAI) Alternative
+### OpenAI Vision Alternative
 
 ```python
 from openai import OpenAI
-import base64
+import base64, os
 
 client_oai = OpenAI()
 
-def annotate_gpt4v(img_path: str) -> dict:
+# Model selection: set OPENAI_MODEL env var or change default here
+# Vision-capable models: "gpt-4.1", "gpt-4.1-mini", "gpt-5", "gpt-5-mini", "gpt-5-nano"
+OPENAI_VISION_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+def annotate_openai_vision(img_path: str, model: str = None) -> dict:
+    model = model or OPENAI_VISION_MODEL
     with open(img_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode()
     response = client_oai.chat.completions.create(
-        model="gpt-4o",
+        model=model,
         max_tokens=250,
         temperature=0,
         messages=[{

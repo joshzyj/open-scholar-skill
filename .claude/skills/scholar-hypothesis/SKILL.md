@@ -98,7 +98,35 @@ Use this table to route based on design type and $ARGUMENTS keywords.
 | `intersectionality`, `race × gender`, `multiple axes` | Steps 1–5 + intersectionality module in Step 4 |
 | `language`, `sociolinguistics`, `discourse` | Steps 1–7 → linguistic capital / accommodation / ideologies frameworks |
 
-Run a **local reference library search** for the focal phenomenon to identify foundational theory papers.
+**Query knowledge graph first** (if available) — the KG stores pre-extracted theories, mechanisms, and inter-paper relationships from prior sessions:
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available; then
+    echo "=== Knowledge Graph: theories for [TOPIC] ==="
+    kg_search_concepts "[TOPIC]" 15 theory
+    echo ""
+    echo "=== Knowledge Graph: mechanisms for [TOPIC] ==="
+    kg_search_concepts "[TOPIC]" 10 mechanism
+    echo ""
+    echo "=== Knowledge Graph: papers on [TOPIC] ==="
+    kg_search_papers "[TOPIC]" 15 | kg_format_papers
+    echo ""
+    echo "[KG] $(kg_count)"
+  else
+    echo "[KG] Knowledge graph empty — proceeding to local library search"
+  fi
+else
+  echo "[KG] scholar-knowledge not installed — proceeding to local library search"
+fi
+```
+
+Use KG results to: (1) pre-identify candidate theoretical frameworks before Step 2, (2) find contested findings that motivate puzzle framing in Step 1, (3) locate mechanism chains already tested in prior literature.
+
+Then run a **local reference library search** for the focal phenomenon to identify foundational theory papers.
 
 ```bash
 # Load multi-backend reference search infrastructure
@@ -107,6 +135,7 @@ SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
 eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
 
 # Unified search — queries all detected backends (Zotero, Mendeley, BibTeX, EndNote XML)
+# Note: scholar_search now also queries the knowledge graph as Tier 0.5 if available
 scholar_search "[focal_phenomenon]" 15 keyword
 ```
 

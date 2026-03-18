@@ -826,24 +826,31 @@ def batch_code_claude(segments_df, codebook_text, examples=None, rate_limit_paus
     return pd.DataFrame(results)
 ```
 
-**Python: Batch coding with GPT-4 (OpenAI API)**
+**Python: Batch coding with OpenAI API**
 
 ```python
 from openai import OpenAI
 import json
 import time
 import pandas as pd
+import os
 
 client = OpenAI()  # uses OPENAI_API_KEY env var
 
-def code_segment_gpt4(segment_text, codebook_text, examples=None):
-    """Code a single segment using GPT-4."""
+# Model selection: set OPENAI_MODEL env var or change default here
+# Options: "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.4-nano",
+#          "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o3", "o4-mini"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+def code_segment_openai(segment_text, codebook_text, examples=None, model=None):
+    """Code a single segment using OpenAI API."""
+    model = model or OPENAI_MODEL
     system_msg = f"You are a qualitative research coder. Apply the following codebook:\n\n{codebook_text}"
     if examples:
         system_msg += f"\n\nEXAMPLES:\n{examples}"
 
     response = client.chat.completions.create(
-        model="gpt-4",
+        model=model,
         temperature=0.0,
         messages=[
             {"role": "system", "content": system_msg},
@@ -856,11 +863,11 @@ def code_segment_gpt4(segment_text, codebook_text, examples=None):
         return {"code": "PARSE_ERROR", "confidence": 0.0, "reasoning": response.choices[0].message.content}
 
 
-def batch_code_gpt4(segments_df, codebook_text, examples=None, rate_limit_pause=0.5):
+def batch_code_openai(segments_df, codebook_text, examples=None, rate_limit_pause=0.5, model=None):
     """Batch code all segments with rate limiting."""
     results = []
     for idx, row in segments_df.iterrows():
-        result = code_segment_gpt4(row["text"], codebook_text, examples)
+        result = code_segment_openai(row["text"], codebook_text, examples, model=model)
         result["segment_id"] = row["segment_id"]
         result["original_text"] = row["text"]
         results.append(result)
