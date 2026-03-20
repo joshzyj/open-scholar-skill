@@ -1,7 +1,7 @@
 # Open Scholar Skill — User Guide
 
 A Claude Code project for social scientists writing for top-tier journals.
-24 skills + 1 utility covering the full research pipeline from idea exploration to collaboration.
+25 skills + 1 utility covering the full research pipeline from idea exploration to collaboration.
 
 ---
 

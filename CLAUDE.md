@@ -31,7 +31,7 @@ ln -sf .claude/agents agents
 
 A Claude Code plugin for academic paper writing in social sciences (sociology, demography, linguistics, computational social science). Targets journals: ASR, AJS, Demography, Science Advances, Nature Human Behaviour, Nature Computational Science.
 
-**Version**: v5.5.0 — 24 skills, 13 agents (9 peer-reviewer + 4 verification)
+**Version**: v5.5.0 — 26 skills, 13 agents (9 peer-reviewer + 4 verification)
 
 ---
 
@@ -41,7 +41,7 @@ A Claude Code plugin for academic paper writing in social sciences (sociology, d
 open-scholar-skill/
 ├── CLAUDE.md                        # THIS FILE — portable project instructions
 ├── README.md
-├── USAGE.md                         # User guide (all 23 skills)
+├── USAGE.md                         # User guide (all 26 skills)
 ├── agents/ → .claude/agents/        # Symlink to active reviewer agents
 ├── skills/ → .claude/skills/        # Symlink to active skills
 ├── .claude/
@@ -60,7 +60,7 @@ open-scholar-skill/
 │   │   ├── verify-figures.md
 │   │   ├── verify-logic.md
 │   │   └── verify-completeness.md
-│   └── skills/                      # Active skills (24 directories)
+│   └── skills/                      # Active skills (26 directories)
 │       ├── _shared/                 # Shared protocols (process-logger.md)
 │       ├── scholar-brainstorm/       # Data-driven RQ generation from codebooks/questionnaires/datasets
 │       ├── scholar-idea/            # Broad idea → formal RQ (5-agent evaluation panel)
@@ -86,7 +86,8 @@ open-scholar-skill/
 │       ├── scholar-ethics/          # Research ethics toolkit
 │       ├── scholar-qual/            # Qualitative methods (coding, grounded theory, thematic analysis, LLM-assisted coding, mixed-methods integration)
 │       ├── scholar-collaborate/     # Multi-author collaboration (CRediT, tasks, mentoring)
-│       └── scholar-auto-improve/    # Continuous quality engine (4 modes)
+│       ├── scholar-auto-improve/    # Continuous quality engine (4 modes)
+│       └── sync-docs/              # Cross-document synchronization utility
 ```
 
 Each skill directory contains `SKILL.md` (main workflow) and `references/` (supporting material).

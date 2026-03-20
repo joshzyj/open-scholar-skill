@@ -492,6 +492,29 @@ Save the meeting documents.
 
 After completing any workflow, save the full output using the Write tool.
 
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+BASE="${OUTPUT_ROOT}/scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD]"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+
 **Filename convention:**
 `scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD].md`
 

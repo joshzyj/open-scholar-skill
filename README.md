@@ -20,7 +20,7 @@ Open-scholar-skill is designed to **assist** researchers, not replace them. If y
 
 This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, or `scholar-presentation`. The first three were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
 
-However, the 24 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
+However, the 25 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
 
 ```
 /scholar-idea  →  /scholar-lit-review-hypothesis  →  /scholar-design
@@ -50,7 +50,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (24 skills + 1 utility)
+## Skills Overview (25 skills + 1 utility)
 
 ### Core Pipeline Skills
 

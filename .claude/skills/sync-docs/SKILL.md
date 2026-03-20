@@ -117,3 +117,15 @@ Output a final report:
 ### Verification
 - [list of verified content checks with PASS/FAIL]
 ```
+
+---
+
+## Quality Checklist
+
+- [ ] All source files identified (slides, script, manuscript/paper)
+- [ ] Stale references, numbers, and citations detected and updated
+- [ ] All files updated in sync — no file left with outdated content
+- [ ] Cross-document consistency verified (figures, tables, statistics match across all files)
+- [ ] PDF compilation successful for all updated files
+- [ ] Output files exist and spot-checked for correct content
+- [ ] No content lost or accidentally deleted during synchronization

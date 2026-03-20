@@ -762,7 +762,6 @@ This skill provides the knowledge graph search layer used by:
 | `scholar-lit-review-hypothesis` | Step 1a-pre (before Zotero search) | Theories and mechanisms for hypothesis development |
 | `scholar-write` | Step 0 Tier 0 (before citation pool build) | Pre-extracted findings to guide writing |
 | `scholar-citation` | `scholar_search` Tier 0.5 | Enriched paper records in unified search |
-| `scholar-full-paper` | Phase 11f (post-completion) | Auto-ingest completed paper back into graph |
 
 Skills load the integration via:
 ```bash

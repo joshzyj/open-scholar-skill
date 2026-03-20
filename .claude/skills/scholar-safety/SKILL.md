@@ -633,6 +633,31 @@ Rscript -e "
 
 ## Save Output
 
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter. **Re-run this version check with the appropriate BASE for each output file.**
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+# For safety log: BASE="${OUTPUT_ROOT}/[slug]/logs/scholar-safety-log"
+# For protocol report: BASE="${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]"
+BASE="${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path.
+
 After any scan or gate operation, use the Write tool to append to the safety log:
 
 **Log file:** `output/[slug]/logs/scholar-safety-log.md`

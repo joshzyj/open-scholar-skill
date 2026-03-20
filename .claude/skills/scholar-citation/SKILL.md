@@ -1529,6 +1529,37 @@ slug = [first 4 words of paper title, lowercase, hyphenated]
 date = [YYYY-MM-DD]
 ```
 
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]-draft"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+
+**Re-run this version check with the appropriate BASE for each output file.** Use the matching BASE for each file:
+- File 1: `BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]-draft"`
+- File 2: `BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]-log"`
+- File 3 (MODE 6): `BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]"` (for .bib)
+- File 4 (MODE 7): `BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]-retraction-report"`
+- File 5 (MODE 8): `BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]-reporting-summary"`
+- File 6 (MODE 8): `BASE="${OUTPUT_ROOT}/[slug]/citations/scholar-citation-[slug]-[date]-reporting-gaps"`
+
 **File 1: Citation-complete draft**
 Path: `output/[slug]/citations/scholar-citation-[slug]-[date]-draft.md`
 

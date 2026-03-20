@@ -1221,6 +1221,32 @@ make all  # OR: run scripts in numbered order
 
 ## Step 6: Save Output
 
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter. **Re-run this version check with the appropriate BASE for each output file.**
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SLUG="[slug]"
+DATE=$(date +%Y-%m-%d)
+# Adapt BASE for each file: preregistration-SLUG-DATE, dmp-SLUG-DATE, or replication-readme-SLUG-DATE
+BASE="${OUTPUT_ROOT}/${SLUG}/preregistration-${SLUG}-${DATE}"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+
 Use the Write tool to save three files:
 
 ```bash

@@ -672,6 +672,30 @@ Before finalizing any auto-improve output, verify:
 
 ## Save Output
 
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+# Adapt BASE for the mode: observe-[skill]-[date], audit-[date], improve-[date], or evolve-[date]
+BASE="${OUTPUT_ROOT}/[slug]/auto-improve/[mode]-[date]"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path.
+
 Write all output using the Write tool.
 
 - **OBSERVE**: `output/[slug]/auto-improve/observe-[skill]-[date].md`

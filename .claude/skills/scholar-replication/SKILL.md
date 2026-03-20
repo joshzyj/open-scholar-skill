@@ -168,7 +168,7 @@ fi
 
 If no scripts are found, attempt to recover from upstream outputs:
 
-**Source 1 — Analysis logs:** Scan `output/[slug]/logs/scholar-analyze-*.md` and `output/[slug]/logs/scholar-eda-*.md` for fenced code blocks (```r, ```python, ```stata).
+**Source 1 — Analysis logs:** Scan `output/[slug]/logs/scholar-analyze-*.md` and `output/[slug]/logs/scholar-eda-*.md` for fenced code blocks (` ```r `, ` ```python `, ` ```stata `).
 
 **Source 2 — Manuscript drafts:** Scan `output/[slug]/manuscript/*.md` and `output/[slug]/drafts/*.md` for `[CODE-TEMPLATE]` blocks or fenced code blocks.
 
@@ -1809,6 +1809,29 @@ cat >> "$LOG_FILE" << LOGFOOTER
 LOGFOOTER
 echo "Process log saved to $LOG_FILE"
 ```
+
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter. **Re-run this version check with the appropriate BASE for each output file.**
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+BASE="${OUTPUT_ROOT}/replication/replication-report-[slug]-[YYYY-MM-DD]"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
 
 Save 3–4 files via the Write tool:
 

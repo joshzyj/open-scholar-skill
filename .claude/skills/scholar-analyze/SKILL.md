@@ -2682,6 +2682,31 @@ See [coding-decisions-log.md](coding-decisions-log.md) for the full decision rat
 
 Use the Write tool to save **two separate files** after completing all components.
 
+### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+
+Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+BASE="${OUTPUT_ROOT}/scholar-analyze-log-[topic-slug]-[YYYY-MM-DD]"
+
+if [ -f "${BASE}.md" ]; then
+  V=2
+  while [ -f "${BASE}-v${V}.md" ]; do
+    V=$((V + 1))
+  done
+  BASE="${BASE}-v${V}"
+fi
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+
+**Re-run this version check with the appropriate BASE for each output file.** For File 2 (results), use `BASE="${OUTPUT_ROOT}/scholar-analyze-results-[topic-slug]-[YYYY-MM-DD]"`.
+
 ---
 
 ### File 1 — Internal Analysis Log
