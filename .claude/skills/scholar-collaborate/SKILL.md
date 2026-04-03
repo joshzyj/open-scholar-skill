@@ -492,28 +492,21 @@ Save the meeting documents.
 
 After completing any workflow, save the full output using the Write tool.
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+### Version Collision Avoidance (MANDATORY)
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 **Filename convention:**
 `scholar-collaborate-[type]-[project-slug]-[YYYY-MM-DD].md`

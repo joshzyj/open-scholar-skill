@@ -10,6 +10,34 @@ user-invocable: true
 
 Synchronize presentation slides, speaker script, and manuscript/paper so all share consistent content (citations, statistics, version numbers, skill counts, taxonomy references).
 
+## Process Logging (REQUIRED)
+
+Initialize the process log at the start of the run:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+mkdir -p "${OUTPUT_ROOT}/logs"
+SKILL_NAME="sync-docs"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ -f "$LOG_FILE" ]; then
+  CTR=2; while [ -f "${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}-${CTR}.md" ]; do CTR=$((CTR+1)); done
+  LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}-${CTR}.md"
+fi
+cat > "$LOG_FILE" << 'LOGHEADER'
+# Process Log: /sync-docs
+- **Date**: $(date '+%Y-%m-%d %H:%M')
+- **Arguments**: [raw arguments]
+
+## Steps
+LOGHEADER
+echo "Process log: $LOG_FILE"
+```
+
+Log each step as it completes by appending to `$LOG_FILE`.
+
+---
+
 ## Step 1 — Identify Documents
 
 If the user provides file paths, use those. Otherwise, auto-detect by scanning the current project directory:
@@ -118,14 +146,39 @@ Output a final report:
 - [list of verified content checks with PASS/FAIL]
 ```
 
+**Close Process Log:**
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="sync-docs"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t "${OUTPUT_ROOT}"/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+cat >> "$LOG_FILE" << LOGFOOTER
+
+## Summary
+- **Steps completed**: [N completed]/[N total]
+- **Files synchronized**: [count]
+- **Stale items fixed**: [count]
+- **Errors**: [count, or 0]
+- **Time finished**: $(date +%H:%M:%S)
+LOGFOOTER
+echo "Process log saved to $LOG_FILE"
+```
+
 ---
 
 ## Quality Checklist
 
-- [ ] All source files identified (slides, script, manuscript/paper)
-- [ ] Stale references, numbers, and citations detected and updated
-- [ ] All files updated in sync — no file left with outdated content
-- [ ] Cross-document consistency verified (figures, tables, statistics match across all files)
-- [ ] PDF compilation successful for all updated files
-- [ ] Output files exist and spot-checked for correct content
-- [ ] No content lost or accidentally deleted during synchronization
+- [ ] At least 2 documents identified and confirmed by user
+- [ ] Cross-document comparison table produced with all content items
+- [ ] All STALE items identified with authoritative values
+- [ ] User confirmed changes before applying
+- [ ] All documents updated consistently
+- [ ] LaTeX compiled with `xelatex` (not `pdflatex`)
+- [ ] Markdown compiled with pandoc where applicable
+- [ ] Each compiled PDF verified: file exists, correct page count, content spot-checked
+- [ ] No unintended content changes (document-specific formatting preserved)
+- [ ] Final sync report produced with changes table and verification results

@@ -12,17 +12,18 @@ Write with analytical precision — say exactly what you mean.
 **Precise**: "Access to high-status professional networks increases the likelihood of obtaining managerial positions by 15 percentage points (Lin 2001)."
 
 ### 2. Hedging Appropriately
-Match the strength of language to the strength of evidence:
+Match the strength of language to the strength of evidence. **Default to associational language unless the study has a credible causal identification strategy.**
 
-| Evidence Strength | Language |
-|------------------|---------|
-| Experimental / strong causal | "X causes Y" / "X increases Y" |
-| Strong observational (IV, DiD) | "X leads to Y" / "X generates Y" |
-| Standard observational (OLS) | "X is associated with Y" / "X predicts Y" |
-| Theoretical claim | "We expect X to increase Y" |
-| Ambiguous finding | "X may increase Y" / "There is suggestive evidence that..." |
+| Evidence Strength | Language | When to use |
+|------------------|---------|-------------|
+| Experimental / RCT | "X causes Y" / "X increases Y" | Only with randomized assignment |
+| Strong quasi-experimental (IV, DiD, RD) | "X leads to Y" / "X generates Y" | Only with explicit identification strategy |
+| Standard observational (OLS, logit, FE without causal argument) | "X is associated with Y" / "X predicts Y" / "X is linked to Y" | **DEFAULT for most social science studies** |
+| Descriptive / cross-sectional | "X correlates with Y" / "X varies with Y" / "X is patterned by Y" | Descriptive studies, cross-sectional analyses |
+| Theoretical claim | "We expect X to be positively related to Y" / "Theory predicts that X and Y should covary" | Hypothesis development |
+| Ambiguous finding | "X may be related to Y" / "There is suggestive evidence that..." | Weak or mixed results |
 
-Do NOT say "proves" for any empirical claim.
+**IMPORTANT**: Do NOT say "proves" for any empirical claim. Do NOT use "effect," "impact" (verb), "influence" (verb), "causes," "leads to," "results in," "drives," or "produces" for non-causal designs. These terms imply a directional causal claim that the research design cannot support. Use "association," "relationship," "pattern," "correlation," or "link" instead of "effect" when describing non-causal findings.
 
 ### 3. Active Voice
 Use active voice, especially in methods:

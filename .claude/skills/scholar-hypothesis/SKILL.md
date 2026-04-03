@@ -702,34 +702,26 @@ If any check fails, revise the draft before saving.
 
 ---
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+## Step 8: Save Output
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+Use the **Write tool** to save two files after completing all steps.
+
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/[slug]/theory/scholar-hypothesis-log-[topic-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/theory/scholar-hypothesis-log-[topic-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/theory/scholar-hypothesis-log-[topic-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/theory/scholar-hypothesis-log-[topic-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
-
-**Re-run this version check with the appropriate BASE for each output file.**
-
-## Step 8: Save Output
-
-Use the **Write tool** to save two files after completing all steps.
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 ---
 
@@ -877,6 +869,7 @@ Confirm both file paths to user at end.
 - [ ] **Alternative explanations** acknowledged with design response for each
 - [ ] **Text-based DAG** produced — treatment, outcome, mediators, moderators, confounders labeled
 - [ ] **Causal identification flag**: if causal inference is the goal, `/scholar-causal` flagged
+- [ ] **Causal language calibrated to design**: if the study uses observational data without a causal identification strategy, hypothesis statements and theory prose use associational language ("is positively associated with," "predicts") rather than causal language ("causes," "leads to," "effect of"). Theory sections may describe hypothesized mechanisms with hedging ("may," "we theorize that"). See scholar-write SKILL.md for full rule
 - [ ] **Hypothesis placement** matches journal norms: BLENDED for ASR/AJS/Social Forces; SEPARATE for Demography (BLENDED if 3+ H); SEPARATE-PREDICTIONS for NHB/NCS/SciAdv
 - [ ] **If BLENDED**: thematic subsection headings are substantive (not "Hypothesis 1"); each subsection builds argument → derives H at end
 - [ ] **Theory section** calibrated to journal word norms (ASR 1000–1500; Demo 600–1000; NHB 300–600)

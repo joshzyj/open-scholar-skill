@@ -134,7 +134,7 @@ Risk: 🟢 LOW — safe for standard Claude Code analysis
 
 ## 2. Inline Operation Gate Templates
 
-### Before reading a data file (compact version for non-full-paper context)
+### Before reading a data file (compact version)
 
 ```
 🔐 Safety check before reading [filename]...
@@ -277,41 +277,6 @@ Started: [date]
 
 ---
 
-## 5. Full Safety Gate Report
-
-```
-╔══════════════════════════════════════════════════════════════════╗
-║  🔐  SCHOLAR SAFETY GATE — FULL SCAN                             ║
-║       Pre-flight data safety check                               ║
-╚══════════════════════════════════════════════════════════════════╝
-
-Pipeline: full safety gate
-User input: [first 80 chars of $ARGUMENTS]
-Data files detected in arguments: [N files]
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-SCAN RESULTS
-
-┌─────────────────────────────────────────────────────────────────┐
-│ File                  │ Risk  │ Top flag(s)                    │
-├─────────────────────────────────────────────────────────────────┤
-│ data/main.csv         │ 🟢 LOW  │ None                         │
-│ data/panel.dta        │ 🟡 MED  │ IRB markers (15)             │
-│ data/interviews.txt   │ 🔴 HIGH │ Names, PHI, mental health    │
-└─────────────────────────────────────────────────────────────────┘
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-GATE STATUS: 🔴 BLOCKED — HIGH sensitivity file detected
-
-[Show HIGH RISK alert for interviews.txt]
-[Wait for user selection]
-[After selection, show updated gate status]
-
-GATE STATUS: 🟡 CAUTION — Medium sensitivity file present
-[Show MEDIUM advisory for panel.dta]
-[Wait for user selection]
-
-GATE STATUS: ✅ CLEARED — All files resolved
 Proceeding to Phase 0 (Idea Exploration)...
 
 Safety gate log written to: output/[slug]/logs/scholar-safety-log.md
@@ -355,7 +320,7 @@ Save this disclosure to your scholar-ethics report:
 
 ---
 
-## 7. IRB Amendment Template (if needed after Phase -1)
+## 7. IRB Amendment Template (if needed after safety scan)
 
 If the safety gate determines that IRB consent language does not cover AI processing, use this to request an amendment:
 

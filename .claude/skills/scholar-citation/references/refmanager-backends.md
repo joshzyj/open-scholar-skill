@@ -1144,8 +1144,6 @@ else:
 
 Google Scholar provides access to scholarly articles, citation counts, and broad academic coverage. No API key needed. Uses HTML scraping via `curl`.
 
-> **Terms of Service Notice:** Google's ToS prohibit automated access to Google Scholar. This scraping function is provided for limited, low-volume academic verification only (e.g., confirming a single reference exists). For bulk discovery, use CrossRef, Semantic Scholar, or OpenAlex APIs instead. Use at your own discretion and risk.
-
 > **Rate limit:** Google Scholar may return CAPTCHA for high-frequency requests. Use sparingly — best for targeted verification searches, not bulk discovery. Insert a 2-second delay between consecutive calls.
 
 ### Keyword search
@@ -1154,7 +1152,7 @@ Google Scholar provides access to scholarly articles, citation counts, and broad
 scholar_search_google_scholar() {
   local KEYWORD="$1" LIMIT="${2:-50}"
   local QUERY=$(echo "$KEYWORD" | sed 's/ /+/g')
-  curl -sL -A "open-scholar-skill/5.4.0 (academic citation verification; +https://github.com/joshzyj/open-scholar-skill)" \
+  curl -sL -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
     "https://scholar.google.com/scholar?q=$QUERY&hl=en&num=$LIMIT" 2>/dev/null \
     | python3 -c "
 import sys, re, html

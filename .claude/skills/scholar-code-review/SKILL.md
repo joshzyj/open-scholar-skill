@@ -387,20 +387,13 @@ Follow the protocol defined in `.claude/skills/_shared/version-check.md`. Shell 
 ```bash
 # MANDATORY: Run before every Write tool call
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/code-review/code-review-report-$(date +%Y-%m-%d)"
-mkdir -p "${OUTPUT_ROOT}/code-review"
+# BASE pattern: ${OUTPUT_ROOT}/code-review/code-review-report-$(date +%Y-%m-%d)
+OUTDIR="$(dirname "${OUTPUT_ROOT}/code-review/code-review-report-$(date +%Y-%m-%d)")"
+STEM="$(basename "${OUTPUT_ROOT}/code-review/code-review-report-$(date +%Y-%m-%d)")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
 
-# USE THIS PATH in the Write tool call
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
 ```
 
 **Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files.
@@ -478,8 +471,6 @@ Before presenting results, verify:
 | **scholar-analyze** | Post-save recommendation to user | `full` | No — recommendation |
 | **scholar-compute** | Post-save recommendation to user | `full` | No — recommendation |
 | **scholar-eda** | Post-save recommendation to user | `correctness robustness` | No — recommendation |
-| **scholar-full-paper** | Phase 5.5 (after analyze/Phase 5, before Mid-Pipeline Audit and Phase 7 write) | `full` | Yes — MAJOR ISSUES blocks Phase 7 |
-| **scholar-grant** | Phase 5G.0 (before verification gate, conditional on scripts existing) | `full` | Yes — MAJOR ISSUES blocks Phase 6 (mock panel) |
 | **scholar-replication** | Verification checklist (consumes existing report; recommends running if none exists) | reads report | Checklist item |
 | **scholar-verify** | Complementary: scholar-verify checks output consistency; scholar-code-review checks code correctness | — | Independent |
 

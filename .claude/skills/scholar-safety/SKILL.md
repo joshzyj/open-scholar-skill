@@ -1,6 +1,6 @@
 ---
 name: scholar-safety
-description: Real-time data privacy and leakage protection layer for AI-assisted research. Before any file is read by Claude Code and transmitted to Anthropic's API, proactively scans it locally for sensitive content (PII, HIPAA, IRB-protected, restricted licensed data) using local Bash pattern matching — so the sensitive data itself never enters the AI context during the scan. Issues tiered warnings (green/yellow/red), requests explicit user permission before transmitting any sensitive data, and offers safe alternatives: anonymization scripts, local-mode analysis (bash-only, no data in context), data minimization, or full halt. Three modes: SCAN (audit a file using only local grep/awk — sensitive data stays local), GATE (intercept a proposed operation and ask permission before execution), PROTOCOL (generate a project-level data safety protocol). Works alongside scholar-eda, scholar-analyze, scholar-compute, and scholar-data to protect any data-touching operation.
+description: Real-time data privacy and leakage protection layer for AI-assisted research. Before any file is read by Claude Code and transmitted to Anthropic's API, proactively scans it locally for sensitive content (PII, HIPAA, IRB-protected, restricted licensed data) using local Bash pattern matching — so the sensitive data itself never enters the AI context during the scan. Issues tiered warnings (green/yellow/red), requests explicit user permission before transmitting any sensitive data, and offers safe alternatives: anonymization scripts, local-mode analysis (bash-only, no data in context), data minimization, or full halt. Four modes: SCAN (audit a file using only local grep/awk — sensitive data stays local), GATE (intercept a proposed operation and ask permission before execution), PROTOCOL (generate a project-level data safety protocol), STATUS (safety status log). Works alongside scholar-eda, scholar-analyze, scholar-compute, and scholar-data to protect any data-touching operation.
 tools: Bash, Read, Write
 argument-hint: "[scan|gate|protocol|status] [file path or operation description] [optional: data type, project name, journal target]"
 user-invocable: true
@@ -19,7 +19,7 @@ You are the data safety guardian for AI-assisted research. Your job is to interc
 The user has provided: `$ARGUMENTS`
 
 Parse to determine:
-- **MODE**: `scan` | `gate` | `protocol` | `status` | `full-paper-gate` 
+- **MODE**: `scan` | `gate` | `protocol` | `status`
 - **TARGET**: file path, directory path, or description of the proposed operation
 - **DATA_TYPE**: hint from user (health, survey, interview, restricted, etc.) — optional
 - **PROJECT**: project name for logging
@@ -35,7 +35,6 @@ Parse to determine:
 | `gate`, `before`, `about to`, `going to read`, `going to load` | **MODE 2: Operation Safety Gate** |
 | `protocol`, `plan`, `project safety`, `data handling plan` | **MODE 3: Project Safety Protocol** |
 | `status`, `log`, `what was shared`, `history` | **MODE 4: Safety Status Log** |
-| `full-paper-gate` | **MODE 5: Full Safety Gate** |
 | Any mode that finds HIGH risk | **Halt → present options → wait for user selection** |
 
 ---
@@ -105,6 +104,18 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 *Scan a file or directory for sensitive data using local pattern matching. No file content enters Claude's context during the scan — only match counts and pattern categories.*
 
+### Step 1.0 — Quick Gate Check (REQUIRED)
+
+Before the detailed scan, run the gate script for a fast RED/YELLOW/GREEN triage:
+
+```bash
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/safety-scan.sh" "[FILE_PATH]"
+```
+
+- **GREEN (exit 0)**: No sensitive patterns detected — proceed to Step 1.1 for detailed scan or skip to MODE 2/3.
+- **YELLOW (exit 2)**: Review needed — proceed to detailed scan below.
+- **RED (exit 1)**: Sensitive data detected — proceed to detailed scan to get per-category counts, then apply Step 1.4 options.
+
 ### Step 1.1 — File Inventory
 
 ```bash
@@ -121,7 +132,46 @@ find "$DIR_PATH" -type f | head -50
 find "$DIR_PATH" -type f | wc -l
 ```
 
-### Step 1.2 — Local Sensitivity Pattern Scan
+### Step 1.2 — Detect Data Type (Quantitative vs. Qualitative)
+
+Before scanning, determine whether the file is structured/quantitative data or qualitative text data. This determines which anonymization procedure to offer in Step 1.4.
+
+```bash
+FILE="$TARGET_PATH"
+EXT="${FILE##*.}"
+IS_QUAL="false"
+
+# Qualitative file indicators (by extension)
+case "$EXT" in
+  txt|rtf|docx|doc|odt|md|tex) IS_QUAL="likely" ;;
+  csv|tsv|dta|rds|xlsx|xls|sav|parquet|feather|db|json) IS_QUAL="false" ;;
+  *) IS_QUAL="unknown" ;;
+esac
+
+# Qualitative content indicators (by content patterns — counts only, no data exposed)
+if [ "$IS_QUAL" != "false" ]; then
+  QUAL_MARKERS=$(grep -cEi '\b(interviewer|interviewee|respondent|Q:|A:|INTERVIEWER:|PARTICIPANT:|field.?note|memo|transcript|focus.?group|ethnograph|informant)\b' "$FILE" 2>/dev/null || echo 0)
+  NARRATIVE_LINES=$(awk 'length > 200' "$FILE" 2>/dev/null | wc -l | tr -d ' ')
+  echo "Qualitative content markers: $QUAL_MARKERS"
+  echo "Long narrative lines (>200 chars): $NARRATIVE_LINES"
+  if [ "$QUAL_MARKERS" -gt 5 ] || [ "$NARRATIVE_LINES" -gt 20 ]; then
+    IS_QUAL="true"
+  fi
+fi
+
+# CSV/TSV can also contain qualitative data (open-ended survey responses)
+if [ "$IS_QUAL" = "false" ] && [[ "$EXT" =~ ^(csv|tsv)$ ]]; then
+  OPENENDED_MARKERS=$(grep -cEi '\b(open.?ended|verbatim|comment|narrative|response.?text|free.?text|transcript)\b' "$FILE" 2>/dev/null || echo 0)
+  if [ "$OPENENDED_MARKERS" -gt 3 ]; then
+    IS_QUAL="true"
+    echo "Note: Structured file with qualitative content (open-ended responses detected)"
+  fi
+fi
+
+echo "Data type classification: IS_QUAL=$IS_QUAL"
+```
+
+### Step 1.3 — Local Sensitivity Pattern Scan
 
 Run ALL of the following grep scans using Bash. Each returns only a COUNT. No actual values are returned.
 
@@ -195,7 +245,7 @@ echo ""
 echo "=== SCAN COMPLETE ==="
 ```
 
-### Step 1.3 — Risk Classification
+### Step 1.4 — Risk Classification
 
 Based on scan counts, apply this decision matrix:
 
@@ -212,7 +262,7 @@ Based on scan counts, apply this decision matrix:
 | ZIP codes only, no other flags | 🟡 MEDIUM |
 | No sensitive patterns OR only public data keywords | 🟢 LOW |
 
-### Step 1.4 — Safety Alert Output
+### Step 1.5 — Safety Alert Output
 
 Format the alert based on risk level:
 
@@ -486,64 +536,13 @@ Format the log as a readable summary table.
 
 ---
 
-## MODE 5: Full Safety Gate
-
-*Scans all data files mentioned in $ARGUMENTS before any work begins.*
-
-### Step 5.1 — Extract file paths from arguments
-
-```bash
-# Extract .csv, .dta, .rds, .xlsx, .tsv, .parquet, .json, .txt paths from ARGUMENTS
-echo "$ARGUMENTS" | grep -oEi '[^ ]+\.(csv|dta|rds|xlsx|xls|tsv|parquet|sav|json|txt|feather|db)'
-```
-
-Also check for any directory paths that might contain data files.
-
-### Step 5.2 — Scan each file
-
-For each file found, run MODE 1 scan (Steps 1.1–1.3).
-
-### Step 5.3 — Produce consolidated gate report
-
-```
-╔══════════════════════════════════════════════════════════════╗
-║  🔐  SCHOLAR SAFETY GATE — FULL SCAN                          ║
-╚══════════════════════════════════════════════════════════════╝
-
-Files scanned: [N]
-
-┌──────────────────────────────────────────────────────────┐
-│ File                     │ Risk Level │ Key flags        │
-├──────────────────────────────────────────────────────────┤
-│ [filename1]              │ 🟢 LOW     │ None             │
-│ [filename2]              │ 🟡 MEDIUM  │ IRB markers (12) │
-│ [filename3]              │ 🔴 HIGH    │ SSN (47), PHI    │
-└──────────────────────────────────────────────────────────┘
-
-OVERALL GATE STATUS: [🔴 BLOCKED / 🟡 CAUTION / 🟢 CLEARED]
-
-[If BLOCKED or CAUTION: show OPTIONS A/B/C/D and wait]
-[If CLEARED: proceed with analysis]
-```
-
-### Step 5.4 — Write gate result to PROJECT STATE
-
-After user selection, add to PROJECT STATE:
-
-```
-Safety Gate:
-  Status: [CLEARED / USER-OVERRIDE-D / USER-OPTED-LOCAL / USER-ANONYMIZED]
-  Files scanned: [list]
-  Risk levels: [list]
-  User decisions: [list]
-  Safety log: output/[slug]/logs/scholar-safety-log.md
-```
-
----
-
 ## Anonymization Helper
 
-When the user selects **[B] ANONYMIZE**, generate a ready-to-run R script:
+When the user selects **[B] ANONYMIZE**, determine the data type from Step 1.2 and route to the appropriate procedure:
+
+### Route A: Quantitative / Structured Data (IS_QUAL = "false")
+
+Generate a ready-to-run R script:
 
 ```r
 library(tidyverse)
@@ -594,6 +593,34 @@ cat("Run: /scholar-safety scan [FILE_PATH_ANON].csv  to verify before proceeding
 
 After user runs this script, re-run MODE 1 scan on the anonymized file before proceeding.
 
+### Route B: Qualitative / Text Data (IS_QUAL = "true" or "likely")
+
+**Qualitative data requires a different anonymization approach** — text data (interview transcripts, field notes, open-ended responses, focus group recordings) contains identifiers embedded in narrative prose, not in structured columns. Dropping columns does not work; you need pseudonym replacement + residual scrubbing.
+
+**Execute the `scholar-qual` MANDATORY PRE-STEP: Data Anonymization Gate.** Read and follow the full procedure from `scholar-qual`:
+
+```bash
+SKILL_DIR="${SKILL_DIR:-.claude/skills}"
+cat "$SKILL_DIR/scholar-qual/SKILL.md" | sed -n '/^## MANDATORY PRE-STEP: Data Anonymization Gate/,/^## WORKFLOW 0:/p' | head -n -1
+```
+
+The procedure has 5 steps — all run locally, no data sent to AI:
+
+1. **Step A — PII scan**: Local grep for names, emails, phones, addresses, institutions, DOBs in the text files (returns counts only)
+2. **Step B — Pseudonym mapping table**: Create `pseudonym-key-DO-NOT-SHARE.csv` mapping real names → P01/"Elena", institutions → School-3, cities → "Midwestern City", etc. User populates this manually based on scan results
+3. **Step C — Automated replacement**: Python script applies the mapping to produce `ANON_*` copies, plus regex scrubbing of residual emails/phones/SSNs
+4. **Step D — Verification**: Re-run PII scan on anonymized files to confirm nothing slipped through
+5. **Step E — Path swap**: All subsequent workflows use `ANON_*` files only; originals are never read by Claude Code
+
+**Critical rules for qualitative anonymization:**
+- The pseudonym key file must NEVER be read by Claude Code or any AI service
+- Add it to `.gitignore` immediately
+- Anonymize not just participant names but also **third-party names** (advisors, family members, colleagues mentioned in interviews), **institutions** (schools, churches, clinics), **geographic identifiers** (neighborhoods, street names, small towns), and **unique life events** that could re-identify participants
+- For **sociolinguistic data**: preserve linguistic features (dialect markers, code-switching, prosodic notation) while removing identifiers — do NOT normalize speech to standard English during anonymization, as the linguistic variation is the data
+- For **CSV/TSV with open-ended columns**: apply the Python replacement script to the open-ended text columns only; apply Route A (R script) to the structured columns
+
+After anonymization, re-run MODE 1 scan on the anonymized files before proceeding.
+
 ---
 
 ## Local-Mode Analysis (Option C)
@@ -633,32 +660,29 @@ Rscript -e "
 
 ## Save Output
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+After any scan or gate operation, use the Write tool to append to the safety log:
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter. **Re-run this version check with the appropriate BASE for each output file.**
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
-# MANDATORY: Replace [values] with actuals before running
+# MANDATORY: Replace [slug] and [YYYY-MM-DD] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-# For safety log: BASE="${OUTPUT_ROOT}/[slug]/logs/scholar-safety-log"
-# For protocol report: BASE="${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]"
-BASE="${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
+mkdir -p "$(dirname "$BASE")"
+
 
 echo "SAVE_PATH=${BASE}.md"
 echo "BASE=${BASE}"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path.
-
-After any scan or gate operation, use the Write tool to append to the safety log:
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 **Log file:** `output/[slug]/logs/scholar-safety-log.md`
 
@@ -733,9 +757,11 @@ echo "Process log saved to $LOG_FILE"
 - [ ] HIGH risk: full warning displayed; user selection obtained before any file read
 - [ ] MEDIUM risk: advisory displayed; user confirmation obtained
 - [ ] LOW risk: green light logged; operation proceeds
-- [ ] Anonymization script generated (if user selected [B]) and tested
+- [ ] Data type correctly classified (quantitative vs. qualitative) in Step 1.2
+- [ ] Anonymization script generated (if user selected [B]) — Route A (R script) for quantitative data, Route B (scholar-qual pseudonym procedure) for qualitative/text data
+- [ ] For qualitative data: pseudonym key generated, replacements applied, residual PII scrubbed, verification scan passed, `ANON_*` files used for all subsequent operations
+- [ ] Sociolinguistic data: linguistic features (dialect, code-switching, prosody) preserved during anonymization — only identifiers removed, not linguistic variation
 - [ ] Local-mode Bash scripts generated (if user selected [C])
 - [ ] Gate outcome written to `output/[slug]/logs/scholar-safety-log.md`
-- [ ] Safety gate result logged
 - [ ] Safety protocol saved to `output/[slug]/protocols/` (MODE 3 only)
 - [ ] AI use log entry added for journal disclosure

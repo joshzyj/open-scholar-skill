@@ -249,7 +249,7 @@ scholar_search "[TOPIC]" 25 keyword | scholar_format_citations
 # scholar_search "[TOPIC] [SUBTOPIC]" 25 keyword | scholar_format_citations
 
 # ── 1c. Author search ──
-# Replace with relevant author last names
+# Replace "zhang" with relevant author last names
 echo "=== Author search: [AUTHOR] ==="
 scholar_search "[AUTHOR]" 20 author | scholar_format_citations
 ```
@@ -858,6 +858,24 @@ If the subagent returns NEEDS REVISION, address each flagged item before proceed
 
 After the draft passes verification, write two output files using the Write tool. **This is a required step — the skill is not complete until both files exist.**
 
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+# BASE pattern: ${OUTPUT_ROOT}/lit-review/scholar-lit-review-[slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/lit-review/scholar-lit-review-[slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/lit-review/scholar-lit-review-[slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
+```
+
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
+
+
 ### 8a. Filename conventions
 
 - **Topic slug**: first 4–6 significant words of the topic, lowercased, hyphenated (e.g., `residential-segregation-health`)
@@ -888,31 +906,6 @@ Also copy/symlink as the canonical output name for backward compatibility:
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 cp "$SEARCH_LOG" "${OUTPUT_ROOT}/lit-review/scholar-lit-review-log-${SLUG}-${DATE}.md"
 ```
-
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
-
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
-
-```bash
-# MANDATORY: Replace [values] with actuals before running
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/scholar-lit-review-[slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
-```
-
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
-
-**Re-run this version check with the appropriate BASE for each output file.**
 
 ### 8c. File 2: Literature Review Draft
 
@@ -1083,6 +1076,9 @@ Before finalizing, verify every item:
 - [ ] All cited papers were found via local reference library search, WebSearch, or API lookup — none inserted from Claude's memory alone
 - [ ] Any uncertain citations flagged with `[CITATION NEEDED]` for verification by `/scholar-citation`
 - [ ] Citations carried forward to subsequent phases (scholar-hypothesis, scholar-write) are marked as pre-verified
+
+**Causal language precision:**
+- [ ] When summarizing prior observational studies, use the language those studies used — do not upgrade correlational findings to causal claims (e.g., "Smith et al. found X is associated with Y," not "Smith et al. found X causes Y" unless they used a causal design). See scholar-write SKILL.md for the full causal language rule
 
 **Search coverage:**
 - [ ] Local reference library was searched first; foundational papers in library are cited

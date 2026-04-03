@@ -166,6 +166,8 @@ If no causal keyword → proceed directly to Phase 1.
 
 ### Script Archive Protocol (MANDATORY — for replication package)
 
+Follow the script version control protocol defined in `.claude/skills/_shared/script-version-check.md`. **NEVER overwrite an existing script.**
+
 After EVERY major EDA code block is executed in Steps 1–7, save the complete script to `output/[slug]/scripts/[NN]-[name].R` (or `.py`). Use the EDA numbering range `E01`–`E09`:
 
 | Step | Script prefix | Example filename |
@@ -176,18 +178,36 @@ After EVERY major EDA code block is executed in Steps 1–7, save the complete s
 | Step 4 — Distributions | `E04` | `${OUTPUT_ROOT}/scripts/E04-distributions.R` |
 | Step 5 — Bivariate | `E05` | `${OUTPUT_ROOT}/scripts/E05-bivariate.R` |
 | Step 6 — Multicollinearity | `E06` | `${OUTPUT_ROOT}/scripts/E06-collinearity.R` |
+| Step 6b — Measurement Validation | `E06b` | `${OUTPUT_ROOT}/scripts/E06b-measurement-validation.R` |
 | Step 7 — Table 1 | `E07` | `${OUTPUT_ROOT}/scripts/E07-table1.R` |
 
-**After each script save**, append a row to `${OUTPUT_ROOT}/scripts/script-index.md`:
+**Version-check before EVERY script save** — run this Bash block before the Write tool call:
+```bash
+# MANDATORY: Replace SCRIPT_NAME with actual (e.g., E01-load-data)
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SCRIPT_NAME="E01-load-data"  # Replace with actual
+EXT="R"
+SCRIPT_DIR="${OUTPUT_ROOT}/scripts"
+mkdir -p "$SCRIPT_DIR"
+SCRIPT_BASE="${SCRIPT_DIR}/${SCRIPT_NAME}"
+if [ -f "${SCRIPT_BASE}.${EXT}" ]; then
+  V=2; while [ -f "${SCRIPT_BASE}-v${V}.${EXT}" ]; do V=$((V + 1)); done
+  SCRIPT_BASE="${SCRIPT_BASE}-v${V}"
+fi
+echo "SCRIPT_PATH=${SCRIPT_BASE}.${EXT}"
+```
+**Use the printed `SCRIPT_PATH` as `file_path` in the Write tool call.** Shell variables do NOT persist — re-derive in every call. Include a `# Version: vN` and `# Changes:` line in the script header for v2+.
+
+**After each script save**, append a row to `${OUTPUT_ROOT}/scripts/script-index.md` (use the versioned filename):
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-echo "| [order] | E0[N]-[name].R | [description] | [input file] | [output files] | [Table/Figure produced] |" >> "${OUTPUT_ROOT}/scripts/script-index.md"
+echo "| [order] | E0[N]-[name][-vN].R | [description] | [input file] | [output files] | [Table/Figure produced] |" >> "${OUTPUT_ROOT}/scripts/script-index.md"
 ```
 
 **After each analytic decision** (e.g., choosing listwise deletion vs. MI, choosing bin widths, sample restrictions), append a row to `${OUTPUT_ROOT}/scripts/coding-decisions-log.md`:
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-echo "| $(date '+%Y-%m-%d %H:%M') | Step [N] | [decision] | [alternatives] | [rationale] | [variables] | E0[N]-[name].R |" >> "${OUTPUT_ROOT}/scripts/coding-decisions-log.md"
+echo "| $(date '+%Y-%m-%d %H:%M') | Step [N] | [decision] | [alternatives] | [rationale] | [variables] | E0[N]-[name][-vN].R |" >> "${OUTPUT_ROOT}/scripts/coding-decisions-log.md"
 ```
 
 ---
@@ -377,7 +397,8 @@ See [references/missing-data.md](references/missing-data.md) for MNAR sensitivit
 ```r
 SKILL_DIR <- Sys.getenv("SCHOLAR_SKILL_DIR", unset = ".")
 SKILL_DIR <- file.path(SKILL_DIR, ".claude", "skills")
-source(file.path(SKILL_DIR, "scholar-analyze/references/viz_setting.R"))
+viz_path <- file.path(SKILL_DIR, "scholar-analyze/references/viz_setting.R")
+if (file.exists(viz_path)) source(viz_path) else stop("viz_setting.R not found at ", viz_path, " — do NOT define theme_Publication inline")
 # Loads: theme_Publication(), scale_fill_Publication(), scale_colour_Publication()
 
 # ── VISUALIZATION RULES (MANDATORY) ──────────────────────────────
@@ -572,6 +593,64 @@ vif(m_vif)
 | > 10 | Serious multicollinearity — must address |
 
 Options if collinear: (1) drop the less theoretically central variable; (2) create a composite index (`psych::principal()`); (3) use ridge regression or LASSO as robustness check.
+
+### Step 6b: Measurement Validation (conditional)
+
+**Trigger:** Run this step if the study involves latent constructs (scales, indices, composite measures) or cross-group comparisons (race, gender, country subgroups).
+
+**Skip if:** All variables are directly observed single-item measures (e.g., binary callback, continuous income, categorical education level).
+
+```r
+# --- Confirmatory Factor Analysis (CFA) for latent constructs ---
+library(lavaan)
+
+# Define the measurement model (adapt to your constructs)
+cfa_model <- '
+  construct1 =~ item1 + item2 + item3 + item4
+  construct2 =~ item5 + item6 + item7
+'
+cfa_fit <- cfa(cfa_model, data = df, estimator = "MLR")
+summary(cfa_fit, fit.measures = TRUE, standardized = TRUE)
+
+# Fit indices: CFI >= .95, TLI >= .95, RMSEA <= .06, SRMR <= .08
+fitMeasures(cfa_fit, c("cfi", "tli", "rmsea", "srmr"))
+
+# --- Measurement Invariance (if comparing groups) ---
+# Configural (same structure)
+config <- cfa(cfa_model, data = df, group = "group_var")
+# Metric (equal loadings)
+metric <- cfa(cfa_model, data = df, group = "group_var", group.equal = "loadings")
+# Scalar (equal intercepts)
+scalar <- cfa(cfa_model, data = df, group = "group_var", group.equal = c("loadings", "intercepts"))
+
+# Compare: delta CFI < .01 and delta RMSEA < .015 supports invariance
+anova(config, metric, scalar)
+
+# --- Reliability ---
+library(psych)
+alpha(df[, c("item1", "item2", "item3", "item4")])  # Cronbach's alpha
+omega(df[, c("item1", "item2", "item3", "item4")])   # McDonald's omega (preferred)
+```
+
+**For computational measures** (NLP-derived, ML predictions):
+```r
+# Report precision, recall, F1 against gold-standard human coding
+library(caret)
+cm <- confusionMatrix(factor(predicted), factor(gold_standard))
+cm$byClass[c("Precision", "Recall", "F1")]
+# Inter-annotator agreement: Cohen's kappa or Krippendorff's alpha
+library(irr)
+kappa2(cbind(coder1, coder2))
+```
+
+**Decision rules:**
+
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| CFI < .90 | Poor fit — revise measurement model |
+| Alpha / Omega < .70 | Weak reliability — note limitation; consider dropping weak items |
+| Metric invariance fails (delta CFI > .01) | Cannot compare group means directly — note limitation |
+| F1 < .70 for computational measure | Weak prediction — note measurement error in limitations |
 
 **Condition number** (complement to VIF):
 ```r
@@ -893,6 +972,7 @@ Prompt:
    - Missing data: [% missing, mechanism, treatment]
    - Key correlations: [correlations between predictors]
    - VIF max: [value]
+   - Measurement validation: [CFA fit / reliability alpha/omega / invariance — or N/A if single-item measures]
    - Influential observations: [N flagged, action taken]
    - Pre-analysis memo: [locked / not yet locked]
    - Table 1: [saved / not yet saved]
@@ -915,28 +995,22 @@ Prompt:
 
 After completing all phases, save a summary document using the Write tool.
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+### Version Collision Avoidance (MANDATORY)
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/scholar-eda-[topic-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/eda/scholar-eda-[topic-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/eda/scholar-eda-[topic-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/eda/scholar-eda-[topic-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 **Filename:** `scholar-eda-[topic-slug]-[YYYY-MM-DD].md`
 
@@ -1032,6 +1106,7 @@ Confirm saved file path to user after Write tool completes.
 - [ ] Bivariate relationships previewed (direction, linearity, LOESS)
 - [ ] Correlation heatmap produced; high-correlation pairs flagged (> 0.8)
 - [ ] VIF checked; max VIF < 10 (or addressed if higher)
+- [ ] Measurement validation completed if latent constructs used (CFA fit indices, reliability, invariance if cross-group)
 - [ ] Panel within-variation confirmed if FE planned (within SD > 0)
 - [ ] Outlier/influential observations checked; exclusion decisions documented
 - [ ] Pre-analysis decisions memo written and date-stamped

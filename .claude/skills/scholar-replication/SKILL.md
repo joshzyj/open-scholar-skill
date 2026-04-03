@@ -1810,30 +1810,29 @@ LOGFOOTER
 echo "Process log saved to $LOG_FILE"
 ```
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+Save 3–4 files via the Write tool:
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter. **Re-run this version check with the appropriate BASE for each output file.**
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
-# MANDATORY: Replace [values] with actuals before running
+# MANDATORY: Replace [slug] and [YYYY-MM-DD] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/replication/replication-report-[slug]-[YYYY-MM-DD]"
+# BASE pattern: ${OUTPUT_ROOT}/replication/replication-report-[slug]-[YYYY-MM-DD]
+OUTDIR="$(dirname "${OUTPUT_ROOT}/replication/replication-report-[slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/replication/replication-report-[slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
+mkdir -p "$(dirname "$BASE")"
+
 
 echo "SAVE_PATH=${BASE}.md"
 echo "BASE=${BASE}"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
-
-Save 3–4 files via the Write tool:
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 ### File 1: README
 
@@ -1916,6 +1915,7 @@ Paper-to-code correspondence audit from Step 4d.
 - [ ] Every figure in the paper has a producing script (MAPPED status)
 - [ ] In-text statistics traceable to scripts (at least 80% mapped)
 - [ ] VERIFICATION-REPORT.md with completeness score and unmapped item remediation
+- [ ] **scholar-code-review check**: If a `scholar-code-review` report exists at `output/code-review/code-review-report-*.md`, consume it and verify: (1) all CRITICAL issues have been resolved in the scripts included in the replication package, (2) reproducibility grade from Agent 4 (review-code-reproducibility) is B or better. If no report exists, recommend running `/scholar-code-review full` before packaging — CRITICAL coding errors in the replication package will be caught by journal data editors.
 - [ ] **scholar-verify completeness check**: If a `scholar-verify` report exists at `output/[slug]/verify/verification-report-*.md`, consume the verify-completeness agent's findings (artifact chain map, orphaned/missing items) and cross-check against the replication package contents. Flag any artifacts listed in the verification report that are missing from the package.
 - [ ] **scholar-verify numerics check**: If a `scholar-verify` report exists, consume the verify-numerics agent's findings and confirm that all raw output files flagged with transcription issues have been corrected in the replication package's `output/` directory (i.e., the replication package contains the corrected versions, not the stale ones).
 

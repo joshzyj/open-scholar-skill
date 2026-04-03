@@ -55,7 +55,19 @@ for candidate in \
 done
 
 if [ -n "$ZOTERO_DIR" ]; then
-  echo "  ✓ Found Zotero at: $ZOTERO_DIR"
+  echo "  Auto-detected Zotero at: $ZOTERO_DIR"
+  read -rp "  Use this path? [Y/n] or enter a different path: " user_zotero
+  if [ -z "$user_zotero" ] || [[ "$user_zotero" =~ ^[Yy]$ ]]; then
+    echo "  ✓ Using: $ZOTERO_DIR"
+  elif [[ "$user_zotero" =~ ^[Nn]$ ]]; then
+    ZOTERO_DIR=""
+    echo "  → Skipping Zotero setup. You can set SCHOLAR_ZOTERO_DIR in .env later."
+  elif [ -d "$user_zotero" ]; then
+    ZOTERO_DIR="$user_zotero"
+    echo "  ✓ Using: $ZOTERO_DIR"
+  else
+    echo "  ⚠ Directory not found: $user_zotero — keeping auto-detected path"
+  fi
 else
   echo "  ⚠ Zotero not auto-detected."
   read -rp "  Enter Zotero library path (or press Enter to skip): " user_zotero
@@ -97,6 +109,13 @@ if [ -n "$user_email" ]; then
   echo "  ✓ CrossRef email: $CROSSREF_EMAIL"
 fi
 
+HF_TOKEN=""
+read -rp "  HuggingFace access token (or press Enter to skip): " user_hf
+if [ -n "$user_hf" ]; then
+  HF_TOKEN="$user_hf"
+  echo "  ✓ HuggingFace token: set"
+fi
+
 echo ""
 
 # ── 3b. Knowledge graph directory ────────────────────────────────
@@ -134,6 +153,9 @@ SCHOLAR_ENDNOTE_XML="${ENDNOTE_XML}"
 
 # CrossRef / OpenAlex polite pool email (optional but recommended)
 SCHOLAR_CROSSREF_EMAIL="${CROSSREF_EMAIL}"
+
+# HuggingFace access token (for SciThinker, gated models, etc.)
+HF_TOKEN="${HF_TOKEN}"
 
 # Knowledge graph directory (user-scoped, cross-project)
 # Default: ~/.claude/scholar-knowledge
@@ -181,7 +203,7 @@ done
 
 # Symlink each agent file
 agent_count=0
-for agent_file in "$SCRIPT_DIR/.claude/agents"/peer-reviewer-*.md; do
+for agent_file in "$SCRIPT_DIR/.claude/agents"/*.md; do
   [ -f "$agent_file" ] || continue
   name="$(basename "$agent_file")"
   target="$PERSONAL_AGENTS_DIR/$name"

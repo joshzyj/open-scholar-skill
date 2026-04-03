@@ -906,8 +906,8 @@ cff-version: 1.2.0
 message: "If you use this code, please cite it as below."
 type: software
 authors:
-  - family-names: [LastName]
-    given-names: [FirstName]
+  - family-names: Zhang
+    given-names: Yongjun
     orcid: "https://orcid.org/0000-0000-0000-0000"
     affiliation: "University Name, Department"
 title: "Replication code for: [Paper Title]"
@@ -921,8 +921,8 @@ preferred-citation:
   type: article
   title: "[Paper Title]"
   authors:
-    - family-names: [LastName]
-      given-names: [FirstName]
+    - family-names: Zhang
+      given-names: Yongjun
   journal: "[Journal Name]"
   year: 2025
   doi: 10.XXXX/XXXXXXXXXX
@@ -1221,32 +1221,6 @@ make all  # OR: run scripts in numbered order
 
 ## Step 6: Save Output
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
-
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter. **Re-run this version check with the appropriate BASE for each output file.**
-
-```bash
-# MANDATORY: Replace [values] with actuals before running
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-SLUG="[slug]"
-DATE=$(date +%Y-%m-%d)
-# Adapt BASE for each file: preregistration-SLUG-DATE, dmp-SLUG-DATE, or replication-readme-SLUG-DATE
-BASE="${OUTPUT_ROOT}/${SLUG}/preregistration-${SLUG}-${DATE}"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
-```
-
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
-
 Use the Write tool to save three files:
 
 ```bash
@@ -1300,6 +1274,28 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 ```
 
 **IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive LOG_FILE before appending.
+
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
+
+```bash
+# MANDATORY: Replace [slug] and [YYYY-MM-DD] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/preregistration-[slug]-[YYYY-MM-DD]
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/preregistration-[slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/preregistration-[slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
+
+mkdir -p "$(dirname "$BASE")"
+
+
+echo "SAVE_PATH=${BASE}.md"
+echo "BASE=${BASE}"
+```
+
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 **File 1** — Preregistration document (if PREREGISTER mode):
 ```

@@ -300,20 +300,32 @@ Ask: "Would you like me to save the full verification report to disk?"
 
 ## Step 5: Save Output
 
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
+
+```bash
+# MANDATORY: Replace [values] with actuals before running
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+# BASE pattern: ${OUTPUT_ROOT}/verify/verification-report-$(date +%Y-%m-%d)
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/verify/verification-report-$(date +%Y-%m-%d)")"
+STEM="$(basename "${OUTPUT_ROOT}/verify/verification-report-$(date +%Y-%m-%d)")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
+```
+
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
+
 ### 5a. Save Consolidated Report
 
 ```bash
+# Ensure directory exists, then run the version-check from above
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 mkdir -p "${OUTPUT_ROOT}/verify"
-BASE="${OUTPUT_ROOT}/verify/verification-report-$(date +%Y-%m-%d)"
-if [ -f "${BASE}.md" ]; then
-  V=2; while [ -f "${BASE}-v${V}.md" ]; do V=$((V+1)); done
-  BASE="${BASE}-v${V}"
-fi
-echo "Saving to: ${BASE}.md"
 ```
 
-Write the consolidated report to `${BASE}.md` containing:
+Run the Version Collision Avoidance block above to get `SAVE_PATH`. Write the consolidated report to that path containing:
 1. Verification Scorecard
 2. Fix Checklist (Stage 1 + Stage 2)
 3. ★★ Cross-Agent Agreement section
@@ -376,6 +388,7 @@ Before presenting results, verify:
 |-------|-------------------|------|-------|
 | **scholar-analyze** | After tables/figures produced (post-Save Output recommendation) | `stage1` | No — recommendation to user |
 | **scholar-write** | Step 5b: After review panel accepts draft, before save | `stage2` | Conditional — skips if no raw outputs; user chooses fix/save/skip |
+
 | **scholar-respond** | Step 3b: After consistency check, before revision summary (REVISE mode) | `full` | Yes — CRITICAL issues fixed before proceeding |
 | **scholar-journal** | Step 6b item 6: Pre-submission cross-skill integration check | `full` | Yes — MAJOR ISSUES halts submission prep |
 | **scholar-replication** | Verification checklist: 2 items consume verify-completeness + verify-numerics reports | — (reads existing report) | Checklist items |

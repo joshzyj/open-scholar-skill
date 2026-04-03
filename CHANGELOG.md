@@ -3,6 +3,20 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.7.0] - 2026-03-22
+
+### Added
+- **scholar-conceptual**: New skill for original theory building (8 strategies: typology, process, mechanism, scope, multi-level, abductive, synthetic, concept clarification) + publication-quality conceptual diagrams (TikZ/Mermaid: mechanism diagrams, multi-level models, typology matrices, process models, concept maps, feedback loops)
+- **scholar-openai**: External review via OpenAI Codex CLI agents. Spawns multiple parallel Codex agents to independently review analysis scripts, verify manuscript-to-output consistency, check statistical logic, and audit reproducibility
+- **scholar-brainstorm PAPER mode**: Third mode alongside DATA/MATERIALS. Accepts published paper PDF, DOI, or pasted abstract. Extracts seed paper elements, optionally calls SciThinker-30B (HuggingFace) for AI-generated follow-up ideas, then Claude expands to 15-20 candidates across 8 dimensions before multi-agent evaluation
+- **scholar-analyze REVISE-FIGURE mode**: Mode 4 for modifying existing figures without re-running analysis. 14-item revision catalog (rotate labels, resize, relabel, add reference lines, change colors, refacet, convert R↔Python)
+- **scholar-knowledge limitations + future_directions**: Two new fields in paper node schema for extracting what papers acknowledge they couldn't do and what they suggest as next steps. New search modes: `limitations of`, `future directions for`, `opportunities in`
+- **viz-templates-python.md**: Full 25-template Python/matplotlib/seaborn library (P1-P25) matching every ggplot2 template
+- **RQ-to-model mapping check**: Mandatory table ensuring every hypothesis has a corresponding regression
+
+### Changed
+- **viz-standards.md**: Split 974-line monolith into 209-line routing stub + `viz-templates-ggplot.md` (742 lines) loaded on demand (78% reduction)
+
 ## [5.6.0] - 2026-03-21
 
 ### Added

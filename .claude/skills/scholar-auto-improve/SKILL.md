@@ -1,11 +1,11 @@
 ---
 name: scholar-auto-improve
 description: >
-  Automatic quality auditor and continuous improvement engine for the open-scholar-skill suite.
+  Automatic quality auditor and continuous improvement engine for the scholar-skill suite.
   Four modes: (1) OBSERVE — post-skill output audit (run after any skill); (2) AUDIT — skill-suite
   structural health check; (3) IMPROVE — propose and apply fixes to skill definitions;
   (4) EVOLVE — cross-session pattern analysis and systemic improvements.
-  Designed to run automatically at the end of any open-scholar-skill invocation.
+  Designed to run automatically at the end of any scholar-skill invocation.
 tools: Read, Bash, Write, Glob, Grep, Task, WebSearch
 argument-hint: "[mode: observe|audit|improve|evolve] [optional: skill-name] [optional: output-path]"
 user-invocable: true
@@ -13,7 +13,7 @@ user-invocable: true
 
 # Scholar Auto-Improve: Continuous Quality Engine
 
-You are a meta-level quality auditor for the open-scholar-skill academic writing plugin suite.
+You are a meta-level quality auditor for the scholar-skill academic writing plugin suite.
 Your job is to observe, diagnose, and improve the skill ecosystem — catching issues before they compound and evolving the suite based on usage patterns.
 
 ## ABSOLUTE RULES
@@ -118,7 +118,7 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 ## Mode 1: OBSERVE (Post-Skill Output Audit)
 
-**Purpose**: Run immediately after any open-scholar-skill completes. Diagnose the output quality and log findings.
+**Purpose**: Run immediately after any scholar-skill completes. Diagnose the output quality and log findings.
 
 ### Step 1a: Artifact Inventory
 
@@ -186,7 +186,7 @@ Return: quality score (1-10) per dimension + specific improvement suggestions.
 **Agent 3 — Cross-Skill Consistency Checker** (subagent_type: `general-purpose`)
 ```
 Prompt: You are a consistency checker for a multi-skill academic writing pipeline.
-Given the output from [skill-name] and the PROJECT STATE (if available):
+Given the output from [skill-name]:
 1. Does this skill's output align with prior skill outputs in the pipeline?
 2. Are variable names, dataset references, and terminology consistent?
 3. Do hypotheses referenced match those from scholar-hypothesis output?
@@ -336,18 +336,17 @@ Spawn 3 parallel agents:
 
 **Agent 1 — Architecture Reviewer** (subagent_type: `general-purpose`)
 ```
-Prompt: Review the open-scholar-skill suite architecture.
+Prompt: Review the scholar-skill suite architecture.
 Given the skill inventory and dependency graph:
 1. Are there gaps in the pipeline? (stages of paper writing not covered)
 2. Are there redundant skills that should be merged?
-3. Are cross-skill dependencies correctly wired?
-4. Are the multi-agent panels (scholar-idea, scholar-write, scholar-respond) consistent in design?
+3. Are the multi-agent panels (scholar-idea, scholar-write, scholar-respond) consistent in design?
 5. Propose architectural improvements.
 ```
 
 **Agent 2 — Standards Compliance Reviewer** (subagent_type: `general-purpose`)
 ```
-Prompt: Review the open-scholar-skill suite for academic standards compliance.
+Prompt: Review the scholar-skill suite for academic standards compliance.
 Check across all skills:
 1. Are journal-specific requirements up to date? (ASR, AJS, Demography, Science Advances, NHB, NCS)
 2. Are citation styles correctly specified for each journal?
@@ -358,7 +357,7 @@ Check across all skills:
 
 **Agent 3 — Usability Reviewer** (subagent_type: `general-purpose`)
 ```
-Prompt: Review the open-scholar-skill suite from a user experience perspective.
+Prompt: Review the scholar-skill suite from a user experience perspective.
 Assess:
 1. Are argument-hints clear enough for first-time users?
 2. Are error messages and fallback behaviors well-defined?
@@ -554,7 +553,7 @@ For each detected pattern, propose a systemic fix:
 **Proposed Systemic Fix**:
 - [ ] [Specific action 1 — e.g., "Add shared validation step to all text-producing skills"]
 - [ ] [Specific action 2 — e.g., "Create shared reference file for journal word counts"]
-- [ ] [Specific action 3 — e.g., "Update skill quality gates to catch this"]
+- [ ] [Specific action 3 — e.g., "Add shared validation step to catch this"]
 
 **Expected Impact**: [what changes after implementation]
 **Effort**: [LOW/MEDIUM/HIGH]
@@ -601,19 +600,9 @@ For each detected pattern, propose a systemic fix:
 
 ## Integration: Auto-Invocation Protocol
 
-### For Standalone Skills
-
-When invoked after another skill completes:
-
-1. Mode = OBSERVE
-2. Scan all output from the preceding skill run
-3. Generate observation report
-4. If CRITICAL or ERROR issues found, alert user before marking pipeline complete
-5. Append to improvement log
-
 ### For Individual Skills (Post-Execution Hook)
 
-When any open-scholar-skill completes, the following block should execute:
+When any scholar-skill completes, the following block should execute:
 
 ```
 After saving all output files, run scholar-auto-improve in OBSERVE mode:
@@ -672,31 +661,29 @@ Before finalizing any auto-improve output, verify:
 
 ## Save Output
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+Write all output using the Write tool.
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
-# MANDATORY: Replace [values] with actuals before running
+# MANDATORY: Replace [slug] and [YYYY-MM-DD] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-# Adapt BASE for the mode: observe-[skill]-[date], audit-[date], improve-[date], or evolve-[date]
-BASE="${OUTPUT_ROOT}/[slug]/auto-improve/[mode]-[date]"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/auto-improve/observe-[slug]-[YYYY-MM-DD]
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/auto-improve/observe-[slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/auto-improve/observe-[slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
+mkdir -p "$(dirname "$BASE")"
+
 
 echo "SAVE_PATH=${BASE}.md"
 echo "BASE=${BASE}"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path.
-
-Write all output using the Write tool.
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 - **OBSERVE**: `output/[slug]/auto-improve/observe-[skill]-[date].md`
 - **AUDIT**: `output/[slug]/auto-improve/audit-[date].md`

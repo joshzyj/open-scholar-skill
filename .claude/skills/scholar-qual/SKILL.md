@@ -826,31 +826,24 @@ def batch_code_claude(segments_df, codebook_text, examples=None, rate_limit_paus
     return pd.DataFrame(results)
 ```
 
-**Python: Batch coding with OpenAI API**
+**Python: Batch coding with GPT-4 (OpenAI API)**
 
 ```python
 from openai import OpenAI
 import json
 import time
 import pandas as pd
-import os
 
 client = OpenAI()  # uses OPENAI_API_KEY env var
 
-# Model selection: set OPENAI_MODEL env var or change default here
-# Options: "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.4-nano",
-#          "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o3", "o4-mini"
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-
-def code_segment_openai(segment_text, codebook_text, examples=None, model=None):
-    """Code a single segment using OpenAI API."""
-    model = model or OPENAI_MODEL
+def code_segment_gpt4(segment_text, codebook_text, examples=None):
+    """Code a single segment using GPT-4."""
     system_msg = f"You are a qualitative research coder. Apply the following codebook:\n\n{codebook_text}"
     if examples:
         system_msg += f"\n\nEXAMPLES:\n{examples}"
 
     response = client.chat.completions.create(
-        model=model,
+        model="gpt-4",
         temperature=0.0,
         messages=[
             {"role": "system", "content": system_msg},
@@ -863,11 +856,11 @@ def code_segment_openai(segment_text, codebook_text, examples=None, model=None):
         return {"code": "PARSE_ERROR", "confidence": 0.0, "reasoning": response.choices[0].message.content}
 
 
-def batch_code_openai(segments_df, codebook_text, examples=None, rate_limit_pause=0.5, model=None):
+def batch_code_gpt4(segments_df, codebook_text, examples=None, rate_limit_pause=0.5):
     """Batch code all segments with rate limiting."""
     results = []
     for idx, row in segments_df.iterrows():
-        result = code_segment_openai(row["text"], codebook_text, examples, model=model)
+        result = code_segment_gpt4(row["text"], codebook_text, examples)
         result["segment_id"] = row["segment_id"]
         result["original_text"] = row["text"]
         results.append(result)
@@ -1327,30 +1320,24 @@ echo "document_id,segment_id,text,code,coder,date,memo" > ${OUTPUT_ROOT}/qual/co
 
 ## Save Output
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+After completing any workflow, save the full output using the Write tool.
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/scholar-qual-[workflow]-[topic-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/qual/scholar-qual-[workflow]-[topic-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/qual/scholar-qual-[workflow]-[topic-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/qual/scholar-qual-[workflow]-[topic-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
-
-After completing any workflow, save the full output using the Write tool.
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 **Filename convention:**
 `scholar-qual-[workflow]-[topic-slug]-[YYYY-MM-DD].md`

@@ -1,6 +1,31 @@
+# Environment configuration (contains local paths)
 .env
-.DS_Store
-.Rhistory
-*.ndjson
+
+# Output artifacts from scholar skills
 output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+renv/staging/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Claude Code local config (contains personal paths)
+.claude/settings.local.json
 .claude/projects/

@@ -1,6 +1,6 @@
 ---
 name: scholar-journal
-description: "Format, select, and prepare a manuscript for journal submission. 5 modes: FULL-PACKAGE (complete submission prep: structure audit + compliance checklist + cover letter + open science package + Save Output), FORMAT-CHECK (audit existing manuscript against journal requirements), COVER-LETTER (draft journal-calibrated cover letter), SELECT-JOURNAL (score paper against 22 journals and produce ranked target list with journal ladder), RESUBMIT-PACKAGE (post-rejection or R&R resubmission prep). Covers 22 journals: ASR, AJS, Demography, Du Bois Review, Science Advances, NHB, NCS, Social Forces, Language in Society, Journal of Sociolinguistics, Linguistic Inquiry, Gender & Society, APSR, Journal of Marriage and Family, Population and Development Review, Sociological Methods & Research, Poetics, PNAS. Per-journal: word limits, section structure, abstract format, citation style, figure/table limits, open science requirements (CRediT, COI, data/code availability, preregistration, Reporting Summary), blind review type, APC, submission system URL, acceptance rate, turnaround. Journal-specific cover letter templates with sociological/behavioral/computational framing. Journal selection scoring rubric with 8 dimensions. Open science package builder (data availability statement + code availability + preregistration + CRediT table + COI). Write tool saves submission readiness report + cover letter draft + open science declarations."
+description: "Format, select, and prepare a manuscript for journal submission. 5 modes: FULL-PACKAGE (complete submission prep: structure audit + compliance checklist + cover letter + open science package + Save Output), FORMAT-CHECK (audit existing manuscript against journal requirements), COVER-LETTER (draft journal-calibrated cover letter), SELECT-JOURNAL (score paper against 18 journals and produce ranked target list with journal ladder), RESUBMIT-PACKAGE (post-rejection or R&R resubmission prep). Covers 18 journals: ASR, AJS, Demography, Du Bois Review, Science Advances, NHB, NCS, Social Forces, Language in Society, Journal of Sociolinguistics, Linguistic Inquiry, Gender & Society, APSR, Journal of Marriage and Family, Population and Development Review, Sociological Methods & Research, Poetics, PNAS. Per-journal: word limits, section structure, abstract format, citation style, figure/table limits, open science requirements (CRediT, COI, data/code availability, preregistration, Reporting Summary), blind review type, APC, submission system URL, acceptance rate, turnaround. Journal-specific cover letter templates with sociological/behavioral/computational framing. Journal selection scoring rubric with 8 dimensions. Open science package builder (data availability statement + code availability + preregistration + CRediT table + COI). Write tool saves submission readiness report + cover letter draft + open science declarations."
 tools: Write, Bash, WebSearch, Read
 argument-hint: "[journal name] [paper type: article/research-note/letter/brief-report] — optionally: mode [FULL-PACKAGE/FORMAT-CHECK/COVER-LETTER/SELECT-JOURNAL/RESUBMIT-PACKAGE]"
 user-invocable: true
@@ -1092,34 +1092,26 @@ Required for ALL Nature-family submissions. Auto-generate from manuscript:
 
 ---
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+## Step 8: Save Output
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+Use the **Write tool** to save the submission package files.
+
+### Version Collision Avoidance (MANDATORY)
+
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/[slug]/submission/scholar-journal-report-[journal]-[topic-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/submission/scholar-journal-report-[journal]-[topic-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/submission/scholar-journal-report-[journal]-[topic-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/submission/scholar-journal-report-[journal]-[topic-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
-
-**Re-run this version check with the appropriate BASE for each output file.**
-
-## Step 8: Save Output
-
-Use the **Write tool** to save the submission package files.
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file (cover letter, open science declarations). The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 ---
 
@@ -1254,6 +1246,7 @@ echo "Process log saved to $LOG_FILE"
 - [ ] **Reference list** complete and consistent with in-text citations
 - [ ] **Figure/table count** within limit; figures at correct resolution
 - [ ] **Blind review compliance**: no identifying information in blinded submission
+- [ ] **Causal language consistency**: cover letter and submission materials use the same language as the manuscript — if manuscript uses "is associated with," cover letter must too (not "our study shows X causes Y"). See scholar-write SKILL.md for the full causal language rule
 - [ ] **Data availability statement** drafted for target journal
 - [ ] **Code availability statement** drafted (mandatory: NHB, NCS, Science Advances, PNAS)
 - [ ] **Preregistration statement** present (mandatory for NHB/NCS)

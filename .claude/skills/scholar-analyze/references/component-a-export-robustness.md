@@ -15,6 +15,7 @@ ms_args <- list(
 modelsummary(models, output = paste0(output_root, "/tables/table2-regression.html"), !!!ms_args)
 modelsummary(models, output = paste0(output_root, "/tables/table2-regression.tex"),  !!!ms_args)
 modelsummary(models, output = paste0(output_root, "/tables/table2-regression.docx"), !!!ms_args)
+modelsummary(models, output = paste0(output_root, "/tables/table2-regression.csv"),  !!!ms_args)  # CSV for replication
 ```
 
 **AME table (for logit / ordered logit):**
@@ -26,6 +27,7 @@ ame_args <- list(
 modelsummary(avg_slopes(m_logit), output = paste0(output_root, "/tables/table2-ame.html"),  !!!ame_args)
 modelsummary(avg_slopes(m_logit), output = paste0(output_root, "/tables/table2-ame.tex"),   !!!ame_args)
 modelsummary(avg_slopes(m_logit), output = paste0(output_root, "/tables/table2-ame.docx"),  !!!ame_args)
+modelsummary(avg_slopes(m_logit), output = paste0(output_root, "/tables/table2-ame.csv"),   !!!ame_args)  # CSV for replication
 
 # ── gt tables (alternative to modelsummary — richer formatting) ──
 library(gt); library(gtsummary)

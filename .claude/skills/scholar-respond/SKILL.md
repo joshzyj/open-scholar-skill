@@ -210,11 +210,23 @@ Use the Task tool to run reviewers **in parallel**. The reviewer prompts come fr
 
 > "You are a senior sociologist and former associate editor at [journal]. Follow the evaluation criteria and output format in your agent profile. Additionally, apply the journal-specific emphasis: [insert from calibration table above]. Paper type: [from 0d]. Be specific: quote the paper. Rate your recommended decision. Manuscript: [full text]"
 
-**Conditionally spawn a fourth reviewer**:
+**Always spawn a fourth reviewer**:
+
+**Reviewer 4 — Interpretive Skeptic**
+
+> "You are a devil's advocate reviewer whose sole job is to check whether the authors' *interpretive labels* for their findings are accurate and whether the same numbers could support a different (possibly opposite) story. You are NOT reviewing methods, theory depth, or writing quality — only the alignment between data and interpretation. For each major finding or interpretive claim in the manuscript:
+> 1. Identify the specific numbers cited in support of the claim.
+> 2. Check: does the claim hold from BOTH cross-group AND within-group perspectives? If the paper compares groups, compute within-group distributions (e.g., positive-to-negative ratios within each group) and check if these tell the same story as the cross-group comparison.
+> 3. Check: are the labels accurate? Could a skeptical reader look at the same table and conclude something different? If yes, state the alternative interpretation.
+> 4. Check: are mechanism claims (in Theory or Discussion) actually supported by data the authors collected, or are they imported from other literatures without verification? Flag any claim about the study context that is asserted without measurement (e.g., 'absence of editorial gatekeeping' when editorial processes were not measured).
+> 5. Check: does the paper use consistent terminology for its core concepts, or do competing labels appear across sections?
+> Rate: PASS (interpretations are well-supported) or NEEDS REVISION (specific claims need re-examination). For each NEEDS REVISION item, state the claim, the numbers, and the alternative interpretation. Manuscript: [full text]"
+
+**Conditionally spawn a fifth reviewer**:
 
 If paper type is **computational** (NLP, ML, networks, CV, ABM, LLM annotation), add:
 
-**Reviewer 4 — Computational Methods Specialist** (from `peer-reviewer-computational.md`)
+**Reviewer 5 — Computational Methods Specialist** (from `peer-reviewer-computational.md`)
 
 > "You are a computational social scientist reviewing a [journal] paper. Follow the evaluation criteria and output format in your agent profile. The paper uses [specific computational methods]. Apply the journal-specific emphasis: [insert from calibration table]. Be specific: quote the paper. Rate your recommended decision. Manuscript: [full text]"
 
@@ -713,6 +725,23 @@ This is especially important for R&R because:
 
 Add any verification-driven fixes to the revision tracking in Step 4's Revision Summary under a "Post-revision verification fixes" subsection.
 
+#### Step 3c (Optional): External Review via Codex (scholar-openai)
+
+**Purpose:** For R&R revisions that involved substantial new analysis or major rewriting, run an independent external review via OpenAI Codex agents for a second opinion.
+
+**Trigger:** User opts in, OR Step 3b found CRITICAL issues (cross-validate with external model).
+
+```bash
+cat .claude/skills/scholar-openai/SKILL.md
+```
+
+Run `scholar-openai` in the appropriate mode:
+- `code` — if R&R involved new analysis scripts
+- `stats` — if R&R involved new tables/numbers
+- `full` — if R&R was comprehensive
+
+Cross-reference Codex findings with Step 3b findings. Issues confirmed by both get highest confidence.
+
 ### Step 4: Produce Revision Summary
 
 ```
@@ -1150,6 +1179,9 @@ echo "Process log saved to $LOG_FILE"
 - [ ] Word impact tracked per revision item
 - [ ] Abstract updated if findings or framing changed
 - [ ] Tracked changes / blue text applied consistently
+
+### Causal Language
+- [ ] **Causal language audit passed**: response letter and revised text maintain the manuscript's language precision — if study is non-causal, do not upgrade to causal language even when responding to reviewers. See scholar-write SKILL.md for full rule
 
 ### Consistency
 - [ ] Table/figure references match actual tables/figures

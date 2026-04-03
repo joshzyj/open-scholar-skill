@@ -10,36 +10,38 @@ Every `/scholar-*` skill that saves output files MUST check for existing files a
 
 **Shell variables do NOT persist between Bash tool calls.** You cannot run the version check in one Bash call and use `$BASE` in a later Write tool call. Instead:
 
-1. **Run the Bash block below** — it prints `SAVE_PATH=...` to stdout
+1. **Run the gate script below** — it prints `SAVE_PATH=...` to stdout
 2. **Read the printed path** from the Bash output
 3. **Use that exact path** as the `file_path` parameter in the Write tool call
-4. **For pandoc conversions**, re-run the same Bash logic in a new Bash call (variables reset each time)
+4. **For pandoc conversions**, re-run the gate script in a new Bash call (variables reset each time)
 
 **Do NOT skip this step and hardcode a path from the filename template.** The template (e.g., `draft-[section]-[slug]-[date].md`) shows the naming pattern, not the actual path to use.
 
 ---
 
-## Version Check Script
+## Version Check — Gate Script
 
 Run this via the Bash tool BEFORE every Write tool call:
 
 ```bash
-# MANDATORY: Replace [values] with actuals before running
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/drafts/draft-[section]-[slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-# USE THIS PATH in the Write tool call
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# MANDATORY: Replace [output_dir] and [filename_stem] with actuals
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" \
+  "[output_dir]" \
+  "[filename_stem]"
+# Example:
+# bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" \
+#   "output/drafts" \
+#   "draft-intro-redlining-2026-03-21"
 ```
+
+The script prints:
+```
+SAVE_PATH=output/drafts/draft-intro-redlining-2026-03-21.md
+BASE=output/drafts/draft-intro-redlining-2026-03-21
+```
+(or `-v2`, `-v3`, etc. if prior versions exist)
+
+**Use the printed `SAVE_PATH` in the Write tool call.**
 
 ---
 
@@ -62,34 +64,60 @@ Third run:   draft-intro-redlining-2026-03-05-v3.md (.docx, .tex, .pdf)
 
 ## Pandoc Conversion (CRITICAL)
 
-Since shell variables reset between Bash calls, you MUST re-derive `$BASE` before running pandoc:
+Since shell variables reset between Bash calls, re-run the gate script to find the latest version, then convert in the same Bash call:
 
 ```bash
 # RE-DERIVE $BASE in the same Bash call as pandoc
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/drafts/draft-[section]-[slug]-[YYYY-MM-DD]"
-if [ -f "${BASE}.md" ]; then
-  # Find the latest existing version (the one we just saved)
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v$((V - 1))"
+# Run the gate script to find what the NEXT version would be, then subtract 1
+OUTPUT_DIR="[output_dir]"
+STEM="[filename_stem]"
+GATE="${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh"
+
+# The gate script finds the next available path; we want the one we just saved.
+# Parse the BASE from the gate output, then check if it already exists as .md
+GATE_OUT=$(bash "$GATE" "$OUTPUT_DIR" "$STEM")
+BASE=$(echo "$GATE_OUT" | grep '^BASE=' | cut -d= -f2-)
+
+# If the gate returned a -vN path, the file we saved is the previous version
+if [[ "$BASE" == *-v* ]]; then
+  # The gate found -vN is available, so we saved -v(N-1) or the unversioned original
+  V=$(echo "$BASE" | grep -oE 'v[0-9]+$' | tr -d 'v')
+  BASE="${BASE%-v$V}-v$((V - 1))"
+  # Handle edge case: -v1 means the original (no suffix)
+  if [[ "$BASE" == *-v1 ]]; then
+    BASE="${BASE%-v1}"
+  fi
 fi
 
-# Convert — all use the same $BASE
-pandoc "${BASE}.md" -o "${BASE}.docx" \
-  --reference-doc="$HOME/.pandoc/reference.docx" 2>/dev/null \
-  || pandoc "${BASE}.md" -o "${BASE}.docx"
+# Detect .bib file for citation processing
+BIB_FILE=""
+CITEPROC_FLAGS=""
+for bib_candidate in "$(dirname "${BASE}")/references.bib" "${OUTPUT_ROOT:-output}/citations/"*.bib "${OUTPUT_ROOT:-output}/"*/citations/*.bib; do
+  if [ -f "$bib_candidate" ]; then
+    BIB_FILE="$(cd "$(dirname "$bib_candidate")" && pwd)/$(basename "$bib_candidate")"
+    CITEPROC_FLAGS="--citeproc --bibliography=\"$BIB_FILE\""
+    break
+  fi
+done
 
-pandoc "${BASE}.md" -o "${BASE}.tex" --standalone \
+# Convert — all use the same $BASE (with citations resolved if .bib exists)
+eval pandoc "${BASE}.md" -o "${BASE}.docx" \
+  $CITEPROC_FLAGS \
+  --reference-doc="$HOME/.pandoc/reference.docx" 2>/dev/null \
+  || eval pandoc "${BASE}.md" -o "${BASE}.docx" $CITEPROC_FLAGS
+
+eval pandoc "${BASE}.md" -o "${BASE}.tex" --standalone \
+  $CITEPROC_FLAGS \
   -V geometry:margin=1in -V fontsize=12pt
 
-pandoc "${BASE}.md" -o "${BASE}.pdf" \
+eval pandoc "${BASE}.md" -o "${BASE}.pdf" \
+  --pdf-engine=xelatex \
+  $CITEPROC_FLAGS \
   -V geometry:margin=1in -V fontsize=12pt 2>/dev/null \
   || echo "PDF generation requires a LaTeX engine"
 
 echo "Converted: ${BASE}.md -> .docx, .tex, .pdf"
+if [ -n "$BIB_FILE" ]; then echo "Citations resolved via: $BIB_FILE"; fi
 ```
 
 **Why this matters:** If you use a different variable (like `DRAFT` or `FINAL`) that doesn't include the version suffix, pandoc will overwrite the previous `.docx`/`.tex`/`.pdf` files even though the `.md` was saved with a new version number.

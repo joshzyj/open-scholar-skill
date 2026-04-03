@@ -18,9 +18,9 @@ Open-scholar-skill is designed to **assist** researchers, not replace them. If y
 
 ### A Note on the Full-Paper Orchestrator
 
-This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, or `scholar-presentation`. The first three were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
+This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, `scholar-polish`, or `scholar-presentation`. The first four were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
 
-However, the 25 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
+However, the 28 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
 
 ```
 /scholar-idea  →  /scholar-lit-review-hypothesis  →  /scholar-design
@@ -50,7 +50,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (25 skills + 1 utility)
+## Skills Overview (28 skills + 1 utility = 29 total)
 
 ### Core Pipeline Skills
 
@@ -69,6 +69,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-journal` | `/scholar-journal` | Journal-specific formatting and submission prep (22 journals, Nature Reporting Summary) |
 | `scholar-respond` | `/scholar-respond` | Simulate peer review, respond to reviewers, revise manuscript |
 | `scholar-verify` | `/scholar-verify` | Two-stage analysis-to-manuscript consistency verification (4-agent panel: numerics, figures, logic, completeness) |
+| `scholar-openai` | `/scholar-openai` | External review via OpenAI Codex CLI: 5 parallel agents for independent second-opinion verification |
 
 ### Extended Skills
 
@@ -83,6 +84,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-qual` | `/scholar-qual` | Qualitative methods: open/axial/selective coding, thematic analysis, content analysis, LLM-assisted coding with human validation, mixed-methods integration, inter-coder reliability |
 | `scholar-ling` | `/scholar-ling` | Sociolinguistics, discourse analysis, variationist methods, CA, experimental sociolinguistics, Biber MDA |
 | `scholar-collaborate` | `/scholar-collaborate` | Multi-author collaboration: CRediT roles, task management, mentoring, conflict resolution |
+| `scholar-conceptual` | `/scholar-conceptual` | Theory building (8 strategies) + publication-quality conceptual diagrams (TikZ/Mermaid) |
 
 ### Ethics and Safety Skills
 
@@ -98,7 +100,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 |-------|--------|---------|
 | `sync-docs` | `/sync-docs` | Synchronize content across presentation slides, speaker script, and manuscript — audits for stale references, numbers, citations, and version mismatches |
 
-## Agents (13 total: 9 peer-reviewer + 4 verification)
+## Agents (19 total: 9 peer-reviewer + 4 verification + 6 code-review)
 
 | Agent | Role |
 |-------|------|
@@ -121,6 +123,17 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `verify-logic` | Statistical claims in prose traced back to tables/figures — catches misquoted numbers, significance errors |
 | `verify-completeness` | Full artifact chain integrity — orphaned/missing items, numbering, cross-references |
 
+### Code Review Agents (used by `scholar-code-review`)
+
+| Agent | Role |
+|-------|------|
+| `review-code-correctness` | Logic errors, off-by-one, wrong merge keys, silent NaN propagation |
+| `review-code-robustness` | Edge cases, input validation, defensive coding |
+| `review-code-statistics` | Statistical implementation fidelity — correct method, correct specification |
+| `review-code-reproducibility` | Seed setting, path portability, dependency management |
+| `review-code-style` | AI-generated anti-patterns, hallucinated functions, over-engineering |
+| `review-code-data-handling` | Miscoded categories, wrong recodes, mishandled missing values, sample restrictions |
+
 ## Setup
 
 ```bash
@@ -132,7 +145,7 @@ bash setup.sh
 1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
 2. Auto-detect your Zotero library (or prompt for path)
 3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 25 skills + 13 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
+4. Install all 29 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
 5. Write a `.env` file with your configuration
 
 After setup, all `/scholar-*` commands work from any directory.
@@ -189,6 +202,8 @@ This one prompt builds the entire knowledge base automatically from your PDFs.
 /scholar-write introduction section on stratification
 /scholar-citation insert ASA citations and build reference list
 /scholar-journal prepare manuscript for Nature Human Behaviour
+/scholar-conceptual theorize typology of immigrant civic engagement
+/scholar-openai full output/scripts/
 
 # Knowledge graph
 /scholar-knowledge ingest from zotero collection segregation
@@ -254,6 +269,8 @@ Research Question
        ├─► /scholar-hypothesis        ← Theory + hypotheses (incl. intersectionality,
        │                                  non-Western frameworks)
        │
+       ├─► /scholar-conceptual        ← Theory building + conceptual diagrams (TikZ/Mermaid)
+       │
        ├─► /scholar-design            ← Research design, power analysis, experiments
        │
        ├─► /scholar-causal            ← Causal inference toolkit (DAG + 13 strategies + sensitivity)
@@ -267,6 +284,8 @@ Research Question
        ├─► /scholar-write             ← Draft all sections
        │
        ├─► /scholar-verify            ← 4-agent analysis-to-manuscript consistency check
+       │
+       ├─► /scholar-openai            ← External second-opinion review (5 Codex agents)
        │
        ├─► /scholar-citation          ← Insert citations, build reference list, audit
        │

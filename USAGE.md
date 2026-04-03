@@ -1,7 +1,7 @@
 # Open Scholar Skill — User Guide
 
 A Claude Code project for social scientists writing for top-tier journals.
-25 skills + 1 utility covering the full research pipeline from idea exploration to collaboration.
+28 scholar skills + 1 utility (29 total) covering the full research pipeline from idea exploration to collaboration.
 
 ---
 
@@ -12,14 +12,14 @@ Skills and agents live in the `.claude/` directory:
 ```
 open-scholar-skill/
 ├── .claude/
-│   ├── skills/           ← 24 skills (scholar-*) + 1 utility (sync-docs)
-│   ├── agents/           ← 9 reviewer agents (peer-reviewer-*) + 4 verification agents (verify-*)
+│   ├── skills/           ← 28 skills (scholar-*) + 1 utility (sync-docs)
+│   ├── agents/           ← 9 reviewer agents (peer-reviewer-*) + 4 verification agents (verify-*) + 6 code-review agents (review-code-*)
 │   └── settings.local.json
 ├── README.md
 └── USAGE.md
 ```
 
-All 25 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
+All 29 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
 
 ---
 
@@ -43,19 +43,21 @@ The text after the skill name is passed directly as context. The more specific t
 
 | Skill | When to use | Example argument |
 |-------|-------------|-----------------|
+| `/scholar-brainstorm` | Generate RQs from data files or codebooks (5-agent panel) | `data/nlsy97.csv` or `codebook.pdf` |
 | `/scholar-idea` | Turn a broad topic into formal RQs | `why does AI exposure affect worker precarity` |
-| `/scholar-brainstorm` | Generate RQs from codebooks, questionnaires, or datasets | `path/to/gss-codebook.pdf sociology, inequality` |
 | `/scholar-lit-review-hypothesis` | Literature review + theory + hypotheses in one pass | `redlining and activity space segregation for AJS` |
 | `/scholar-lit-review` | Literature review only (use when you want search/synthesis without theory) | `residential segregation and health` |
 | `/scholar-hypothesis` | Theory + hypotheses only (use when lit review is already done) | `why does segregation affect health` |
+| `/scholar-conceptual` | Build original theoretical frameworks and conceptual diagrams | `theorize a framework for digital labor precarity` |
 | `/scholar-design` | After hypotheses | `causal ID for segregation-health panel` |
 | `/scholar-causal` | Before analysis | `segregation → health; DiD or FE; SES confounder` |
 | `/scholar-data` | Find datasets (100+ sources), collect new data, auto-fetch | `find dataset for immigration and earnings` |
 | `/scholar-eda` | Before modeling | `pre-analysis for panel dataset` |
-| `/scholar-analyze` | Run analyses, produce tables/figures, write results | `data.csv, OLS of earnings on education by race for Demography` |
-| `/scholar-compute` | NLP / ML / networks | `STM topic model on news corpus` |
+| `/scholar-analyze` | Run analyses, produce tables/figures, write results (18 model types, gt + Stata output) | `data.csv, OLS of earnings on education by race for Demography` |
+| `/scholar-compute` | NLP / ML / networks / life2vec (11 modules) | `STM topic model on news corpus` or `life2vec on PSID panel` or `dml effect of X on Y` |
 | `/scholar-write` | Drafting sections | `introduction on segregation and health for ASR` |
 | `/scholar-citation` | Citations and references | `insert ASA citations and build reference list` |
+| `/scholar-knowledge` | Manage cross-project knowledge graph of findings, theories, mechanisms | `ingest output/lit-review-*.md` or `search racial segregation health` |
 | `/scholar-journal` | Submission prep | `prepare manuscript for Demography` |
 | `/scholar-open` | Preregistration / data sharing | `preregistration for FE panel study` |
 | `/scholar-replication` | Build & test replication package | `full for Demography` |
@@ -65,8 +67,9 @@ The text after the skill name is passed directly as context. The more specific t
 | `/scholar-ling` | Sociolinguistics work | `variationist analysis of t-deletion` |
 | `/scholar-ethics` | Research ethics compliance | `pre-submission ethics check for Demography` |
 | `/scholar-safety` | Real-time data privacy protection | `scan data.csv before analysis` |
-| `/scholar-knowledge` | Build and query cross-project knowledge graph | `search theories of spatial assimilation` |
 | `/scholar-verify` | Verify analysis-to-manuscript consistency | `full output/drafts/full-paper-2026-03-10.md` |
+| `/scholar-code-review` | Multi-agent code review of analysis scripts (6 agents) | `full output/scripts/` |
+| `/scholar-openai` | External review via OpenAI Codex CLI agents | `full output/drafts/full-paper-2026-03-10.md` |
 | `/scholar-auto-improve` | Post-skill quality audit | `observe output/drafts/` |
 | `/sync-docs` | Synchronize slides, script, and manuscript | `slides.tex script.tex manuscript.tex` |
 
@@ -162,6 +165,32 @@ intersectionality, etc.), specifies the X → M → Y mechanism, and derives num
 
 For intersectionality: applies the multiplicative specification (β₃ interaction term) and
 generates explicit hypothesis language for both additive and intersectional effects.
+
+---
+
+### 2b. Theory Building and Conceptual Diagrams — `/scholar-conceptual`
+
+```
+/scholar-conceptual theorize a framework for digital labor precarity
+/scholar-conceptual diagram mechanism model for segregation and health
+/scholar-conceptual full framework with figure for immigrant incorporation for ASR
+```
+
+Builds original theoretical frameworks and produces publication-quality conceptual diagrams. Two modes:
+
+**MODE 1 — THEORIZE** — Construct new theories from empirical puzzles:
+- 7 theory-building strategies: typology construction (property-space analysis), process theorizing (temporal sequences), mechanism specification (Coleman's boat, Hedström DBO), scope condition mapping, multi-level models, abductive inference from anomalies, synthetic framework integration from competing perspectives
+- Produces: formal framework statement, mechanism chain, scope conditions, falsifiable implications, positioning against existing theories
+
+**MODE 2 — DIAGRAM** — Generate conceptual figures:
+- Diagram types: mechanism diagrams, multi-level theoretical models, typology matrices, process/temporal models, concept maps, feedback loops, scope condition boundaries
+- Output formats: TikZ/PDF (for LaTeX manuscripts) or Mermaid/SVG
+- Journal-specific formatting (Nature, ASR/AJS, Science Advances)
+
+**Distinct from other skills:**
+- `/scholar-hypothesis` selects FROM existing theories to derive testable hypotheses
+- `/scholar-causal` builds DAGs for causal identification strategy
+- `/scholar-conceptual` builds the theories themselves and their visual representations
 
 ---
 
@@ -341,6 +370,63 @@ Two-stage consistency check between raw analysis outputs and the manuscript, usi
 - Runs as Step 6b item 6 in `/scholar-journal` (full, pre-submission gate)
 - Recommended after `/scholar-analyze` (stage1, to catch output issues early)
 - Consumed by `/scholar-replication` (verification checklist items)
+
+---
+
+### 9C. Code Review — `/scholar-code-review`
+
+```
+/scholar-code-review full output/scripts/
+/scholar-code-review correctness output/scripts/02-analysis.R
+/scholar-code-review data-handling output/scripts/01-clean.R
+```
+
+Systematic multi-agent code review of all analysis scripts produced in a project. 6 specialized agents review every script in parallel from different angles:
+
+1. **Correctness & Logic**: bugs, off-by-one errors, wrong joins, filter mistakes, logic flow errors
+2. **Robustness & Defensive Coding**: fragile patterns, hardcoded values, missing error handling, edge cases
+3. **Statistical Implementation**: model specifications match design doc, correct standard errors, proper handling of weights/clusters/strata, assumption tests
+4. **Reproducibility & Replication**: random seeds, absolute paths, environment capture, output determinism
+5. **Code Style & AI Anti-Patterns**: AI-generated code smells (hallucinated packages, copy-paste artifacts, unused variables, inconsistent naming)
+6. **Data Handling & Variable Construction**: miscoded categories, wrong recodes, mishandled missing values, sample restrictions vs. codebook
+
+**Modes:** `full` (all 6 agents), `correctness`, `robustness`, `statistics`, `reproducibility`, `style`, `data-handling`
+
+**Output:**
+- Consolidated review report with severity-ranked issues (CRITICAL / WARNING / INFO)
+- Per-script scorecard (PASS / NEEDS-REVIEW / FAIL)
+- Fix checklist with exact file paths, line numbers, and code snippets
+- Read-only — diagnoses but does not modify any scripts
+
+**When to run:** After `/scholar-analyze`, `/scholar-compute`, or `/scholar-eda` to catch coding errors before manuscript drafting.
+
+---
+
+### 9D. External Review via OpenAI Codex — `/scholar-openai`
+
+```
+/scholar-openai full output/drafts/full-paper-2026-03-10.md
+/scholar-openai code output/scripts/
+/scholar-openai stats output/drafts/results-section.md
+```
+
+Spawns multiple parallel OpenAI Codex CLI agents (`codex exec`) to independently review your project. Each agent runs in a sandbox, reads project files, and writes a structured review report to disk. Claude then synthesizes all reports into a consolidated review.
+
+**5 agents:**
+- **A1 — Code Correctness**: logic errors, wrong joins, filter mistakes
+- **A2 — Code Robustness**: fragile patterns, hardcoded values, edge cases
+- **A3 — Code Style**: AI anti-patterns, unused variables, naming consistency
+- **A4 — Stats Consistency**: manuscript numbers match raw outputs, table transcription
+- **A5 — Logic & Interpretation**: prose claims supported by tables/figures, causal language
+
+**Modes:** `full` (all 5 agents), `code` (A1–A3), `stats` (A4), `logic` (A5), `custom` (user-defined prompts)
+
+**Output:**
+- Individual agent reports in `output/reviews/`
+- Consolidated review with severity-ranked issues and fix checklist
+- Read-only — diagnoses but does not modify any project files
+
+**Prerequisites:** Requires OpenAI Codex CLI installed (`npm install -g @openai/codex` or `brew install codex`) and `OPENAI_API_KEY` set.
 
 ---
 
@@ -607,6 +693,18 @@ cause → journal ladder by subfield → rewrite introduction for new journal).
 
 ---
 
+### 14. Qualitative Methods — `/scholar-qual`
+
+```
+/scholar-qual open-coding transcripts/*.txt grounded theory
+/scholar-qual thematic-analysis interviews/*.txt for ASR
+/scholar-qual content-analysis media-articles/*.txt systematic
+/scholar-qual llm-coding transcripts/*.txt using existing codebook codebook.md
+/scholar-qual mixed-methods qual-data/*.txt with survey-results.csv joint-display
+```
+
+7 workflows: Codebook Development, Grounded Theory (open → axial → selective coding), Reflexive Thematic Analysis (Braun & Clarke 6-phase), Systematic Content Analysis (Krippendorff), LLM-Assisted Qualitative Coding (with human validation and inter-rater reliability), Inter-Rater Reliability (Krippendorff's alpha, Fleiss' kappa, Gwet's AC1), Mixed-Methods Integration (case selection, joint displays, qual-to-quant transformation).
+
 ---
 
 ### 15. Data Safety — `/scholar-safety`
@@ -629,7 +727,7 @@ cause → journal ladder by subfield → rewrite introduction for new journal).
 
 **How it works:**
 1. Runs local `Bash grep -c` pattern scans on data files — only match *counts* are returned; the actual sensitive values never enter Claude's context during the scan
-2. Classifies each file as 🟢 LOW / 🟡 MEDIUM / 🔴 HIGH risk using a composite scoring matrix
+2. Classifies each file as LOW / MEDIUM / HIGH risk using a composite scoring matrix
 3. For HIGH risk: displays a full warning with specific flags found, halts, and presents four options
 4. For MEDIUM risk: displays a caution advisory and asks for confirmation
 5. For LOW risk: logs green light and proceeds
@@ -638,7 +736,6 @@ cause → journal ladder by subfield → rewrite introduction for new journal).
 - **[B] ANONYMIZE** — generates a ready-to-run R anonymization script (removes all 18 HIPAA identifiers, replaces participant IDs with sequential labels, generalizes geography and dates)
 - **[C] LOCAL MODE** — generates Bash/R scripts that output ONLY aggregated results (means, SDs, regression coefficients, tables) — raw data never enters Claude's context; the researcher pastes only the printed output
 - **[A] HALT** — stops all operations; provides IRB amendment template and data handling guidance
-
 
 **Output files:**
 - `output/logs/scholar-safety-log.md` — running log of every scan, risk level, and permission decision
@@ -707,7 +804,19 @@ IRB determination checklist (Exempt / Expedited / Full); informed consent elemen
 
 ---
 
-### 18. Quality Audit — `/scholar-auto-improve`
+### 18. Collaboration — `/scholar-collaborate`
+
+```
+/scholar-collaborate credit 4-author paper on immigrant integration
+/scholar-collaborate tasks assign analysis and writing for 3-author team
+/scholar-collaborate mentor guide PhD student through first solo publication
+```
+
+Multi-author collaboration management: CRediT role assignment (with edge cases for student-led, equal-contribution, and large teams), task delegation and tracking, co-author communication templates, contribution documentation, version management, conflict resolution, and mentoring frameworks for student collaborators.
+
+---
+
+### 19. Quality Audit — `/scholar-auto-improve`
 
 ```
 /scholar-auto-improve observe output/drafts/
@@ -732,7 +841,7 @@ Available as a lightweight post-execution hook for individual skills.
 - `output/auto-improve/diagnostic-report-[date].md` — health score + issue inventory
 - `output/auto-improve/improvement-log.md` — running log across sessions
 
-### 19. Document Synchronization — `/sync-docs`
+### 20. Document Synchronization — `/sync-docs`
 
 ```
 /sync-docs slides.tex script.tex manuscript.tex
@@ -847,16 +956,21 @@ format, and citation style for your target journal. Reformatting after the fact 
 H1–H3 from `/scholar-hypothesis` as context when running `/scholar-design`.
 
 **For intersectionality arguments** — `/scholar-hypothesis` includes formal multiplicative
-specification (interaction term β₃), hypothesis language templates, and non-Western
+specification (interaction term beta-3), hypothesis language templates, and non-Western
 theoretical traditions (coloniality, Ubuntu, guanxi). Invoke with the specific axes:
 ```
 /scholar-hypothesis intersectionality of race and gender in campaign donations
+```
+
+**Run `/scholar-code-review` after analysis** — catch coding errors, statistical misimplementations, and AI-generated anti-patterns before they propagate into your manuscript:
+```
+/scholar-code-review full output/scripts/
 ```
 
 ---
 
 ## Version
 
-Current version: **5.5.0**
+Current version: **5.6.0**
 Project location: this repository's root directory
-Skills: 24 + 1 utility (in `.claude/skills/`) | Agents: 13 (9 peer-reviewer + 4 verification, in `.claude/agents/`) | Reference files: ~44 | Asset articles: ~127 (pre-indexed in article-knowledge-base.md)
+Skills: 28 + 1 utility (in `.claude/skills/`) | Agents: 19 (9 peer-reviewer + 4 verification + 6 code-review, in `.claude/agents/`) | Reference files: ~44 | Asset articles: ~127 (pre-indexed in article-knowledge-base.md)

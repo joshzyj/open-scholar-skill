@@ -21,6 +21,8 @@ Literature review and theory are not sequential steps — they are a single inte
 
 Every step feeds the next. Do not produce a generic theory section disconnected from what the literature says is missing.
 
+> **CAUSAL LANGUAGE RULE**: When summarizing prior observational studies, preserve their design-appropriate language — do not upgrade correlational findings to causal claims. When drafting hypothesis statements, calibrate language to the anticipated design: if the study will use observational data without a causal identification strategy, use associational language ("is positively associated with," "predicts") rather than causal terms ("causes," "leads to," "effect of"). Theory sections may describe hypothesized mechanisms with hedging ("may," "we theorize that"). See `scholar-write/SKILL.md` for the full rule, banned terms, and exceptions.
+
 ## Arguments
 
 The user has provided: `$ARGUMENTS`
@@ -224,7 +226,7 @@ scholar_search "segregation mobility" 25 keyword
 
 ```bash
 # Unified author search — queries all detected backends
-scholar_search "smith" 20 author
+scholar_search "zhang" 20 author
 ```
 
 Replace `"zhang"` with the target author's last name. Results include papers by that author from all detected reference sources.
@@ -830,28 +832,22 @@ Use [references/synthesis-guide.md](references/synthesis-guide.md) for transitio
 
 After Step 10 is complete, write the entire output to a Markdown file using the Write tool. **This is a required step, not optional.**
 
-#### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+### Version Collision Avoidance (MANDATORY)
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/scholar-lrh-[topic-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: scholar-lrh-[topic-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "scholar-lrh-[topic-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "scholar-lrh-[topic-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
+
 
 **Filename convention:**
 `scholar-lrh-[topic-slug]-[YYYY-MM-DD].md`

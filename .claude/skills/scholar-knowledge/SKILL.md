@@ -143,6 +143,13 @@ echo "Process log: $LOG_FILE"
   "gap_claims": [
     "Prior work has not decomposed segregation change into compositional vs. structural components."
   ],
+  "limitations": [
+    "Data limited to public schools; private school enrollment may bias estimates."
+  ],
+  "future_directions": [
+    "Future work should examine within-district heterogeneity at the classroom level.",
+    "Extending the decomposition framework to activity-space segregation beyond residential neighborhoods."
+  ],
   "ingested_at": "2026-03-18T14:30:00Z",
   "updated_at": "2026-03-18T14:30:00Z",
   "source": "zotero",
@@ -271,12 +278,19 @@ For each paper retrieved, read available text (abstract, or PDF via pdftotext fi
 5. **populations[]** — study populations
 6. **data_sources[]** — datasets used
 7. **key_quotes[]** — 1-2 verbatim quotes worth citing (with page numbers if from PDF)
-8. **gap_claims[]** — what the paper says remains unstudied
+8. **gap_claims[]** — what the paper says remains unstudied in the literature (typically from the Introduction or Literature Review)
+9. **limitations[]** — the paper's own acknowledged limitations (typically from the Discussion/Conclusion: data constraints, measurement issues, generalizability bounds, methodological caveats)
+10. **future_directions[]** — explicit suggestions for future research stated by the authors (typically from the Discussion/Conclusion: proposed extensions, alternative designs, new populations, unanswered follow-up questions)
 
 **Extraction quality tiers:**
-- **Full PDF available**: Extract all 8 fields from abstract + intro + results + discussion
-- **Abstract only**: Extract findings, theories, methods, populations (4 fields minimum)
+- **Full PDF available**: Extract all 10 fields from abstract + intro + results + discussion/conclusion. Limitations and future directions are typically in the final 2-3 paragraphs of the Discussion or Conclusion section.
+- **Abstract only**: Extract findings, theories, methods, populations (4 fields minimum). Limitations and future directions are rarely in abstracts — leave as empty arrays for later enrichment via PDF.
 - **Metadata only**: Store bibliographic data; leave extraction fields as empty arrays for later enrichment
+
+**Extraction guidance for limitations vs. gap_claims vs. future_directions:**
+- `gap_claims`: What the *literature* lacks — stated in the Introduction/Literature Review to motivate the study. These are gaps the paper aims to fill. (e.g., "No prior study has examined X in context Y.")
+- `limitations`: What *this paper* acknowledges it could not do — stated in the Discussion/Conclusion. These are constraints on the current study. (e.g., "Our data does not include...", "We cannot rule out...", "Generalizability is limited to...")
+- `future_directions`: What the authors explicitly suggest *someone else* should do next — stated in the Discussion/Conclusion. These are actionable research opportunities. (e.g., "Future work should...", "A promising extension would be...", "An important next step is...")
 
 **IMPORTANT**: Extract only what the paper actually states. Do NOT hallucinate findings or mechanisms from memory. If reading a PDF, base extraction solely on the text shown. If only abstract is available, extract only from the abstract. Mark uncertain extractions with `[UNCERTAIN]` prefix.
 
@@ -387,6 +401,9 @@ Query the knowledge graph for papers, findings, theories, or methods.
 | `by finding [keyword]` | Findings-specific search |
 | `contradictions about [topic]` | Find opposing findings on same topic |
 | `gaps about [topic]` | Search gap_claims field |
+| `limitations of [topic/method]` | Search limitations field — what studies acknowledge they couldn't do |
+| `future directions for [topic]` | Search future_directions field — what scholars say should be done next |
+| `opportunities in [topic]` | Search both future_directions and gap_claims — actionable research ideas |
 | `for project [name]` | Filter by project tag |
 
 ### Step 2.2: Execute search
@@ -600,6 +617,8 @@ Claude reads the papers and concepts to identify:
 4. **Methodological blind spots**: Methods appearing only once
 5. **Most-connected papers**: Papers with highest edge count (central to the graph)
 6. **Isolated papers**: Papers with no edges (candidates for relationship mapping)
+7. **Common limitations**: Recurring limitations across papers (e.g., "cross-sectional data" appears in N papers — signals demand for longitudinal designs)
+8. **Research frontier**: Most frequently mentioned future directions — these are the field's stated next steps. Cluster by theme and count how many papers point to each direction.
 
 ### Step 4.3: Present dashboard
 
@@ -673,6 +692,8 @@ kg_search_papers "[SCOPE_QUERY]" 100
 - **Population**: [populations]
 - **Data**: [data sources]
 - **Gap claims**: [gaps]
+- **Limitations**: [limitations]
+- **Future directions**: [future directions]
 
 ### 2. ...
 
@@ -698,13 +719,11 @@ Use the version collision avoidance protocol from `.claude/skills/_shared/versio
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 mkdir -p "${OUTPUT_ROOT}/knowledge"
-BASE="${OUTPUT_ROOT}/knowledge/kg-export-[SCOPE_SLUG]-$(date +%Y-%m-%d)"
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do V=$((V+1)); done
-  BASE="${BASE}-v${V}"
-fi
-echo "SAVE_PATH=${BASE}.md"
+# BASE pattern: ${OUTPUT_ROOT}/knowledge/kg-export-[SCOPE_SLUG]-$(date +%Y-%m-%d)
+OUTDIR="$(dirname "${OUTPUT_ROOT}/knowledge/kg-export-[SCOPE_SLUG]-$(date +%Y-%m-%d)")"
+STEM="$(basename "${OUTPUT_ROOT}/knowledge/kg-export-[SCOPE_SLUG]-$(date +%Y-%m-%d)")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
 Save the export using the Write tool at the path printed above.
@@ -745,6 +764,7 @@ Before completing any mode, verify:
 - [ ] No duplicate papers in `papers.ndjson` (checked via `kg_has_paper`)
 - [ ] Each JSON line is valid single-line JSON
 - [ ] Extracted findings are based on actual paper text, not hallucinated
+- [ ] Limitations and future directions extracted from Discussion/Conclusion sections (not invented)
 - [ ] Uncertain extractions marked with `[UNCERTAIN]` prefix
 - [ ] Concepts are deduplicated (checked before append)
 - [ ] `meta.json` updated after any write operation
@@ -762,6 +782,7 @@ This skill provides the knowledge graph search layer used by:
 | `scholar-lit-review-hypothesis` | Step 1a-pre (before Zotero search) | Theories and mechanisms for hypothesis development |
 | `scholar-write` | Step 0 Tier 0 (before citation pool build) | Pre-extracted findings to guide writing |
 | `scholar-citation` | `scholar_search` Tier 0.5 | Enriched paper records in unified search |
+
 
 Skills load the integration via:
 ```bash

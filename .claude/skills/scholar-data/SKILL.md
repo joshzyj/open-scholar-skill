@@ -596,7 +596,7 @@ def fetch_fbi_crime(api_key, offense="burglary", state="US", start=2015, end=202
    |------|--------|-------------|--------|-----------|
    | acs-tract-IL-2022.rds | tidycensus ACS 5-year | 2026-03-03 | 15,420 | medinc, pop, pct_bach, pct_poverty |
    ```
-3. **Update PROJECT STATE**: set `data-status: existing-data` and `Data File(s): data/raw/[filename]`
+3. **Log data status**: set `data-status: existing-data` and note `Data File(s): data/raw/[filename]`
 4. Proceed with all downstream skills in **DATA-AVAILABLE MODE** — no more `[CODE-TEMPLATE]` or `[PLACEHOLDER]`
 
 **If the download fails — API key missing (MOST COMMON):**
@@ -668,7 +668,7 @@ If the user provides a key:
 - Log the specific error message
 - If package missing: attempt `install.packages("[pkg]")` and retry once
 - If network error: inform user and fall back to `[CODE-TEMPLATE]`
-- Keep `data-status: no-data` and note the reason in PROJECT STATE
+- Keep `data-status: no-data` and note the reason in the process log
 
 ---
 
@@ -1464,7 +1464,7 @@ with sync_playwright() as p:
 
     # Set academic user-agent
     page.set_extra_http_headers({
-        "User-Agent": "Academic research bot — [Your Name], [Your University]"
+        "User-Agent": "Academic research bot — J. Zhang, University"
     })
 
     page.goto("https://example.com/dynamic-page")
@@ -1540,7 +1540,7 @@ import praw, pandas as pd, os
 reddit = praw.Reddit(
     client_id     = os.environ["REDDIT_CLIENT_ID"],
     client_secret = os.environ["REDDIT_CLIENT_SECRET"],
-    user_agent    = "Academic research — [Your Name], [Your University]"
+    user_agent    = "Academic research — J. Zhang, University"
 )
 
 # Collect posts from subreddits
@@ -1689,28 +1689,22 @@ See [references/web-scraping.md](references/web-scraping.md) for extended code e
 
 After completing all relevant workflows, save a data plan document using the Write tool.
 
-### Version collision avoidance (MANDATORY — run BEFORE every Write tool call)
+### Version Collision Avoidance (MANDATORY)
 
-Run this Bash block before each Write call. It prints `SAVE_PATH=...` — use that exact path in the Write tool's `file_path` parameter.
+**Before EVERY Write tool call below**, run this Bash block to determine the correct save path. Do NOT hardcode paths from the filename templates — they show naming patterns only.
 
 ```bash
 # MANDATORY: Replace [values] with actuals before running
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-BASE="${OUTPUT_ROOT}/scholar-data-[topic-slug]-[YYYY-MM-DD]"
-
-if [ -f "${BASE}.md" ]; then
-  V=2
-  while [ -f "${BASE}-v${V}.md" ]; do
-    V=$((V + 1))
-  done
-  BASE="${BASE}-v${V}"
-fi
-
-echo "SAVE_PATH=${BASE}.md"
-echo "BASE=${BASE}"
+# BASE pattern: ${OUTPUT_ROOT}/[slug]/data/scholar-data-[topic-slug]-[YYYY-MM-DD]
+# Split into directory and stem for the gate script:
+OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/data/scholar-data-[topic-slug]-[YYYY-MM-DD]")"
+STEM="$(basename "${OUTPUT_ROOT}/[slug]/data/scholar-data-[topic-slug]-[YYYY-MM-DD]")"
+mkdir -p "$OUTDIR"
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 ```
 
-**Use the printed `SAVE_PATH` as the `file_path` in the Write tool call.** Do NOT hardcode the path. The same `BASE` must be used for pandoc conversions (.docx, .tex, .pdf).
+**Use the printed `SAVE_PATH` as `file_path` in the Write tool call.** Re-run this block (with the appropriate BASE) for each additional file. The same version suffix must be used for all related output files (.md, .docx, .tex, .pdf).
 
 **Filename:** `scholar-data-[topic-slug]-[YYYY-MM-DD].md`
 
