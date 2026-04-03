@@ -56,20 +56,21 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 | Skill | Invoke | Purpose |
 |-------|--------|---------|
+| `scholar-brainstorm` | `/scholar-brainstorm` | Generate research questions from data files, codebooks, or published papers via 5-agent evaluation panel (DATA mode: empirical signal tests; MATERIALS mode: theory-driven ranking; PAPER mode: seed paper expansion) |
 | `scholar-idea` | `/scholar-idea` | Convert broad ideas into formal, researchable social science questions |
-| `scholar-brainstorm` | `/scholar-brainstorm` | Generate research questions from codebooks, questionnaires, or datasets (2 modes: DATA with safety scan + empirical signal tests, MATERIALS with theory-driven ranking; 5-agent evaluation panel) |
 | `scholar-lit-review` | `/scholar-lit-review` | Systematic literature review and synthesis |
 | `scholar-lit-review-hypothesis` | `/scholar-lit-review-hypothesis` | Integrated literature review + theory + hypothesis development in one pass |
 | `scholar-hypothesis` | `/scholar-hypothesis` | Theory development, hypothesis formulation, intersectionality |
 | `scholar-design` | `/scholar-design` | Research design, methodology, power analysis, experiments |
-| `scholar-analyze` | `/scholar-analyze` | Data analysis (OLS, logit, Bayesian brms, LCA, SEM, sequence analysis, quantile regression) + publication-quality tables/figures |
+| `scholar-analyze` | `/scholar-analyze` | Data analysis (OLS, logit, Bayesian brms, LCA, SEM, sequence analysis, quantile regression, GAMLSS, DML bridge, growth curves, MSEM, FMR, specification curve, BART) + publication-quality tables/figures (modelsummary + gt + Stata .do) |
 | `scholar-write` | `/scholar-write` | Full paper drafting with section-by-section guidance |
-| `scholar-citation` | `/scholar-citation` | In-text citation insertion, reference list assembly, consistency audit |
-| `scholar-knowledge` | `/scholar-knowledge` | User-scoped, cross-project knowledge graph for extracted findings, theories, mechanisms, and paper relationships |
+| `scholar-citation` | `/scholar-citation` | 8-mode citation management: INSERT, AUDIT, CONVERT-STYLE, FULL-REBUILD, VERIFY, EXPORT (.bib), RETRACTION-CHECK, REPORTING-SUMMARY |
+| `scholar-code-review` | `/scholar-code-review` | 6-agent systematic code review: correctness, robustness, statistical fidelity, reproducibility, code style, data handling |
+| `scholar-knowledge` | `/scholar-knowledge` | User-scoped, cross-project knowledge graph for extracted findings, theories, mechanisms, and inter-paper relationships |
 | `scholar-journal` | `/scholar-journal` | Journal-specific formatting and submission prep (22 journals, Nature Reporting Summary) |
-| `scholar-respond` | `/scholar-respond` | Simulate peer review, respond to reviewers, revise manuscript |
+| `scholar-respond` | `/scholar-respond` | 5 modes: simulate (3-4 reviewers), respond (point-by-point), revise (word-budget), resubmit (rejection retarget), cover-letter |
 | `scholar-verify` | `/scholar-verify` | Two-stage analysis-to-manuscript consistency verification (4-agent panel: numerics, figures, logic, completeness) |
-| `scholar-openai` | `/scholar-openai` | External review via OpenAI Codex CLI: 5 parallel agents for independent second-opinion verification |
+| `scholar-openai` | `/scholar-openai` | External review via OpenAI Codex CLI: 5 parallel agents (code correctness, robustness, reproducibility, stats consistency, logic) for independent second-opinion verification |
 
 ### Extended Skills
 
@@ -78,13 +79,13 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-data` | `/scholar-data` | Open data directory (100+ datasets), auto-fetch, survey design, interview protocols, IRB, web scraping |
 | `scholar-eda` | `/scholar-eda` | Exploratory data analysis, missing data, cleaning, pre-analysis plans |
 | `scholar-causal` | `/scholar-causal` | Causal inference toolkit: DAGs, 13 identification strategies (OLS, DiD, staggered DiD, RD, IV, FE, matching, synthetic control, mediation, DML, causal forests, bunching, Bartik IV) + distributional methods, sensitivity analysis |
-| `scholar-compute` | `/scholar-compute` | NLP/text-as-data, ML, GNN/node embedding, multilingual NLP, multimodal fusion, network analysis, ABM, conformal prediction |
+| `scholar-compute` | `/scholar-compute` | 11 modular modules: NLP/text-as-data, ML, network/GNN, ABM, computer vision, LLM workflows, synthetic data, geospatial, audio, life2vec |
 | `scholar-open` | `/scholar-open` | Preregistration, data sharing, code packaging, open access |
 | `scholar-replication` | `/scholar-replication` | Build, document, test, verify, and archive journal-ready replication packages (EDA outputs, artifact registry, format verification) |
 | `scholar-qual` | `/scholar-qual` | Qualitative methods: open/axial/selective coding, thematic analysis, content analysis, LLM-assisted coding with human validation, mixed-methods integration, inter-coder reliability |
-| `scholar-ling` | `/scholar-ling` | Sociolinguistics, discourse analysis, variationist methods, CA, experimental sociolinguistics, Biber MDA |
+| `scholar-ling` | `/scholar-ling` | 9 modular modules: variationist, quantitative, qualitative, attitudes/matched guise, corpus, computational socioling, experimental, Biber MDA, TTS-MGT |
 | `scholar-collaborate` | `/scholar-collaborate` | Multi-author collaboration: CRediT roles, task management, mentoring, conflict resolution |
-| `scholar-conceptual` | `/scholar-conceptual` | Theory building (8 strategies) + publication-quality conceptual diagrams (TikZ/Mermaid) |
+| `scholar-conceptual` | `/scholar-conceptual` | Theory building (8 strategies: typology, process, mechanism, scope, multi-level, abductive, synthetic, concept clarification) + publication-quality conceptual diagrams (TikZ/Mermaid) |
 
 ### Ethics and Safety Skills
 
