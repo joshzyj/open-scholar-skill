@@ -4,16 +4,23 @@ description: >
   User-scoped, cross-project knowledge graph that persists extracted intellectual
   content (findings, mechanisms, theories, paper relationships) across projects
   and sessions. Layers on top of Zotero to provide richer content than raw
-  bibliographic metadata. Five modes: (1) INGEST — add papers from Zotero, PDF,
+  bibliographic metadata. Eight modes: (1) INGEST — add papers from Zotero, PDF,
   lit-review output, DOI, or manual entry, extracting findings/theories/methods;
   (2) SEARCH — query the knowledge graph by topic, author, theory, method, or
   finding; (3) RELATE — add or view relationships between papers (cites,
   contradicts, extends, replicates, uses-method, uses-theory); (4) STATUS —
   show graph stats, recent additions, coverage by topic/method/theory;
-  (5) EXPORT — export a project-specific subset as markdown or NDJSON.
+  (5) EXPORT — export a project-specific subset as markdown or NDJSON;
+  (6) COMPILE — generate a browsable Obsidian-compatible markdown wiki from
+  the knowledge graph (paper pages, concept pages, topic clusters, contradiction
+  map, research gaps); (7) ASK — answer complex research questions by reading
+  the compiled wiki and saving answers back into it (feedback loop);
+  (8) RE-EXTRACT — re-run intellectual content extraction on raw sources to
+  upgrade papers (e.g., abstract-only → full-PDF) or apply new schema fields.
   Storage: ~/.claude/scholar-knowledge/ (configurable via SCHOLAR_KNOWLEDGE_DIR).
+  Raw sources archived in raw/ subdirectory (PDFs symlinked, API responses saved).
 tools: Read, Bash, Write, WebSearch, WebFetch
-argument-hint: "[ingest|search|relate|status|export] [arguments], e.g., 'search theories of spatial assimilation' or 'ingest from zotero collection segregation' or 'relate Massey 1993 contradicts Clark 1986'"
+argument-hint: "[ingest|search|relate|status|export|compile|ask|re-extract] [arguments], e.g., 'compile' or 'ask what are the main theories of segregation?' or 're-extract all abstract_only'"
 user-invocable: true
 ---
 
@@ -38,6 +45,9 @@ Parse the **mode** and **sub-arguments** using the dispatch table below.
 | `relate`, `link`, `connect`, `relationship`, `contradicts`, `extends` | **MODE 3: RELATE** | Add or view inter-paper relationships |
 | `status`, `stats`, `coverage`, `summary`, `dashboard` | **MODE 4: STATUS** | Graph statistics and coverage analysis |
 | `export`, `subset`, `for project` | **MODE 5: EXPORT** | Export subset for a specific project |
+| `compile`, `build wiki`, `rebuild`, `wiki` | **MODE 6: COMPILE** | Generate browsable markdown wiki from knowledge graph |
+| `ask`, `question`, `what do`, `what are`, `why`, `how do`, `compare`, `summarize` | **MODE 7: ASK** | Answer complex research questions using the compiled wiki |
+| `re-extract`, `reextract`, `refresh`, `enrich` | **MODE 8: RE-EXTRACT** | Re-run extraction on raw sources (upgrade papers from abstract-only to full-PDF, or apply new schema fields) |
 
 If the mode is ambiguous, ask the user.
 
@@ -60,7 +70,12 @@ KG_CONCEPTS="$KNOWLEDGE_DIR/concepts.ndjson"
 KG_EDGES="$KNOWLEDGE_DIR/edges.ndjson"
 KG_META="$KNOWLEDGE_DIR/meta.json"
 
+# Raw source storage (append-only archive of original sources)
+KG_RAW="$KNOWLEDGE_DIR/raw"
+mkdir -p "$KG_RAW/pdfs" "$KG_RAW/abstracts" "$KG_RAW/api-responses" "$KG_RAW/web" "$KG_RAW/images"
+
 echo "Knowledge graph directory: $KNOWLEDGE_DIR"
+echo "Raw storage: $KG_RAW"
 [ -f "$KG_PAPERS" ] && echo "Papers: $(wc -l < "$KG_PAPERS" | tr -d ' ')" || echo "Papers: 0 (new graph)"
 [ -f "$KG_CONCEPTS" ] && echo "Concepts: $(wc -l < "$KG_CONCEPTS" | tr -d ' ')" || echo "Concepts: 0"
 [ -f "$KG_EDGES" ] && echo "Edges: $(wc -l < "$KG_EDGES" | tr -d ' ')" || echo "Edges: 0"
@@ -153,7 +168,9 @@ echo "Process log: $LOG_FILE"
   "ingested_at": "2026-03-18T14:30:00Z",
   "updated_at": "2026-03-18T14:30:00Z",
   "source": "zotero",
-  "projects": ["segregation-paper-2026"]
+  "projects": ["segregation-paper-2026"],
+  "raw_path": "abstracts/fiel-zhang-2017.txt",
+  "extraction_tier": "full_pdf"
 }
 ```
 
@@ -216,9 +233,11 @@ Parse sub-mode from arguments:
 |---|---|---|
 | `from zotero [keyword\|collection\|tag] [query]` | Zotero SQLite | Bulk ingest from Zotero search results |
 | `from pdf [path]` | Local PDF file | Ingest single PDF via pdftotext |
+| `from url [URL]` | Web page | Fetch web article/preprint, convert to markdown, save raw + extract |
 | `from lit-review [path]` | Scholar-lit-review output | Parse existing literature review file |
 | `from doi [DOI]` | CrossRef + Semantic Scholar | Fetch metadata from APIs |
 | `from search-log [path]` | Search log file | Parse existing search log |
+| `from output [path]` | Scholar skill output | Ingest findings from scholar-write, scholar-analyze, or other skill outputs back into the graph |
 | `from manual` | User input | User provides structured entry |
 | (no sub-argument with topic) | Zotero keyword | Default: search Zotero for topic |
 
@@ -263,9 +282,157 @@ print(f\"Abstract: {d.get('abstract','')[:500]}\")
 " 2>/dev/null
 ```
 
+**For URL source** — fetch web article and convert to markdown:
+
+Use the WebFetch tool to retrieve the page content. This handles working papers, preprints, blog posts about research, institutional reports, and news articles about studies.
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+KG_RAW="$KNOWLEDGE_DIR/raw"
+URL="[URL]"
+SLUG="[derived-from-title-after-fetch]"
+
+# Save raw HTML
+mkdir -p "$KG_RAW/web"
+```
+
+After fetching with WebFetch:
+1. Extract title, author(s), date, and body text from the page
+2. Save the full fetched content as `raw/web/[slug].md` (markdown conversion)
+3. If the page contains images (figures, diagrams, charts), download them:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+mkdir -p "$KNOWLEDGE_DIR/raw/images/[slug]"
+# For each image URL found in the article:
+curl -sL "[IMAGE_URL]" -o "$KNOWLEDGE_DIR/raw/images/[slug]/[filename]"
+```
+
+4. Rewrite image references in the saved markdown to point to local paths
+5. Proceed to extraction (Step 1.3) using the fetched text
+
+**Supported URL types**:
+- Preprint servers: arXiv, SSRN, SocArXiv, OSF Preprints
+- Working paper series: NBER, IZA, CEPR
+- Blog posts: Contexts.org, Scatterplot, OrgTheory, institutional blogs
+- News about research: press releases, science journalism citing specific papers
+- Reports: Census Bureau, Pew, Russell Sage Foundation
+
+**For output source** — ingest findings from other scholar skill outputs:
+
+Read the output file (typically a Results document, analysis log, or manuscript section from `scholar-write`, `scholar-analyze`, `scholar-compute`, etc.) and extract:
+- New empirical findings produced by the user's own analysis
+- Methods used
+- Data sources
+- Any cited papers mentioned in the output
+
+This creates the **feedback loop**: skill outputs enrich the knowledge graph, which then informs future skills. The paper type is `"own_work"` rather than `"published"`.
+
+```bash
+# Read the skill output file
+OUTPUT_FILE="[path]"
+echo "Ingesting from skill output: $OUTPUT_FILE"
+# Save raw
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+SLUG="own-work-$(date +%Y-%m-%d)-$(basename "$OUTPUT_FILE" .md | head -c 30)"
+cp "$OUTPUT_FILE" "$KNOWLEDGE_DIR/raw/abstracts/${SLUG}.md"
+```
+
 **For lit-review output** — read the file and parse the paper inventory table.
 
 **For search-log** — read the search log and parse the paper inventory snapshots.
+
+### Step 1.2b: Save raw source (before extraction)
+
+Before extracting intellectual content, archive the raw source material. This enables re-extraction later if the schema changes, and provides an audit trail.
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+KG_RAW="$KNOWLEDGE_DIR/raw"
+mkdir -p "$KG_RAW/pdfs" "$KG_RAW/abstracts" "$KG_RAW/api-responses" "$KG_RAW/web" "$KG_RAW/images"
+```
+
+**For each paper, save the raw source based on ingest type:**
+
+| Source | What to save | Where | How |
+|--------|-------------|-------|-----|
+| Zotero (with PDF) | Symlink to Zotero's PDF | `raw/pdfs/[slug].pdf` | `ln -sf "[zotero_storage_path]" "$KG_RAW/pdfs/[slug].pdf"` |
+| Zotero (abstract only) | Abstract text | `raw/abstracts/[slug].txt` | Write abstract text to file |
+| `from pdf [path]` | pdftotext output (first 400 lines) | `raw/abstracts/[slug].txt` | `pdftotext "[path]" - \| head -400 > "$KG_RAW/abstracts/[slug].txt"` |
+| `from pdf [path]` (images) | Key figures extracted from PDF | `raw/images/[slug]/` | `pdfimages -png "[path]" "$KG_RAW/images/[slug]/fig"` (if pdfimages available) |
+| `from url [URL]` | Full page as markdown + images | `raw/web/[slug].md` + `raw/images/[slug]/` | WebFetch → markdown conversion; curl images to local |
+| `from doi` | Full CrossRef API JSON response | `raw/api-responses/[DOI-slugified].json` | `curl -sL "https://api.crossref.org/works/[DOI]" > "$KG_RAW/api-responses/[slug].json"` |
+| `from output [path]` | Skill output file | `raw/abstracts/[slug].md` | Copy the output file |
+| `from lit-review [path]` | Path reference | `raw/abstracts/[slug].ref` | Write the source file path (one line) |
+| `from manual` | User's structured input | `raw/abstracts/[slug].md` | Write the user-provided text |
+
+**Image extraction from PDFs** (optional — requires `pdfimages` from poppler):
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+SLUG="[paper-slug]"
+PDF_PATH="[path-to-pdf]"
+if command -v pdfimages &>/dev/null; then
+  mkdir -p "$KNOWLEDGE_DIR/raw/images/${SLUG}"
+  pdfimages -png "$PDF_PATH" "$KNOWLEDGE_DIR/raw/images/${SLUG}/fig" 2>/dev/null
+  IMG_COUNT=$(ls "$KNOWLEDGE_DIR/raw/images/${SLUG}/" 2>/dev/null | wc -l | tr -d ' ')
+  echo "Extracted $IMG_COUNT images from PDF"
+else
+  echo "pdfimages not available — skipping image extraction (install: brew install poppler)"
+fi
+```
+
+**Slug convention**: Same as wiki paper page slug — `first-author-year` (e.g., `fiel-zhang-2017`). Generated via `kg_paper_slug()` from the knowledge-graph-search.md helpers.
+
+**Raw storage rules**:
+- `raw/` is **append-only** — never modify or delete raw sources
+- If a paper is re-ingested (update), keep the original raw file; do NOT overwrite
+- For Zotero PDFs, use **symlinks** (not copies) to avoid duplicating large files
+- Store the relative path from `$KNOWLEDGE_DIR` in the paper node's `raw_path` field
+
+**Zotero PDF symlink**:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+# Zotero stores PDFs in storage/[KEY]/filename.pdf
+ZOTERO_PDF_PATH="[resolved path from Zotero SQLite attachment query]"
+SLUG="[paper-slug]"
+if [ -f "$ZOTERO_PDF_PATH" ] && [ ! -L "$KNOWLEDGE_DIR/raw/pdfs/${SLUG}.pdf" ]; then
+  ln -sf "$ZOTERO_PDF_PATH" "$KNOWLEDGE_DIR/raw/pdfs/${SLUG}.pdf"
+  echo "Symlinked PDF: raw/pdfs/${SLUG}.pdf → $ZOTERO_PDF_PATH"
+fi
+```
+
+**Abstract text save**:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+SLUG="[paper-slug]"
+ABSTRACT_FILE="$KNOWLEDGE_DIR/raw/abstracts/${SLUG}.txt"
+if [ ! -f "$ABSTRACT_FILE" ]; then
+  cat > "$ABSTRACT_FILE" << 'RAWEOF'
+[ABSTRACT_TEXT or PDFTOTEXT_OUTPUT]
+RAWEOF
+  echo "Saved raw text: raw/abstracts/${SLUG}.txt"
+fi
+```
+
+**DOI API response save**:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+DOI="[DOI]"
+SLUG="[paper-slug]"
+API_FILE="$KNOWLEDGE_DIR/raw/api-responses/${SLUG}.json"
+if [ ! -f "$API_FILE" ]; then
+  curl -sL "https://api.crossref.org/works/${DOI}" > "$API_FILE"
+  echo "Saved API response: raw/api-responses/${SLUG}.json"
+fi
+```
+
+**Set `raw_path` and `extraction_tier` in the paper node** (used in Step 1.6):
+- `raw_path`: relative path from `$KNOWLEDGE_DIR` (e.g., `"raw/abstracts/fiel-zhang-2017.txt"` or `"raw/pdfs/fiel-zhang-2017.pdf"`)
+- `extraction_tier`: one of `"full_pdf"`, `"abstract_only"`, `"metadata_only"` — records what level of extraction was possible
 
 ### Step 1.3: Extract intellectual content
 
@@ -383,6 +550,38 @@ Report to user:
 - Concepts extracted (theories, methods, mechanisms)
 - Relationships created (auto-detected citations + any user-confirmed)
 - Extraction quality (full PDF / abstract only / metadata only)
+
+### Step 1.10: Incremental wiki update
+
+If a compiled wiki already exists, auto-update it with the newly ingested papers:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+WIKI_DIR="$KNOWLEDGE_DIR/wiki"
+if [ -d "$WIKI_DIR/papers" ]; then
+  echo "Wiki detected — updating paper pages for newly ingested papers..."
+else
+  echo "No compiled wiki found. Run /scholar-knowledge compile to generate one."
+fi
+```
+
+**If wiki exists**, for each newly ingested paper:
+
+1. **Generate/update paper page**: Create `wiki/papers/[slug].md` using the paper page template (see MODE 6 Step 6.4). If the paper has images in `raw/images/[slug]/`, add image references to the paper page.
+2. **Update affected concept pages**: If the paper introduced new theories/methods, add it to the relevant concept page's paper table. If the concept page doesn't exist, create it.
+3. **Auto-maintain `wiki/index.md`**: This is critical — the index must stay current after every ingest, not just during full compile. Update:
+   - Paper count in the header
+   - "Recently Added" table (prepend new papers, keep last 20)
+   - Topic list counts (if new paper clearly matches an existing topic)
+   - Quick Stats table counts
+4. **Do NOT regenerate** topic pages, `contradictions.md`, or `gaps.md` — these require the full COMPILE pass to maintain quality. But do append a note to `gaps.md` if the new paper has `gap_claims` or `future_directions`.
+
+**The LLM auto-maintains the wiki** — the user should rarely need to edit wiki pages directly. Every ingest operation keeps the wiki current. This follows Karpathy's principle: "the LLM writes and maintains all of the data of the wiki, I rarely touch it directly."
+
+Log in the process log:
+```
+Wiki updated: [N] paper pages added/updated, [N] concept pages touched, index.md refreshed
+```
 
 ---
 
@@ -576,6 +775,35 @@ PAPER_COUNT=0; CONCEPT_COUNT=0; EDGE_COUNT=0
 echo "Papers: $PAPER_COUNT | Concepts: $CONCEPT_COUNT | Relationships: $EDGE_COUNT"
 echo ""
 
+# Raw storage stats
+KG_RAW="$KNOWLEDGE_DIR/raw"
+RAW_PDFS=0; RAW_ABSTRACTS=0; RAW_API=0
+[ -d "$KG_RAW/pdfs" ] && RAW_PDFS=$(ls "$KG_RAW/pdfs/" 2>/dev/null | wc -l | tr -d ' ')
+[ -d "$KG_RAW/abstracts" ] && RAW_ABSTRACTS=$(ls "$KG_RAW/abstracts/" 2>/dev/null | wc -l | tr -d ' ')
+[ -d "$KG_RAW/api-responses" ] && RAW_API=$(ls "$KG_RAW/api-responses/" 2>/dev/null | wc -l | tr -d ' ')
+echo "Raw storage: $RAW_PDFS PDFs (symlinks) | $RAW_ABSTRACTS abstracts | $RAW_API API responses"
+
+# Extraction tier breakdown
+if [ -f "$KNOWLEDGE_DIR/papers.ndjson" ]; then
+  echo ""
+  echo "=== Extraction Tiers ==="
+  grep -o '"extraction_tier":"[^"]*"' "$KNOWLEDGE_DIR/papers.ndjson" 2>/dev/null | sed 's/"extraction_tier":"//;s/"//' | sort | uniq -c | sort -rn
+  NO_TIER=$(grep -cvl '"extraction_tier"' "$KNOWLEDGE_DIR/papers.ndjson" 2>/dev/null || echo 0)
+  echo "  (no tier recorded): $NO_TIER"
+fi
+
+# Wiki status
+if [ -d "$KNOWLEDGE_DIR/wiki/papers" ]; then
+  WIKI_PAGES=$(ls "$KNOWLEDGE_DIR/wiki/papers/" 2>/dev/null | wc -l | tr -d ' ')
+  LAST_COMPILED=$(grep -o '"last_compiled":"[^"]*"' "$KNOWLEDGE_DIR/meta.json" 2>/dev/null | sed 's/.*"last_compiled":"//;s/"//')
+  echo ""
+  echo "Wiki: $WIKI_PAGES paper pages | Last compiled: ${LAST_COMPILED:-never}"
+else
+  echo ""
+  echo "Wiki: not compiled (run /scholar-knowledge compile)"
+fi
+echo ""
+
 # Papers by decade
 if [ -f "$KNOWLEDGE_DIR/papers.ndjson" ]; then
   echo "=== Papers by Decade ==="
@@ -730,6 +958,650 @@ Save the export using the Write tool at the path printed above.
 
 ---
 
+## MODE 6: COMPILE
+
+Generate a browsable, Obsidian-compatible markdown wiki from the NDJSON knowledge graph. The wiki is a directory of interlinked `.md` files that can be opened in Obsidian, VS Code, or any markdown viewer.
+
+### Step 6.1: Determine compile mode (auto-detect)
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+WIKI_DIR="$KNOWLEDGE_DIR/wiki"
+
+# Check for existing wiki and last compile time
+if [ -d "$WIKI_DIR" ] && grep -q '"last_compiled"' "$KNOWLEDGE_DIR/meta.json" 2>/dev/null; then
+  LAST_COMPILED=$(grep -o '"last_compiled":"[^"]*"' "$KNOWLEDGE_DIR/meta.json" | sed 's/.*"last_compiled":"//;s/"//')
+  echo "Existing wiki found. Last compiled: $LAST_COMPILED"
+  echo "Mode: INCREMENTAL (only papers ingested after $LAST_COMPILED)"
+  echo "Use 'compile full' to force a full rebuild."
+  COMPILE_MODE="incremental"
+else
+  echo "No existing wiki or no compile timestamp. Mode: FULL BUILD"
+  COMPILE_MODE="full"
+fi
+
+# User can override: "compile full" forces full rebuild, "compile incremental" forces incremental
+```
+
+If user argument contains `full`, set `COMPILE_MODE="full"`. If `incremental`, set accordingly.
+
+### Step 6.2: Create wiki directory structure
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+WIKI_DIR="$KNOWLEDGE_DIR/wiki"
+mkdir -p "$WIKI_DIR/papers" "$WIKI_DIR/concepts" "$WIKI_DIR/topics" "$WIKI_DIR/answers"
+echo "Wiki directory: $WIKI_DIR"
+```
+
+### Step 6.3: Read NDJSON data
+
+Read the knowledge graph files. For large graphs (>100 papers), read in batches of 50 lines to stay within context limits.
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+
+# Count records
+PAPER_COUNT=$(wc -l < "$KNOWLEDGE_DIR/papers.ndjson" 2>/dev/null | tr -d ' ')
+CONCEPT_COUNT=$(wc -l < "$KNOWLEDGE_DIR/concepts.ndjson" 2>/dev/null | tr -d ' ')
+EDGE_COUNT=$(wc -l < "$KNOWLEDGE_DIR/edges.ndjson" 2>/dev/null | tr -d ' ')
+echo "Compiling wiki from: $PAPER_COUNT papers, $CONCEPT_COUNT concepts, $EDGE_COUNT edges"
+```
+
+**For incremental mode**: Only read papers where `ingested_at` or `updated_at` is after `$LAST_COMPILED`.
+
+```bash
+# Get papers since last compile (incremental mode)
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+SINCE="$LAST_COMPILED"
+# Read new/updated papers
+grep "\"ingested_at\":\"" "$KNOWLEDGE_DIR/papers.ndjson" | awk -v since="$SINCE" -F'"ingested_at":"' '{split($2,a,"\""); if(a[1] >= since) print}' > /tmp/kg-new-papers.ndjson
+echo "New papers since $SINCE: $(wc -l < /tmp/kg-new-papers.ndjson | tr -d ' ')"
+```
+
+### Step 6.4: Generate paper pages
+
+For each paper (or each new paper in incremental mode), generate a markdown page.
+
+**Filename convention**: `[first-author-last-name]-[year].md` (lowercase, hyphens). If collision, append `-b`, `-c`, etc.
+
+**Paper page template**:
+
+```markdown
+# [Authors] ([Year]). [Title]
+*[Journal]*, [Volume]([Issue]), [Pages]. [DOI link]
+
+## Key Findings
+- [finding 1]
+- [finding 2]
+
+## Theories
+- [[concept-slug]] ([role: tests/extends/proposes/critiques/applies])
+
+## Methods
+- [method 1], [method 2]
+
+## Data
+- [data_source 1]
+
+## Population
+- [population 1]
+
+## Key Quotes
+> "[quote text]" (p. [page])
+
+## Gaps Identified
+- [gap_claim 1]
+
+## Limitations
+- [limitation 1]
+
+## Future Directions
+- [future_direction 1]
+
+## Relationships
+- [relationship_type] → [[target-paper-slug]]
+- [relationship_type] ← [[source-paper-slug]]
+
+---
+*ID: [id] | Ingested: [ingested_at] | Source: [source] | Projects: [projects]*
+```
+
+**Implementation**: Read each paper's JSON line, extract all fields, resolve edge IDs to paper slugs for the Relationships section, and write the page using the Write tool.
+
+For large graphs, batch the work: process 20-30 papers per batch, writing each page with the Write tool before moving to the next batch.
+
+### Step 6.5: Generate concept pages
+
+For each concept in `concepts.ndjson`, generate a page.
+
+**Filename convention**: `[concept-name-slugified].md`
+
+**Concept page template**:
+
+```markdown
+# [Concept Name]
+*[Category: theory/method/mechanism/dataset/population]* | Key author: [key_authors]
+
+[description]
+
+## Papers ([paper_count])
+
+| Year | Authors | Title | Role |
+|------|---------|-------|------|
+| [year] | [authors] | [[paper-slug]] | [role] |
+
+## Related Concepts
+- [[related-concept-slug]] ([relationship basis])
+
+---
+*ID: [id] | Created: [created_at]*
+```
+
+**Implementation**: For each concept, search `papers.ndjson` for papers that reference this concept in their `theories[]` or `methods[]` fields. Build the papers table from those matches.
+
+### Step 6.6: Cluster topics and generate topic pages
+
+This is the most creative step — Claude reads paper titles, findings, and theories to identify 10-20 topic clusters.
+
+**Approach**:
+1. Read all paper titles and the first finding from each paper (batch-read from NDJSON)
+2. Identify recurring themes/topics (e.g., "segregation", "immigration", "language", "health", "education", "inequality", "mobility")
+3. For each topic, collect all papers whose title, findings, or theories match
+4. Generate a topic page with Claude-written synthesis
+
+**Topic page template**:
+
+```markdown
+# [Topic Name]
+*[N] papers in knowledge graph*
+
+## Overview
+[Claude-generated 2-3 paragraph synthesis of what the KG knows about this topic.
+Identify the main research questions, dominant theoretical perspectives, and
+key empirical findings. Note any evolution over time.]
+
+## Papers
+
+| Year | Authors | Title | Key Finding |
+|------|---------|-------|-------------|
+| [year] | [authors] | [[paper-slug]] | [first finding excerpt] |
+
+## Theoretical Landscape
+- [[theory-1]] — used by [N] papers ([supports/challenges] main findings)
+- [[theory-2]] — used by [N] papers
+
+## Methods Used
+| Method | Papers |
+|--------|--------|
+| [method] | [N] |
+
+## Key Debates
+[Auto-extracted from papers with contradicting findings on this topic]
+
+## Open Questions
+[Aggregated from gap_claims and future_directions of papers on this topic]
+```
+
+### Step 6.7: Generate aggregate pages
+
+**`wiki/index.md`** — master dashboard:
+
+```markdown
+# Research Knowledge Graph
+*Last compiled: [timestamp] | [N] papers | [N] concepts | [N] relationships*
+
+## Quick Stats
+| Metric | Count |
+|--------|-------|
+| Papers | [N] |
+| Theories | [N] |
+| Methods | [N] |
+| Mechanisms | [N] |
+| Relationships | [N] |
+
+## Topics
+- [[topics/segregation]] ([N] papers)
+- [[topics/immigration]] ([N] papers)
+- ...
+
+## Recently Added
+| Date | Paper |
+|------|-------|
+| [date] | [[papers/author-year]] |
+
+## Most Connected Papers
+| Paper | Connections |
+|-------|------------|
+| [[papers/author-year]] | [N] edges |
+
+## Browse
+- [All Papers](papers/) — individual paper summaries
+- [Concepts](concepts/) — theories, methods, mechanisms
+- [Topics](topics/) — thematic clusters
+- [[contradictions]] — contested findings
+- [[gaps]] — research opportunities
+- [Q&A Archive](answers/) — past research questions and answers
+```
+
+**`wiki/contradictions.md`** — papers with opposing findings:
+
+```markdown
+# Contested Findings
+
+Pairs or groups of papers in the knowledge graph that report contradicting findings on the same topic.
+
+## [Topic 1]
+**Finding in dispute**: "[description of contested claim]"
+
+| Position | Paper | Year | Finding |
+|----------|-------|------|---------|
+| Supports | [[papers/author-year]] | [year] | [finding] |
+| Challenges | [[papers/author-year]] | [year] | [finding] |
+
+**Note**: [Any context about why findings differ — methods, populations, time periods]
+
+## [Topic 2]
+...
+```
+
+Build this by: reading all `contradicts` edges from `edges.ndjson`, resolving paper IDs, and grouping by topic.
+
+**`wiki/gaps.md`** — aggregated research gaps and future directions:
+
+```markdown
+# Research Gaps & Future Directions
+
+Aggregated from [N] papers in the knowledge graph.
+
+## Frequently Cited Gaps
+[Cluster gap_claims by theme, count how many papers mention each gap]
+
+| Gap Theme | Papers Citing | Example |
+|-----------|--------------|---------|
+| [theme] | [N] | "[quote]" — [[papers/author-year]] |
+
+## Suggested Future Directions
+[Cluster future_directions by theme]
+
+| Direction | Papers Suggesting | Example |
+|-----------|------------------|---------|
+| [theme] | [N] | "[quote]" — [[papers/author-year]] |
+
+## Limitations Patterns
+[Recurring limitations across papers — signals systematic constraints]
+
+| Limitation Pattern | Papers | Implication |
+|--------------------|--------|-------------|
+| Cross-sectional data | [N] | Demand for longitudinal designs |
+| Single-country samples | [N] | Need for comparative work |
+```
+
+### Step 6.8: Generate visual knowledge map
+
+Generate a visual network graph of the knowledge graph using Python matplotlib/networkx. This produces a PNG image that can be viewed in Obsidian or any image viewer.
+
+```python
+#!/usr/bin/env python3
+"""Generate knowledge map visualization."""
+import json, os
+KNOWLEDGE_DIR = os.path.expanduser("~/.claude/scholar-knowledge")
+WIKI_DIR = os.path.join(KNOWLEDGE_DIR, "wiki")
+
+try:
+    import networkx as nx
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+except ImportError:
+    print("networkx or matplotlib not available — skipping visualization")
+    print("Install: pip install networkx matplotlib")
+    exit(0)
+
+# Build graph
+G = nx.Graph()
+
+# Load papers
+papers = {}
+with open(os.path.join(KNOWLEDGE_DIR, "papers.ndjson")) as f:
+    for line in f:
+        p = json.loads(line.strip())
+        pid = p['id']
+        papers[pid] = p
+        label = f"{(p.get('authors') or ['?'])[0].split(',')[0]} {p.get('year','')}"
+        G.add_node(pid, label=label, node_type='paper')
+
+# Load concepts
+with open(os.path.join(KNOWLEDGE_DIR, "concepts.ndjson")) as f:
+    for line in f:
+        c = json.loads(line.strip())
+        G.add_node(c['id'], label=c['name'][:20], node_type='concept')
+
+# Load edges (paper-to-paper)
+with open(os.path.join(KNOWLEDGE_DIR, "edges.ndjson")) as f:
+    for line in f:
+        e = json.loads(line.strip())
+        if e.get('source_id') in G and e.get('target_id') in G:
+            G.add_edge(e['source_id'], e['target_id'], rel=e.get('relationship',''))
+
+# Paper-to-concept edges (from theories/methods)
+for pid, p in papers.items():
+    for t in p.get('theories', []):
+        tname = t.get('name','') if isinstance(t, dict) else t
+        # Find matching concept node
+        for nid, ndata in G.nodes(data=True):
+            if ndata.get('node_type') == 'concept' and ndata.get('label','').lower().startswith(tname.lower()[:15]):
+                G.add_edge(pid, nid, rel='uses-theory')
+                break
+
+# Layout and draw
+fig, ax = plt.subplots(1, 1, figsize=(20, 16))
+pos = nx.spring_layout(G, k=0.5, iterations=50, seed=42)
+
+# Color by type
+paper_nodes = [n for n,d in G.nodes(data=True) if d.get('node_type')=='paper']
+concept_nodes = [n for n,d in G.nodes(data=True) if d.get('node_type')=='concept']
+
+nx.draw_networkx_nodes(G, pos, nodelist=paper_nodes, node_color='#4A90D9',
+                       node_size=30, alpha=0.7, ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=concept_nodes, node_color='#E74C3C',
+                       node_size=120, alpha=0.9, ax=ax)
+nx.draw_networkx_edges(G, pos, alpha=0.15, ax=ax)
+
+# Label only concepts (papers are too dense)
+concept_labels = {n: d['label'] for n,d in G.nodes(data=True) if d.get('node_type')=='concept'}
+nx.draw_networkx_labels(G, pos, concept_labels, font_size=7, font_weight='bold', ax=ax)
+
+ax.set_title(f"Knowledge Graph: {len(paper_nodes)} papers, {len(concept_nodes)} concepts, {G.number_of_edges()} edges",
+             fontsize=14, fontweight='bold')
+ax.axis('off')
+plt.tight_layout()
+
+out_path = os.path.join(WIKI_DIR, "knowledge-map.png")
+plt.savefig(out_path, dpi=150, bbox_inches='tight', facecolor='white')
+print(f"Knowledge map saved: {out_path}")
+
+# Also generate a topic-level summary map (smaller, cleaner)
+# ... (optional: topic nodes + inter-topic edge weights)
+```
+
+Save the script to `$KNOWLEDGE_DIR/wiki/generate-map.py` and run it. The output `knowledge-map.png` is embedded in `wiki/index.md`:
+
+```markdown
+## Knowledge Map
+![Knowledge Map](knowledge-map.png)
+```
+
+If `networkx` or `matplotlib` is not installed, skip this step and note it in the report. The wiki works fine without the visualization.
+
+**Additional visual outputs** (generate if matplotlib available):
+- **Timeline**: Papers by year (bar chart) → `wiki/timeline.png`
+- **Method frequency**: Horizontal bar chart of most-used methods → `wiki/methods-chart.png`
+
+### Step 6.9: Update meta.json and report
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+
+# Update meta.json with compile timestamp
+python3 -c "
+import json, datetime
+with open('$KNOWLEDGE_DIR/meta.json', 'r') as f:
+    meta = json.load(f)
+meta['last_compiled'] = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+with open('$KNOWLEDGE_DIR/meta.json', 'w') as f:
+    json.dump(meta, f, indent=2)
+print('meta.json updated with last_compiled timestamp')
+" 2>/dev/null || echo "meta.json update failed — update manually"
+```
+
+Report to user:
+- Pages generated: [N] paper pages, [N] concept pages, [N] topic pages
+- Aggregate pages: index.md, contradictions.md, gaps.md
+- Visual outputs: knowledge-map.png, timeline.png, methods-chart.png (if generated)
+- Wiki location: `$KNOWLEDGE_DIR/wiki/`
+- Tip: "Open this directory in Obsidian for graph view and backlink navigation"
+
+---
+
+## MODE 7: ASK
+
+Answer complex research questions by reading the compiled wiki. Unlike MODE 2 (SEARCH), which returns raw paper records, ASK synthesizes a narrative answer and saves it as a wiki page.
+
+### Step 7.1: Check wiki exists
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+WIKI_DIR="$KNOWLEDGE_DIR/wiki"
+
+if [ ! -d "$WIKI_DIR" ] || [ ! -f "$WIKI_DIR/index.md" ]; then
+  echo "ERROR: No compiled wiki found. Run /scholar-knowledge compile first."
+  echo "The ASK mode reads the compiled wiki, not raw NDJSON."
+  exit 1
+fi
+
+echo "Wiki found: $WIKI_DIR"
+echo "Papers: $(ls "$WIKI_DIR/papers/" 2>/dev/null | wc -l | tr -d ' ') pages"
+echo "Concepts: $(ls "$WIKI_DIR/concepts/" 2>/dev/null | wc -l | tr -d ' ') pages"
+echo "Topics: $(ls "$WIKI_DIR/topics/" 2>/dev/null | wc -l | tr -d ' ') pages"
+```
+
+If no wiki exists, instruct the user to run `/scholar-knowledge compile` first and stop.
+
+### Step 7.2: Parse question and identify relevant wiki pages
+
+Read the user's question from `$ARGUMENTS` (everything after the `ask` keyword).
+
+Then read `wiki/index.md` to get an overview of available topics and concepts.
+
+**Routing strategy**:
+1. Read `wiki/index.md` (the dashboard) to identify which topics and concepts are relevant to the question
+2. Read the most relevant topic page(s) from `wiki/topics/` (up to 3)
+3. Read the most relevant concept page(s) from `wiki/concepts/` (up to 5)
+4. If the question involves contradictions, read `wiki/contradictions.md`
+5. If the question asks about gaps/opportunities, read `wiki/gaps.md`
+6. Read individual paper pages only if specific papers need deeper examination (up to 10)
+
+**Do NOT read raw NDJSON** — the wiki is the source for ASK mode. This ensures the compiled synthesis layer (topic overviews, clustered gaps) is leveraged.
+
+### Step 7.3: Read relevant wiki pages
+
+Use the Read tool to read the identified pages. For a typical question, this means reading:
+- `wiki/index.md` (always)
+- 1-3 topic pages
+- 2-5 concept pages
+- 0-1 aggregate pages (contradictions or gaps)
+- 0-10 individual paper pages (for depth)
+
+### Step 7.4: Synthesize answer
+
+Based on the wiki content, compose a structured answer as a markdown document.
+
+**Answer template**:
+
+```markdown
+# Q: [user's question]
+*Asked: [date] | Papers consulted: [N] | Wiki pages read: [N]*
+
+## Answer
+
+[Claude-generated synthesis — 3-8 paragraphs answering the question based on
+what the knowledge graph contains. Use specific paper citations in (Author Year)
+format. Note confidence level based on graph coverage.]
+
+## Evidence Summary
+
+| [Column relevant to question] | Support | Key Papers |
+|-------------------------------|---------|------------|
+| [item] | [strength] | [[papers/author-year]], [[papers/author-year]] |
+
+## Contested Points
+[If the question touches on debated findings, summarize them here]
+
+## What the Knowledge Graph Doesn't Cover
+[Identify aspects of the question that the KG has limited or no coverage on.
+Suggest enrichment commands.]
+
+## Sources Consulted
+Wiki pages read:
+- [[topics/topic-name]]
+- [[concepts/concept-name]]
+- [[papers/author-year]]
+- ...
+```
+
+**Confidence levels**:
+- **HIGH**: 10+ relevant papers, multiple theories, consistent findings
+- **MEDIUM**: 3-9 papers, some theoretical grounding
+- **LOW**: 1-2 papers or no direct coverage (note this prominently)
+
+### Step 7.5: Save answer
+
+Save the answer to the wiki for future reference (the feedback loop).
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+WIKI_DIR="$KNOWLEDGE_DIR/wiki"
+mkdir -p "$WIKI_DIR/answers"
+
+# Slugify the question for the filename
+QUESTION_SLUG=$(echo "[QUESTION]" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | head -c 60)
+DATE=$(date +%Y-%m-%d)
+ANSWER_FILE="$WIKI_DIR/answers/${QUESTION_SLUG}-${DATE}.md"
+echo "Answer will be saved to: $ANSWER_FILE"
+```
+
+Write the answer using the Write tool.
+
+### Step 7.6: Feedback loop (optional)
+
+After saving the answer, check if any topic pages should be updated with new insights:
+
+1. If the answer identified a new cross-cutting theme not in any topic page → suggest user runs `compile full`
+2. If the answer synthesized findings in a novel way → append a "See also" link to relevant topic pages pointing to the answer
+3. Update `wiki/index.md` to add the answer to a "Recent Q&A" section if one exists
+
+This feedback loop is what makes the wiki grow organically — each question potentially enriches the wiki for future queries.
+
+### Step 7.7: Present to user
+
+Display the answer in the terminal AND inform the user where it was saved:
+
+> **Answer saved to**: `~/.claude/scholar-knowledge/wiki/answers/[slug].md`
+> Open in Obsidian to see backlinks and navigate to referenced papers.
+
+---
+
+## MODE 8: RE-EXTRACT
+
+Re-run intellectual content extraction on papers using their archived raw sources. This is useful when:
+- New schema fields were added (e.g., `limitations`, `future_directions`)
+- A paper was originally ingested as `abstract_only` but now has a PDF available
+- The extraction quality needs improvement (e.g., better findings/mechanisms)
+
+### Step 8.1: Parse scope
+
+| Sub-argument | Scope |
+|---|---|
+| `all` | Re-extract ALL papers that have raw sources |
+| `all abstract_only` | Re-extract only papers with `extraction_tier: "abstract_only"` (upgrade candidates) |
+| `all metadata_only` | Re-extract only papers with `extraction_tier: "metadata_only"` |
+| `[paper title or DOI]` | Re-extract a single specific paper |
+| `missing [field]` | Re-extract papers where a specific field is empty (e.g., `missing limitations`) |
+
+### Step 8.2: Identify papers and their raw sources
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+KG_RAW="$KNOWLEDGE_DIR/raw"
+
+# For "all abstract_only" scope:
+echo "=== Papers eligible for re-extraction ==="
+grep '"extraction_tier":"abstract_only"' "$KNOWLEDGE_DIR/papers.ndjson" 2>/dev/null | while IFS= read -r line; do
+  id=$(echo "$line" | sed 's/.*"id":"\([^"]*\)".*/\1/')
+  title=$(echo "$line" | sed 's/.*"title":"\([^"]*\)".*/\1/' | head -c 60)
+  raw=$(echo "$line" | sed 's/.*"raw_path":"\([^"]*\)".*/\1/')
+  echo "  $id | $title | raw: $raw"
+done
+```
+
+For each paper, check if a better raw source is now available:
+1. If `extraction_tier` is `abstract_only` and a PDF symlink exists in `raw/pdfs/[slug].pdf` → upgrade to `full_pdf`
+2. If `extraction_tier` is `metadata_only` and an abstract exists in `raw/abstracts/[slug].txt` → upgrade to `abstract_only`
+3. Check Zotero for newly added PDFs since original ingest
+
+### Step 8.3: Check for upgraded raw sources
+
+For `abstract_only` papers, check if Zotero now has a PDF:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+SLUG="[paper-slug]"
+
+# Check if PDF symlink already exists
+if [ -L "$KNOWLEDGE_DIR/raw/pdfs/${SLUG}.pdf" ] && [ -f "$KNOWLEDGE_DIR/raw/pdfs/${SLUG}.pdf" ]; then
+  echo "PDF available for $SLUG — can upgrade to full_pdf extraction"
+  EXTRACTION_TIER="full_pdf"
+  RAW_TEXT=$(pdftotext "$KNOWLEDGE_DIR/raw/pdfs/${SLUG}.pdf" - 2>/dev/null | head -400)
+elif [ -f "$KNOWLEDGE_DIR/raw/abstracts/${SLUG}.txt" ]; then
+  echo "Abstract available for $SLUG — re-extracting from abstract"
+  EXTRACTION_TIER="abstract_only"
+  RAW_TEXT=$(cat "$KNOWLEDGE_DIR/raw/abstracts/${SLUG}.txt")
+else
+  echo "No raw source for $SLUG — skipping"
+fi
+```
+
+### Step 8.4: Re-extract using Step 1.3 logic
+
+Read the raw source text and apply the same extraction process as Step 1.3 (Extract intellectual content). The extraction targets the same 10 fields: findings, mechanisms, theories, methods, populations, data_sources, key_quotes, gap_claims, limitations, future_directions.
+
+**Key difference from initial extraction**: Re-extraction PRESERVES any manually added or user-confirmed content. Specifically:
+- If a field was populated during initial extraction AND re-extraction produces a different value, present both to the user and ask which to keep
+- If a field was empty and re-extraction fills it, auto-accept the new value
+- Edges (relationships) created by `user` are never modified; only `auto` edges may be refreshed
+
+### Step 8.5: Update paper node
+
+Remove the old paper record and append the updated one:
+
+```bash
+KNOWLEDGE_DIR="${SCHOLAR_KNOWLEDGE_DIR:-$HOME/.claude/scholar-knowledge}"
+PAPER_ID="[PAPER_ID]"
+# Remove old record
+grep -v "\"id\":\"${PAPER_ID}\"" "$KNOWLEDGE_DIR/papers.ndjson" > "$KNOWLEDGE_DIR/papers.ndjson.tmp"
+mv "$KNOWLEDGE_DIR/papers.ndjson.tmp" "$KNOWLEDGE_DIR/papers.ndjson"
+# Append updated record (with new extraction_tier, updated_at, and enriched fields)
+echo '[UPDATED_SINGLE_LINE_JSON]' >> "$KNOWLEDGE_DIR/papers.ndjson"
+```
+
+Update `updated_at` to current timestamp. Update `extraction_tier` if upgraded.
+
+### Step 8.6: Update wiki (if exists)
+
+If the wiki has been compiled, regenerate the paper page for each re-extracted paper (same as Step 1.10 incremental wiki update).
+
+### Step 8.7: Report
+
+```markdown
+## Re-extraction Summary
+
+| Metric | Count |
+|--------|-------|
+| Papers processed | [N] |
+| Upgraded abstract_only → full_pdf | [N] |
+| Upgraded metadata_only → abstract_only | [N] |
+| Fields enriched | [N] new field values added |
+| Skipped (no raw source) | [N] |
+
+### Enrichment Details
+| Paper | Previous Tier | New Tier | New Fields |
+|-------|--------------|----------|------------|
+| [title] | abstract_only | full_pdf | +limitations, +future_directions, +key_quotes |
+```
+
+---
+
 ## Close Process Log
 
 ```bash
@@ -760,6 +1632,7 @@ echo "Process log saved to $LOG_FILE"
 
 Before completing any mode, verify:
 
+**All modes:**
 - [ ] All paper IDs are deterministic (SHA-256 of DOI or lowercase title)
 - [ ] No duplicate papers in `papers.ndjson` (checked via `kg_has_paper`)
 - [ ] Each JSON line is valid single-line JSON
@@ -770,11 +1643,41 @@ Before completing any mode, verify:
 - [ ] `meta.json` updated after any write operation
 - [ ] Process log captures all steps
 
+**COMPILE mode (MODE 6):**
+- [ ] All `[[wikilinks]]` in paper pages point to existing concept page filenames
+- [ ] Paper page filenames follow `first-author-year.md` convention
+- [ ] Concept pages list all papers that reference them (cross-checked against NDJSON)
+- [ ] Topic clusters are meaningful (not single-paper topics unless truly unique)
+- [ ] `contradictions.md` only includes papers connected by `contradicts` edges
+- [ ] `gaps.md` aggregations are based on actual `gap_claims` and `future_directions` fields
+- [ ] `index.md` counts match actual page counts in wiki directories
+- [ ] `meta.json` has `last_compiled` timestamp updated
+
+**ASK mode (MODE 7):**
+- [ ] Answer is based on wiki content, not hallucinated knowledge
+- [ ] All cited papers actually exist as wiki pages
+- [ ] Confidence level accurately reflects graph coverage
+- [ ] Answer saved to `wiki/answers/` with correct slug and date
+- [ ] "What the Knowledge Graph Doesn't Cover" section is honest about gaps
+
+**INGEST mode — raw storage (Step 1.2b):**
+- [ ] Raw source saved BEFORE extraction (not after)
+- [ ] `raw/` directory is append-only — no overwrites of existing raw files
+- [ ] Zotero PDFs are symlinked, not copied
+- [ ] Paper node includes `raw_path` (relative to `$KNOWLEDGE_DIR`) and `extraction_tier`
+- [ ] API responses saved as complete JSON (not just parsed fields)
+
+**RE-EXTRACT mode (MODE 8):**
+- [ ] Re-extraction reads from `raw/` archive, not from original external source
+- [ ] User-confirmed content (manual edits, user-created edges) is preserved
+- [ ] `updated_at` timestamp refreshed; `extraction_tier` upgraded if applicable
+- [ ] Wiki pages updated if wiki exists
+
 ---
 
 ## Integration with Other Skills
 
-This skill provides the knowledge graph search layer used by:
+### Skills that READ from the knowledge graph:
 
 | Skill | Integration Point | What it provides |
 |---|---|---|
@@ -783,6 +1686,27 @@ This skill provides the knowledge graph search layer used by:
 | `scholar-write` | Step 0 Tier 0 (before citation pool build) | Pre-extracted findings to guide writing |
 | `scholar-citation` | `scholar_search` Tier 0.5 | Enriched paper records in unified search |
 
+### Skills that WRITE back to the knowledge graph (feedback loop):
+
+The knowledge graph grows organically as you use other skills. These cross-skill filing integrations feed outputs back into the graph:
+
+| Skill | What gets filed back | How |
+|---|---|---|
+| `scholar-analyze` | New empirical findings, methods used, data sources | Post-save: user prompted to run `/scholar-knowledge ingest from output [results-file]` |
+| `scholar-write` | Cited papers, theoretical framing, identified gaps | Post-save: new citations can be ingested; gap claims from the Discussion section filed to graph |
+| `scholar-lit-review` | Full paper inventory with findings | Post-save: auto-ingest via `/scholar-knowledge ingest from lit-review [output-file]` |
+| `scholar-respond` | Reviewer-identified gaps, suggested references | Post-R&R: new references from reviewers can be ingested |
+| `scholar-compute` | Computational findings, model outputs | Post-save: user prompted to file key results back |
+
+**The feedback loop in practice**: You write a Results section with `scholar-write` → it cites papers from the knowledge graph → you file the new findings back via `ingest from output` → the graph knows your own findings → next time `scholar-write` runs, it can reference your prior work. This is Karpathy's "filing outputs back into the wiki to enhance it for further queries."
+
+### Obsidian integration
+
+The **compiled wiki** (`MODE 6: COMPILE`) is designed for Obsidian:
+- Open `$KNOWLEDGE_DIR/wiki/` as an Obsidian vault for graph view, backlink navigation, and visual exploration
+- See `references/obsidian-setup.md` for recommended plugins, graph view configuration, and usage patterns
+- The `wiki/answers/` directory accumulates Q&A history — a growing research notebook
+- Visual outputs (`knowledge-map.png`, `timeline.png`) render inline in Obsidian
 
 Skills load the integration via:
 ```bash

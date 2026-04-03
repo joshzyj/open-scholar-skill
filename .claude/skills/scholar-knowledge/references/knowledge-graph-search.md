@@ -248,7 +248,103 @@ METAEOF
 
 ---
 
-## 14. Format for Display
+## 14. Wiki Compile Helpers
+
+```bash
+kg_last_compile_time() {
+  [ -f "$KG_META" ] && grep -o '"last_compiled":"[^"]*"' "$KG_META" 2>/dev/null | sed 's/.*"last_compiled":"//;s/"//'
+}
+
+kg_papers_since() {
+  local SINCE="$1"
+  [ ! -f "$KG_PAPERS" ] && return
+  [ -z "$SINCE" ] && cat "$KG_PAPERS" && return
+  grep "\"ingested_at\":\"" "$KG_PAPERS" | awk -v since="$SINCE" -F'"ingested_at":"' '{split($2,a,"\""); if(a[1] >= since) print}'
+}
+
+kg_wiki_exists() {
+  [ -d "$KNOWLEDGE_DIR/wiki/papers" ] && [ -f "$KNOWLEDGE_DIR/wiki/index.md" ]
+}
+
+kg_paper_slug() {
+  # Generate filename slug from first author + year: "fiel-2017"
+  local AUTHORS="$1" YEAR="$2"
+  local FIRST=$(echo "$AUTHORS" | sed 's/,.*//' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+  echo "${FIRST}-${YEAR}"
+}
+
+# ── Raw Storage Helpers ──
+kg_raw_dir() {
+  echo "$KNOWLEDGE_DIR/raw"
+}
+
+kg_save_raw_abstract() {
+  # Save abstract/text to raw/abstracts/[slug].txt (append-only: skip if exists)
+  local SLUG="$1" TEXT="$2"
+  local RAW_DIR="$KNOWLEDGE_DIR/raw/abstracts"
+  mkdir -p "$RAW_DIR"
+  if [ ! -f "$RAW_DIR/${SLUG}.txt" ]; then
+    echo "$TEXT" > "$RAW_DIR/${SLUG}.txt"
+    echo "raw/abstracts/${SLUG}.txt"
+  else
+    echo "raw/abstracts/${SLUG}.txt"
+  fi
+}
+
+kg_save_raw_api() {
+  # Save API JSON response to raw/api-responses/[slug].json (append-only)
+  local SLUG="$1" JSON_FILE="$2"
+  local RAW_DIR="$KNOWLEDGE_DIR/raw/api-responses"
+  mkdir -p "$RAW_DIR"
+  if [ ! -f "$RAW_DIR/${SLUG}.json" ]; then
+    cp "$JSON_FILE" "$RAW_DIR/${SLUG}.json"
+    echo "raw/api-responses/${SLUG}.json"
+  else
+    echo "raw/api-responses/${SLUG}.json"
+  fi
+}
+
+kg_link_raw_pdf() {
+  # Symlink a PDF to raw/pdfs/[slug].pdf (append-only)
+  local SLUG="$1" PDF_PATH="$2"
+  local RAW_DIR="$KNOWLEDGE_DIR/raw/pdfs"
+  mkdir -p "$RAW_DIR"
+  if [ ! -L "$RAW_DIR/${SLUG}.pdf" ] && [ -f "$PDF_PATH" ]; then
+    ln -sf "$PDF_PATH" "$RAW_DIR/${SLUG}.pdf"
+    echo "raw/pdfs/${SLUG}.pdf"
+  else
+    echo "raw/pdfs/${SLUG}.pdf"
+  fi
+}
+
+kg_get_raw_text() {
+  # Read raw text for a paper (tries PDF first, then abstract)
+  local SLUG="$1"
+  local RAW_DIR="$KNOWLEDGE_DIR/raw"
+  if [ -f "$RAW_DIR/pdfs/${SLUG}.pdf" ]; then
+    pdftotext "$RAW_DIR/pdfs/${SLUG}.pdf" - 2>/dev/null | head -400
+  elif [ -f "$RAW_DIR/abstracts/${SLUG}.txt" ]; then
+    cat "$RAW_DIR/abstracts/${SLUG}.txt"
+  fi
+}
+
+kg_extraction_tier_for() {
+  # Determine best extraction tier for a paper based on available raw sources
+  local SLUG="$1"
+  local RAW_DIR="$KNOWLEDGE_DIR/raw"
+  if [ -f "$RAW_DIR/pdfs/${SLUG}.pdf" ]; then
+    echo "full_pdf"
+  elif [ -f "$RAW_DIR/abstracts/${SLUG}.txt" ]; then
+    echo "abstract_only"
+  else
+    echo "metadata_only"
+  fi
+}
+```
+
+---
+
+## 15. Format for Display
 
 ```bash
 kg_format_papers() {

@@ -197,6 +197,8 @@ Before generating any figure code, produce a **Figure Plan** table and present i
 2. For each figure, specify: plot type, which variables map to which aesthetics (x, y, fill, color, facet), target dimensions (width × height in inches), journal preset if applicable, and purpose (which finding it illustrates)
 3. **Present the table to the user and wait for confirmation** before proceeding to B1
 4. The user may add, remove, reorder, or modify figures — update the plan accordingly
+5. If the user has pre-approved the figure plan, proceed without pause (auto-confirm)
+
 After confirmation, generate figures in the order specified in the plan.
 
 ---
@@ -1248,6 +1250,23 @@ After all tables and figures are produced, suggest to the user:
 > These catch errors early — before they propagate into the manuscript."
 
 This is a recommendation, not a gate — the user may proceed directly to `/scholar-write` if preferred. If run, `scholar-code-review` launches 6 review agents on scripts in `output/scripts/`; `scholar-verify stage1` launches verify-numerics and verify-figures on the raw outputs in `output/tables/` and `output/figures/`.
+
+### Knowledge Graph Write-Back (post-save)
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available 2>/dev/null; then
+    echo ""
+    echo "═══ Knowledge Graph ═══"
+    echo "File your new findings back into the knowledge graph:"
+    echo "  /scholar-knowledge ingest from output [results-file-path]"
+    echo "This lets future /scholar-write and /scholar-lit-review runs reference your own empirical results."
+  fi
+fi
+```
 
 **Close Process Log:**
 

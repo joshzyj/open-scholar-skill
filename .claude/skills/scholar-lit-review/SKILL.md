@@ -1015,6 +1015,23 @@ Save a PRISMA flow diagram as `output/[slug]/lit-review/prisma-flow-[SLUG]-[DATE
 
 Populate counts from the search log maintained throughout Phases 1-3.
 
+### Knowledge Graph Write-Back (post-save)
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available 2>/dev/null; then
+    echo ""
+    echo "═══ Knowledge Graph ═══"
+    echo "Ingest the paper inventory into your knowledge graph:"
+    echo "  /scholar-knowledge ingest from lit-review [landscape-map-path]"
+    echo "This populates the graph with all papers found during this review."
+  fi
+fi
+```
+
 **Close Process Log:**
 
 Run the following to finalize the process log:

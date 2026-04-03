@@ -1126,6 +1126,22 @@ Contains the full revision plan with word budgets, diffs, and consistency check 
 
 Confirm all saved file paths to the user.
 
+### Knowledge Graph Write-Back (post-save)
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  if kg_available 2>/dev/null; then
+    echo ""
+    echo "═══ Knowledge Graph ═══"
+    echo "Reviewers may have suggested references not in your knowledge graph. Ingest them:"
+    echo "  /scholar-knowledge ingest from doi [DOI]  (for each new reference from reviewers)"
+  fi
+fi
+```
+
 **Close Process Log:**
 
 Run the following to finalize the process log:
