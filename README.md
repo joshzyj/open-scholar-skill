@@ -66,7 +66,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-write` | `/scholar-write` | Full paper drafting with section-by-section guidance |
 | `scholar-citation` | `/scholar-citation` | 8-mode citation management: INSERT, AUDIT, CONVERT-STYLE, FULL-REBUILD, VERIFY, EXPORT (.bib), RETRACTION-CHECK, REPORTING-SUMMARY |
 | `scholar-code-review` | `/scholar-code-review` | 6-agent systematic code review: correctness, robustness, statistical fidelity, reproducibility, code style, data handling |
-| `scholar-knowledge` | `/scholar-knowledge` | User-scoped, cross-project knowledge graph for extracted findings, theories, mechanisms, and inter-paper relationships |
+| `scholar-knowledge` | `/scholar-knowledge` | User-scoped, cross-project knowledge graph (8 modes: INGEST, SEARCH, RELATE, STATUS, EXPORT, COMPILE wiki, ASK, RE-EXTRACT) — Obsidian-compatible markdown wiki with raw source archive |
 | `scholar-journal` | `/scholar-journal` | Journal-specific formatting and submission prep (22 journals, Nature Reporting Summary) |
 | `scholar-respond` | `/scholar-respond` | 5 modes: simulate (3-4 reviewers), respond (point-by-point), revise (word-budget), resubmit (rejection retarget), cover-letter |
 | `scholar-verify` | `/scholar-verify` | Two-stage analysis-to-manuscript consistency verification (4-agent panel: numerics, figures, logic, completeness) |
@@ -206,11 +206,16 @@ This one prompt builds the entire knowledge base automatically from your PDFs.
 /scholar-conceptual theorize typology of immigrant civic engagement
 /scholar-openai full output/scripts/
 
-# Knowledge graph
+# Knowledge graph (8 modes)
 /scholar-knowledge ingest from zotero collection segregation
+/scholar-knowledge ingest from url https://arxiv.org/abs/2402.12345
+/scholar-knowledge ingest from output output/lit-review-2026-04.md
 /scholar-knowledge search theories of spatial assimilation
 /scholar-knowledge relate Massey 1993 contradicts Clark 1986
 /scholar-knowledge status
+/scholar-knowledge compile                                 # build Obsidian wiki
+/scholar-knowledge ask what are the main mechanisms linking segregation and health?
+/scholar-knowledge re-extract all abstract_only            # upgrade when PDFs arrive
 /scholar-knowledge export for mobility-health project
 
 # Extended pipeline

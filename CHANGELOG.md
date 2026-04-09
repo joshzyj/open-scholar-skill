@@ -3,6 +3,21 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.8.0] - 2026-04-03
+
+### Added
+- **scholar-knowledge MODE 6 COMPILE**: Generate a browsable Obsidian-compatible markdown wiki from the NDJSON graph. Produces paper pages, concept pages, auto-clustered topic pages, `contradictions.md`, `gaps.md`, and an `index.md` dashboard, plus a networkx/matplotlib knowledge map PNG. Uses `[[wikilinks]]` throughout for Obsidian graph view. Auto-detects incremental vs full rebuild (pass `full` to force rebuild). Wiki is auto-maintained incrementally on every ingest — the LLM writes and updates the wiki, users rarely touch it directly (Karpathy principle).
+- **scholar-knowledge MODE 7 ASK**: Answer complex research questions against the *compiled wiki* (not raw NDJSON) for synthesized answers. Saves answers to `wiki/answers/` as a feedback loop. Assigns confidence levels based on graph coverage. Supports comparative, mechanistic, and synthesis questions.
+- **scholar-knowledge MODE 8 RE-EXTRACT**: Re-run extraction on archived raw sources. Upgrades papers from `abstract_only → full_pdf` when PDFs become available, or applies new schema fields to existing papers without re-downloading.
+- **Raw source storage layer** (`raw/` subdirectory): `raw/pdfs/` (Zotero symlinks), `raw/abstracts/`, `raw/api-responses/`, `raw/web/` (URL ingest), `raw/images/` (PDF figure extraction). Append-only archive. New paper-node fields: `raw_path`, `extraction_tier`.
+- **New ingest sources**: `from url [URL]` (web-based papers, arXiv, etc.) and `from output [path]` (lit-review and analyze outputs).
+- **Cross-skill write-back hooks**: findings/results auto-flow back into the knowledge graph from scholar-analyze, scholar-lit-review, scholar-compute, and scholar-respond.
+- **Obsidian setup guide**: `.claude/skills/scholar-knowledge/references/obsidian-setup.md` — recommended vault config for browsing the compiled wiki.
+
+### Changed
+- **scholar-knowledge**: Expanded from 5 modes to 8 modes. `SKILL.md` grew from ~160 to ~1,100 lines (+934).
+- **README.md, USAGE.md**: Updated to document the 8-mode scholar-knowledge architecture, wiki/ask/re-extract flows, raw storage, new ingest sources, and cross-skill write-back hooks.
+
 ## [5.7.0] - 2026-03-22
 
 ### Added

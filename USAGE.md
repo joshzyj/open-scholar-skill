@@ -57,7 +57,7 @@ The text after the skill name is passed directly as context. The more specific t
 | `/scholar-compute` | NLP / ML / networks / life2vec (11 modules) | `STM topic model on news corpus` or `life2vec on PSID panel` or `dml effect of X on Y` |
 | `/scholar-write` | Drafting sections | `introduction on segregation and health for ASR` |
 | `/scholar-citation` | Citations and references | `insert ASA citations and build reference list` |
-| `/scholar-knowledge` | Manage cross-project knowledge graph of findings, theories, mechanisms | `ingest output/lit-review-*.md` or `search racial segregation health` |
+| `/scholar-knowledge` | 8-mode knowledge graph: ingest / search / relate / status / export / compile (Obsidian wiki) / ask (Q&A) / re-extract | `compile` to build wiki, then `ask what are the main theories of segregation?` |
 | `/scholar-journal` | Submission prep | `prepare manuscript for Demography` |
 | `/scholar-open` | Preregistration / data sharing | `preregistration for FE panel study` |
 | `/scholar-replication` | Build & test replication package | `full for Demography` |
@@ -515,53 +515,99 @@ Saves 2–3 files to `output/citations/` (+ optional `.bib` in EXPORT mode):
 ```
 /scholar-knowledge ingest from zotero collection segregation
 /scholar-knowledge ingest doi 10.1093/sf/soaa123
+/scholar-knowledge ingest from url https://arxiv.org/abs/2402.12345
+/scholar-knowledge ingest from output output/lit-review-2026-04.md
 /scholar-knowledge search theories of spatial assimilation
 /scholar-knowledge search methods difference-in-differences
 /scholar-knowledge relate Massey 1993 contradicts Clark 1986
 /scholar-knowledge status
 /scholar-knowledge export for mobility-health project as markdown
+/scholar-knowledge compile                                    # build Obsidian-compatible wiki
+/scholar-knowledge compile full                                # force full rebuild (default: incremental)
+/scholar-knowledge ask what are the main theories of segregation?
+/scholar-knowledge ask compare mechanisms in Massey 1993 vs Clark 1986
+/scholar-knowledge re-extract all abstract_only                # upgrade papers when PDFs become available
+/scholar-knowledge re-extract doi 10.1093/sf/soaa123           # re-run extraction on one paper
 ```
 
 A **user-scoped, cross-project knowledge graph** that persists extracted intellectual content — findings, mechanisms, theories, methods, and inter-paper relationships — across projects and sessions. Stored at `~/.claude/scholar-knowledge/` (configurable via `SCHOLAR_KNOWLEDGE_DIR`). Layers on top of Zotero: Zotero stores bibliographic metadata; the knowledge graph stores what you've extracted and learned from each paper.
 
-**Data model:** Three NDJSON files — `papers.ndjson` (paper metadata + extracted findings/theories/methods), `concepts.ndjson` (theories, methods, mechanisms as nodes), `edges.ndjson` (inter-paper and paper-concept relationships).
+**Data model:** Three NDJSON files plus a raw source archive:
+- `papers.ndjson` — paper metadata + extracted findings/theories/methods (now with `raw_path`, `extraction_tier`, `limitations`, `future_directions` fields)
+- `concepts.ndjson` — theories, methods, mechanisms as nodes
+- `edges.ndjson` — inter-paper and paper-concept relationships
+- `raw/` — append-only archive: `pdfs/` (Zotero symlinks), `abstracts/`, `api-responses/`, `web/` (URL ingest), `images/` (PDF figure extraction)
+- `wiki/` — compiled Obsidian-compatible markdown wiki (MODE 6 output)
 
-#### Five modes
+#### Eight modes
 
 **`ingest`** — Add papers and extract intellectual content:
-- Sources: Zotero (by collection, tag, or search), PDF files, DOI lookup, lit-review output files, or manual entry
-- Extracts: key findings, theoretical frameworks used, methods, mechanisms proposed, scope conditions
+- Sources: Zotero (collection/tag/search), PDF files, DOI lookup, **URL (`from url [URL]`)**, **lit-review or analyze output files (`from output [path]`)**, manual entry
+- Extracts: key findings, theoretical frameworks, methods, mechanisms, scope conditions, limitations, future directions
+- Archives raw sources into `raw/` and records `extraction_tier` (`abstract_only` / `full_pdf`)
 - Deduplicates against existing graph entries
+- Auto-updates the compiled wiki incrementally after each ingest (Karpathy principle: the LLM maintains the wiki, users rarely touch it directly)
 
 **`search`** — Query the knowledge graph:
-- By topic, author, theory, method, or finding
-- Special queries: `contradictions` (find contested findings), `gaps` (find under-studied areas), `methods for [topic]`
+- By topic, author, theory, method, finding, limitations, or future directions
+- Special queries: `contradictions`, `gaps`, `methods for [topic]`, `limitations of [topic]`, `opportunities in [topic]`
 - Returns structured results with paper metadata + extracted content
 
 **`relate`** — Add or view inter-paper relationships:
 - Relationship types: `cites`, `contradicts`, `extends`, `replicates`, `uses-method`, `uses-theory`
-- View all relationships for a given paper or between two papers
+- View relationships for a given paper or between two papers
 - Build citation chains and theoretical lineages
 
 **`status`** — Graph statistics and coverage dashboard:
-- Total papers, concepts, and edges
-- Coverage by topic area, theory, and method
-- Recent additions
-- Gap analysis: topics with few papers, theories with no empirical tests
+- Total papers, concepts, edges; wiki page count; last compiled timestamp
+- Coverage by topic, theory, and method; recent additions; gap analysis
 
 **`export`** — Export a project-specific subset:
-- Formats: markdown summary, NDJSON (for programmatic use), BibTeX (bibliography only)
+- Formats: markdown summary, NDJSON, BibTeX
 - Filter by topic, date range, theory, or method
-- Useful for generating project-specific literature summaries
+
+**`compile`** (MODE 6) — **Generate a browsable Obsidian-compatible markdown wiki** from the NDJSON graph:
+- **Paper pages** (`wiki/papers/[slug].md`) — one per paper, with extracted findings, theories, methods, `[[wikilinks]]` to concepts and related papers
+- **Concept pages** (`wiki/concepts/`) — theories, methods, and mechanisms, with backlinks to every paper that uses them
+- **Topic clusters** (`wiki/topics/`) — auto-clustered topic pages built from paper similarity
+- **`wiki/index.md`** — master dashboard (total counts, newest papers, hot topics)
+- **`wiki/contradictions.md`** — aggregated list of papers with contradicting findings
+- **`wiki/gaps.md`** — aggregated research gaps and future directions
+- **Knowledge map** (`wiki/knowledge-map.png`) — networkx/matplotlib visualization
+- Auto-detects **incremental** (only papers since last compile) vs **full rebuild**; pass `full` to force a full rebuild
+- Open the resulting `wiki/` folder in **Obsidian** to use graph view and backlink navigation
+
+**`ask`** (MODE 7) — **Answer complex research questions against the compiled wiki**:
+- Reads the synthesized wiki (not raw NDJSON), so answers cite paper pages and concept pages
+- Supports comparative, mechanistic, and synthesis questions ("compare X vs Y", "why does Z happen?", "summarize evidence on …")
+- Assigns a confidence level based on graph coverage (how many papers and concepts ground the answer)
+- Saves answers to `wiki/answers/[slug].md` so they become part of the wiki — a feedback loop where Q&A enriches the knowledge base
+
+**`re-extract`** (MODE 8) — **Re-run extraction on archived raw sources**:
+- Upgrade papers from `abstract_only → full_pdf` when the PDF becomes available (e.g., after Zotero import)
+- Apply new schema fields to existing papers (e.g., when `limitations` or `future_directions` were added to the extraction template)
+- Operates on the raw archive, so nothing needs to be re-downloaded
 
 #### Integration with other skills
 
-The knowledge graph is automatically queried by 5 skills when it exists (all hooks are guarded — skills work identically without it):
+The knowledge graph is automatically queried and **written back to** by downstream skills when it exists (all hooks are guarded — skills work identically without it):
+
+**Query hooks:**
 - **scholar-lit-review** (Step 1a-pre): checks graph before web search
 - **scholar-lit-review-hypothesis** (Step 0b-pre): checks graph before web search
 - **scholar-write** (Step 0 Tier 0): pulls relevant findings/theories for drafting context
 - **scholar-hypothesis** (pre-search): retrieves theoretical frameworks and mechanisms
 - **scholar-citation** (Tier 0.5): unified `scholar_search()` queries graph before Zotero
+
+**Cross-skill write-back hooks** (new in v5.8.0):
+- **scholar-analyze** — findings auto-ingest into the graph as they're generated
+- **scholar-lit-review** — reviewed papers and synthesized findings flow back into the graph
+- **scholar-compute** — computational results and method metadata feed the graph
+- **scholar-respond** — reviewer-informed revisions update existing paper nodes
+
+#### Obsidian setup
+
+See `.claude/skills/scholar-knowledge/references/obsidian-setup.md` for the recommended Obsidian vault setup. Point Obsidian at `~/.claude/scholar-knowledge/wiki/` (or your `$SCHOLAR_KNOWLEDGE_DIR/wiki/`) to browse paper pages, concept pages, and the backlink graph.
 
 #### Configuration
 

@@ -52,7 +52,7 @@ open-scholar-skill/
     └── agents/                  # 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 ```
 
-**Version**: v5.7.0 — 28 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
+**Version**: v5.8.0 — 28 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 
 ---
 
