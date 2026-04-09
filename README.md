@@ -6,6 +6,8 @@
 
 A Claude Code project for social scientists writing for top-tier journals. Covers the full research pipeline from literature synthesis to submission-ready manuscripts.
 
+> **If you use open-scholar-skill, please cite [Zhang (2026), arXiv:2602.22401](https://arxiv.org/abs/2602.22401).** See the [Citation](#citation) section below for the full reference and BibTeX.
+
 ## Ethical Use of AI in Academic Research
 
 Open-scholar-skill is designed to **assist** researchers, not replace them. If you use this tool in your research, we strongly encourage the following practices:
@@ -318,3 +320,23 @@ Research Question
        │
        └─► /scholar-collaborate       ← Multi-author collaboration (CRediT, tasks, mentoring)
 ```
+
+## Citation
+
+If you use **open-scholar-skill** in your research, teaching, or any derivative work, please cite the paper that introduces it:
+
+> Zhang, Yongjun. 2026. "Vibe Researching as Wolf Coming: Can AI Agents with Skills Replace or Augment Social Scientists?" *arXiv preprint* [arXiv:2602.22401](https://arxiv.org/abs/2602.22401).
+
+BibTeX:
+
+```bibtex
+@article{zhang2026vibe,
+  title   = {Vibe Researching as Wolf Coming: Can AI Agents with Skills Replace or Augment Social Scientists?},
+  author  = {Zhang, Yongjun},
+  journal = {arXiv preprint arXiv:2602.22401},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2602.22401}
+}
+```
+
+A citation helps sustain development of the skill suite and signals to journals and reviewers that AI-assisted workflows used here have a documented methodological basis.
