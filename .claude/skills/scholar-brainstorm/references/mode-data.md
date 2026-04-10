@@ -206,7 +206,7 @@ Awaiting your selection (Y / B / C / A):
 - All data operations via `Rscript -e "..."` in Bash — only aggregated output (summary stats, coefficients, p-values) enters context
 - Step 1 data loading: summary only (no `head()` output)
 - Step 2 variable profiling: `skimr::skim()` output only
-- Step 4b empirical tests: entire R script via single `Rscript -e` call
+- Step 4b empirical tests: write the R script to `${PROJ}/scripts/brainstorm-signal-tests.R` via the Write tool, then execute via `Rscript <path>` (file-based, NOT `Rscript -e` heredoc). The script itself must not call `head(df)`, `print(df)`, or any other forbidden verb — only the aggregated `signal_results` tibble prints to stdout, which is the only thing that enters Claude's context.
 
 ---
 
@@ -456,6 +456,33 @@ Present as a numbered table:
 
 Use [references/brainstorm-patterns.md](references/brainstorm-patterns.md) Section 8 for test selection and effect size thresholds.
 
+**MANDATORY: Save the signal-test script to disk BEFORE executing it.** Every DATA-mode invocation must leave behind a reproducible, protocol-compliant R script at:
+
+```
+${PROJ}/scripts/brainstorm-signal-tests.R
+```
+
+This holds in every `SAFETY_STATUS` branch — `CLEARED`, `OVERRIDE`, `ANONYMIZED`, **and `LOCAL_MODE`**. The script is then executed via `Rscript <path>` (file-based, never via `Rscript -e "..."` heredoc), so the exact code that produced the Empirical Signal Table is preserved for:
+- scholar-replication BUILD (which expects analysis scripts under `${PROJ}/scripts/`)
+- scholar-code-review (which audits all analysis scripts in a project)
+- Any downstream re-running or debugging of the signal tests
+
+**Why this is MANDATORY even though Step 4b is exploratory:** the broader scholar-skill ecosystem assumes every data-touching operation leaves a persistent script. An inline Rscript heredoc produces correct numbers but no auditable artifact, which silently breaks reproducibility downstream.
+
+**Protocol-compliance checklist — every generated script MUST satisfy ALL of:**
+
+1. Uses `effectsize::cohens_d()`, `effectsize::eta_squared()`, `effectsize::cramers_v()` (NOT base R shortcuts). Pearson `r` may use `cor.test()`.
+2. Every test is wrapped in `tryCatch()` so a single failing candidate cannot crash the rest of the run — failed tests are recorded with `test_type = "ERROR"` and `signal = paste("Error:", e$message)`.
+3. Builds the `signal_results` tibble with the EXACT columns specified below: `rq`, `x_var`, `y_var`, `test_type`, `estimate`, `effect_size`, `effect_value`, `p_value`, `n_obs`, `signal`.
+4. Applies the EXACT signal-rating thresholds from the `case_when()` block below — do NOT rate by eye. The thresholds are:
+   - **STRONG**: `p < 0.01` AND medium-or-larger effect (|r|≥0.3, |d|≥0.5, η²≥0.06, |AME|≥0.05, V≥0.3, |log(IRR)|≥0.3)
+   - **MODERATE**: `p < 0.05` AND small-or-larger effect (|r|≥0.1, |d|≥0.2, η²≥0.01, |AME|≥0.02, V≥0.1, |log(IRR)|≥0.1)
+   - **MECHANISM PLAUSIBLE**: `test_type == "correlation_chain"` AND `p < 0.10`
+   - **MODERATION DETECTED**: `test_type == "interaction"` AND `p < 0.10`
+   - **WEAK**: `p < 0.10` with effect below MODERATE thresholds
+   - **NULL**: `p ≥ 0.10`
+   - **UNTESTABLE**: `p_value` or `effect_value` is `NA`
+
 **Test selection matrix** (Y-type × X-type → test + effect size):
 
 | Y type | X type | Test | Effect size |
@@ -470,7 +497,18 @@ Use [references/brainstorm-patterns.md](references/brainstorm-patterns.md) Secti
 | Any | Mechanism M | Correlation chain | r(X,M) + r(M,Y) |
 | Any | Moderator W | Interaction term | p(X:W) |
 
-**Generate a SINGLE R script** that tests all 15-20 candidates (not 20 separate Bash calls). Each test is wrapped in `tryCatch()` for graceful error handling:
+**Generate a SINGLE R script** that tests all 15-20 candidates (not 20 separate Bash calls). Each test is wrapped in `tryCatch()` for graceful error handling.
+
+**Step 4b.i — Derive the output path and create the scripts directory:**
+
+```bash
+# ── Derive ${PROJ} via the canonical helper ──
+. "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh"
+mkdir -p "${PROJ}/scripts"
+echo "Signal-test script will be saved to: ${PROJ}/scripts/brainstorm-signal-tests.R"
+```
+
+**Step 4b.ii — Write the script to disk using the Write tool** (NOT via Bash heredoc). The Write tool call must target exactly `${PROJ}/scripts/brainstorm-signal-tests.R`. The script body is the protocol-compliant template below, with one `tryCatch()` block per candidate RQ filled in from the test-selection matrix:
 
 ```r
 # ── Quick Empirical Signal Tests ──
@@ -557,7 +595,20 @@ cat("\n===== EMPIRICAL SIGNAL TABLE =====\n\n")
 print(signal_results |> select(rq, x_var, y_var, test_type, effect_size, effect_value, p_value, n_obs, signal), n = Inf)
 ```
 
-If `SAFETY_STATUS=LOCAL_MODE`, wrap the **entire script** in a single `Rscript -e "..."` via Bash. Only the printed summary table (aggregated coefficients and p-values) enters Claude's context.
+**Step 4b.iii — Execute the saved script** (same invocation in every `SAFETY_STATUS` branch, including `LOCAL_MODE`):
+
+```bash
+# ── Derive ${PROJ} again — shell variables do NOT persist across Bash calls ──
+. "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh"
+SCRIPT_PATH="${PROJ}/scripts/brainstorm-signal-tests.R"
+LOG_PATH="${PROJ}/scripts/brainstorm-signal-tests.log"
+
+# Execute the file (NOT Rscript -e heredoc) so the persistent artifact is
+# exactly what ran, and stdout is teed to a log for the process record.
+Rscript "${SCRIPT_PATH}" 2>&1 | tee "${LOG_PATH}"
+```
+
+**LOCAL_MODE note:** file-based execution satisfies the LOCAL_MODE contract — only the aggregated `signal_results` tibble printed by the script enters Claude's context; raw rows never do, because the script itself does not call `head(df)`, `print(df)`, or any forbidden verb. The persistent script path (`${PROJ}/scripts/brainstorm-signal-tests.R`) is REQUIRED even in LOCAL_MODE; the old "wrap in `Rscript -e` heredoc" pattern is deprecated because it left no auditable artifact for scholar-replication or scholar-code-review.
 
 **Present the results:**
 

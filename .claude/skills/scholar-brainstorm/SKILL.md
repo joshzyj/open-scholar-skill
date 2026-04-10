@@ -248,7 +248,12 @@ Before finalizing, verify:
 - [ ] **All 6 generation strategies applied** — not just Y-first; check that strategies B-F were used
 - [ ] **15-20 candidates generated** — not fewer; diversity across strategies
 - [ ] **Empirical signal tests ran** (DATA mode) — single R script for all candidates; effect sizes and p-values reported; signal ratings assigned
-- [ ] **Empirical signal tests skipped cleanly** (MATERIALS mode) — Step 4b noted as skipped
+- [ ] **Signal-test R script saved to disk** (DATA mode) — `output/[slug]/scripts/brainstorm-signal-tests.R` exists; written via Write tool in Step 4b.ii; REQUIRED in every `SAFETY_STATUS` branch including `LOCAL_MODE`. Script was executed via `Rscript <path>`, NOT `Rscript -e "..."` heredoc.
+- [ ] **Signal-test script uses effectsize package** (DATA mode) — `effectsize::cohens_d()`, `effectsize::eta_squared()`, `effectsize::cramers_v()` — NOT base R shortcuts (`cor.test` is allowed for Pearson `r`).
+- [ ] **Every signal test wrapped in tryCatch()** (DATA mode) — failed tests recorded as `test_type = "ERROR"` with `signal = paste("Error:", e$message)`, so one failing candidate cannot crash the run.
+- [ ] **signal_results tibble uses exact protocol columns** (DATA mode) — `rq, x_var, y_var, test_type, estimate, effect_size, effect_value, p_value, n_obs, signal`.
+- [ ] **Signal ratings use exact protocol thresholds** (DATA mode) — STRONG (p<0.01 AND medium+ effect), MODERATE (p<0.05 AND small+ effect), MECHANISM PLAUSIBLE, MODERATION DETECTED, WEAK (p<0.10 tiny), NULL (p≥0.10), UNTESTABLE — assigned via `case_when()` in the script, NOT by eye.
+- [ ] **Empirical signal tests skipped cleanly** (MATERIALS mode) — Step 4b noted as skipped; no script written
 - [ ] **Effect size thresholds used** (DATA mode) — not just p-values; Cohen's conventions applied
 - [ ] **Signal caveats displayed** (DATA mode) — bivariate-only, multiple testing, NULL ≠ uninteresting
 - [ ] **Scoring weights match mode** — DATA: 6 criteria (20% signal weight); MATERIALS/PAPER: 5 criteria (no signal)
