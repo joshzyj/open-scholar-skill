@@ -62,15 +62,60 @@ The user has provided: `$ARGUMENTS`
 
 Parse to identify:
 1. **Mode**: `draft` (default) | `revise` (user provides existing text) | `polish` (final editing pass)
-2. **Section**: Introduction, Theory/Background, Data and Methods, Results, Discussion/Conclusion, Abstract, or full paper
+2. **Section**: Introduction, Theory/Background, Data and Methods, Results, Discussion/Conclusion, Abstract, full paper, or **book-chapter** (when called from scholar-book)
 3. **Topic / content**: the substantive topic and any data or findings to draw on
 4. **Target journal**: ASR, AJS, Demography, Science Advances, NHB, NCS — or infer from context
+5. **Word budget override**: If a numeric word budget is passed (e.g., from scholar-book's outline), use it instead of journal-default word limits
+
+**No-journal mode:** If no target journal is specified or inferrable (common when called from scholar-book for book chapters), skip journal-specific formatting rules, word limits, and section conventions. Use the word budget from arguments if provided. Write in general academic prose appropriate for a university press monograph.
 
 If existing text is provided by the user, activate **REVISE** or **POLISH** mode. If no text is provided, activate **DRAFT** mode.
 
 ---
 
 ## Step 0: Load Writing Protocol (ALWAYS DO FIRST)
+
+### 0a-safety. Data Safety Sidecar Check (Tier B)
+
+Drafting the Results section often reads `output/tables/results-*.csv` or similar aggregated files. These are normally safe — they're derived outputs from scholar-analyze. But scholar-write also has a REVISE mode that can be pointed at `output/` more broadly, and it may encounter raw data files there. The Tier B gate consults `.claude/safety-status.json` before any Read call targeting a user data file and refuses `NEEDS_REVIEW:*`, `HALTED`, or `LOCAL_MODE`. See `_shared/tier-b-safety-gate.md` for the full policy.
+
+This step is a **no-op** when `.claude/safety-status.json` does not exist. The PreToolUse hook is the mechanical backstop either way.
+
+```bash
+# ── Step 0a-safety: Tier B sidecar check ──
+# FILE_ARGS = any data-file paths passed in $ARGUMENTS (not manuscripts,
+# drafts, or reference docs — those are always safe to Read).
+SIDECAR=".claude/safety-status.json"
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  UNSAFE=""
+  for F in $FILE_ARGS; do
+    [ -f "$F" ] || continue
+    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
+          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
+    STATUS=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
+    [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
+    case "$STATUS" in
+      CLEARED|ANONYMIZED|OVERRIDE|"") ;;
+      NEEDS_REVIEW:*|HALTED|LOCAL_MODE) UNSAFE="${UNSAFE}
+  - $F → $STATUS" ;;
+    esac
+  done
+  if [ -n "$UNSAFE" ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-write refused because one or more input files are not
+safe for cloud AI processing:
+$UNSAFE
+
+scholar-write is a Tier B skill — it does not implement LOCAL_MODE dispatch.
+For the Results section narrative, Read the aggregated tables in
+output/tables/*.csv or output/tables/*.html instead of the raw data.
+HALTMSG
+    exit 1
+  fi
+fi
+```
+
+### 0b. Load Writing Protocol
 
 Load the pre-writing setup (article knowledge base, citation pool, artifact registry):
 
@@ -545,22 +590,21 @@ After saving the markdown draft (including appended tables and figures), convert
 **CRITICAL: Re-derive `$BASE` using the SAME version collision avoidance logic from Step 6.0.** Shell variables do NOT persist between Bash tool calls, so you MUST re-run the version check to get the same `$BASE` value. Copy the exact same `BASE=...` line you used in Step 6.0, then run the same `if/while` check:
 
 ```bash
-# RE-DERIVE $BASE — shell state does NOT persist between Bash calls
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-# BASE pattern: ${OUTPUT_ROOT}/drafts/draft-[section]-[slug]-[YYYY-MM-DD]
-OUTDIR="$(dirname "${OUTPUT_ROOT}/drafts/draft-[section]-[slug]-[YYYY-MM-DD]")"
-STEM="$(basename "${OUTPUT_ROOT}/drafts/draft-[section]-[slug]-[YYYY-MM-DD]")"
-mkdir -p "$OUTDIR"
-bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
+# CRITICAL: Replace [saved-md-path] with the EXACT path you used in the Write tool call above.
+# This derives BASE from the actual saved file — no version-check re-derivation needed.
+MD_FILE="[saved-md-path]"
+BASE="${MD_FILE%.md}"
 echo "Converting: ${BASE}.md -> .docx, .tex, .pdf"
 
 # Detect .bib file for citation processing
 BIB_FILE=""
 CITEPROC_FLAGS=""
+OUTDIR="$(dirname "$MD_FILE")"
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 for bib_candidate in "${OUTDIR}/references.bib" "${OUTPUT_ROOT}/citations/"*.bib "${OUTPUT_ROOT}/"*/citations/*.bib; do
   if [ -f "$bib_candidate" ]; then
     BIB_FILE="$(cd "$(dirname "$bib_candidate")" && pwd)/$(basename "$bib_candidate")"
-    CITEPROC_FLAGS="--citeproc --bibliography=\"$BIB_FILE\""
+    CITEPROC_FLAGS="--citeproc --bibliography=\"$BIB_FILE\" --metadata reference-section-title=\"References\""
     echo "Found .bib for citation processing: $BIB_FILE"
     break
   fi
@@ -616,8 +660,14 @@ Confirm all saved file paths to the user, including:
 ### Citation Integrity (ABSOLUTE — check before any other section)
 - [ ] **No fabricated citations** — every in-text citation verified via Verified Citation Pool (Step 0), CrossRef/Semantic Scholar/OpenAlex API, or carried from prior phases
 - [ ] **Step 4.5 post-draft verification completed** — all citations cross-checked against pool; unverified citations converted to `[CITATION NEEDED]`
+- [ ] **Step 4.5e claim verification completed** — all prose claims attributing findings to cited sources checked against KG/PDF; no CLAIM-REVERSED, CLAIM-MISCHARACTERIZED, CLAIM-OVERCAUSAL, or CLAIM-UNSUPPORTED markers remain
 - [ ] All unverifiable citations replaced with `[CITATION NEEDED: description]` markers
 - [ ] No guessed author names, years, volumes, pages, or DOIs
+
+**Run claim verification gate before saving:**
+```bash
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/verify-claims.sh" "[draft_path]"
+```
 - [ ] Citation source log completed (verification source noted for each inserted citation)
 - [ ] Post-draft verification summary included in writing log
 

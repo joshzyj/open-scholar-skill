@@ -96,6 +96,84 @@ Route to the matching workflow below. If multiple keywords appear, execute workf
 
 ---
 
+## Step 0 — Scholar-init Sidecar Check (MANDATORY, blocking)
+
+Before the anonymization gate below, consult `.claude/safety-status.json` if the project was initialized via `/scholar-init`. The sidecar is the authoritative source of safety decisions for every file in the project, and qualitative data (transcripts, interviews, field notes, audio/video) is the single most sensitive category the skill suite handles.
+
+**If the project was not initialized via `/scholar-init`**, the sidecar will not exist — skip this section and proceed to the MANDATORY PRE-STEP anonymization gate below. The PreToolUse data-safety hook (`scripts/gates/pretooluse-data-guard.sh`) remains the mechanical backstop.
+
+**If `.claude/safety-status.json` exists**, run the following check for every transcript / field-note / data file path in `$ARGUMENTS`:
+
+```bash
+# ── Step 0: scholar-init sidecar check (qualitative) ──
+# FILE_ARGS = space-separated list of transcript/data paths from $ARGUMENTS
+SIDECAR=".claude/safety-status.json"
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  UNSAFE=""
+  ANON_REDIRECT=""
+  for F in $FILE_ARGS; do
+    [ -f "$F" ] || continue
+    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
+          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
+    STATUS=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
+    [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
+    case "$STATUS" in
+      ANONYMIZED)
+        # Sidecar says an anonymized derivative exists. Redirect the workflow
+        # to read the derivative, never the raw transcript.
+        ANON_REDIRECT="${ANON_REDIRECT}
+  - $F → ANONYMIZED (Read the anonymized derivative in output/qual/anonymized/, not the raw file)" ;;
+      CLEARED)
+        # Unusual for qualitative data. Warn the user that raw transcripts
+        # were marked CLEARED — this is almost always wrong for interviews.
+        echo "⚠  WARNING: $F marked CLEARED in sidecar. Qualitative data is almost never genuinely CLEARED — consider re-running /scholar-init review." >&2 ;;
+      OVERRIDE)
+        # Text transcripts (.txt/.md/.docx) can be OVERRIDE'd. Audio/video
+        # formats (.wav/.mp3/.mp4/.eaf/.textgrid/.cha/.praat) are refused by
+        # the PreToolUse hook regardless of sidecar status — do not retry.
+        echo "⚠  $F → OVERRIDE. Proceeding, but all quotes must be stripped of identifying details before entering any write-up." >&2 ;;
+      LOCAL_MODE)
+        # Scholar-qual workflows fundamentally require reading transcript
+        # text. LOCAL_MODE (Bash-only aggregated output) is incompatible
+        # with open-coding, axial coding, thematic analysis, etc.
+        UNSAFE="${UNSAFE}
+  - $F → LOCAL_MODE  (scholar-qual cannot operate on LOCAL_MODE files — qualitative coding requires reading transcript text. Run /scholar-init review and downgrade to ANONYMIZED after anonymization, or use /scholar-compute for Bash-only text analytics)" ;;
+      NEEDS_REVIEW:*)
+        UNSAFE="${UNSAFE}
+  - $F → $STATUS  (run: /scholar-init review)" ;;
+      HALTED)
+        UNSAFE="${UNSAFE}
+  - $F → HALTED  (off-limits — do not proceed under any circumstances)" ;;
+      "") ;;  # unregistered — fall through to the anonymization PRE-STEP
+      *)
+        UNSAFE="${UNSAFE}
+  - $F → $STATUS  (unrecognized; resolve via /scholar-init review)" ;;
+    esac
+  done
+  if [ -n "$UNSAFE" ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-qual Step 0 sidecar check refused the following file(s):
+$UNSAFE
+
+See _shared/data-handling-policy.md for the full SAFETY_STATUS state machine.
+HALTMSG
+    exit 1
+  fi
+  if [ -n "$ANON_REDIRECT" ]; then
+    cat >&2 <<ANONMSG
+ℹ  scholar-qual Step 0: anonymized derivatives exist for the following file(s).
+All subsequent workflow steps will operate on the derivatives, not the raw files.
+$ANON_REDIRECT
+ANONMSG
+  fi
+  echo "✓ scholar-qual Step 0: sidecar check complete"
+fi
+```
+
+**Handshake semantics:** If the sidecar already classifies every input file, the MANDATORY PRE-STEP anonymization gate below still runs but skips re-scanning files whose status is `ANONYMIZED` or `OVERRIDE`. Files marked `CLEARED` with warnings should still be scanned by Presidio to catch missed identifiers. This way `/scholar-init` decisions and scholar-qual's own gate compose: the sidecar sets the floor, the anonymization gate adds belt-and-suspenders for the most sensitive data category in the suite.
+
+---
+
 ## MANDATORY PRE-STEP: Data Anonymization Gate
 
 **Before ANY workflow processes qualitative data through AI (Claude Code, LLM-coding, or any API-based tool), the data MUST be anonymized first.** This is non-negotiable for protecting participant confidentiality when data passes through external AI services.
@@ -110,6 +188,71 @@ Route to the matching workflow below. If multiple keywords appear, execute workf
 - User explicitly confirms data contains no identifiable information
 
 ### Anonymization Procedure
+
+Two backends are available. The Presidio backend (NER + patterns) is preferred when installed; the regex fallback always works.
+
+**Check which backend is available:**
+
+```bash
+SCHOLAR_SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}"
+ANON_SCRIPT="$SCHOLAR_SKILL_DIR/scripts/gates/anonymize-presidio.py"
+if [ -f "$ANON_SCRIPT" ] && python3 -c "import presidio_analyzer, presidio_anonymizer" 2>/dev/null; then
+  echo "BACKEND: Presidio (NER + patterns)"
+  ANON_BACKEND="presidio"
+else
+  echo "BACKEND: Regex fallback (install Presidio for NER-based detection: pip install presidio-analyzer presidio-anonymizer spacy && python3 -m spacy download en_core_web_lg)"
+  ANON_BACKEND="regex"
+fi
+```
+
+#### Path A: Presidio Backend (preferred)
+
+When Presidio is available, use `anonymize-presidio.py` for all steps. It provides NER-based person/location/institution detection that regex cannot match.
+
+**Step A: Scan for identifiers** (local, no data sent to AI):
+
+```bash
+python3 "$SCHOLAR_SKILL_DIR/scripts/gates/anonymize-presidio.py" scan "$DATA_FILE"
+```
+
+This uses spaCy NER to detect person names, locations, institutions, emails, phones, SSNs, and research-specific entities (HIPAA, DOB). Reports each detection with confidence scores.
+
+**Step B: Generate pseudonym key** from detections:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+python3 "$SCHOLAR_SKILL_DIR/scripts/gates/anonymize-presidio.py" keygen "$DATA_FILE" --out "${OUTPUT_ROOT}/qual/anonymized"
+```
+
+Creates `pseudonym-key-DO-NOT-SHARE.csv` with auto-generated pseudonyms (P01, LOC01, ORG01, etc.) and confidence scores. **The user MUST review this key** — edit pseudonyms, remove false positives, and add any entities the NER model missed (e.g., unique life events, nicknames, small-town names).
+
+**Step C: Anonymize** — apply pseudonym mapping and residual scrubbing:
+
+```bash
+python3 "$SCHOLAR_SKILL_DIR/scripts/gates/anonymize-presidio.py" anonymize "$DATA_FILE" --out "${OUTPUT_ROOT}/qual/anonymized"
+```
+
+Produces `ANON_<filename>` in the output directory. If a user-edited pseudonym key exists, it takes priority over auto-detected mappings.
+
+**Step D: Verify** — re-scan the anonymized file to confirm no PII remains:
+
+```bash
+python3 "$SCHOLAR_SKILL_DIR/scripts/gates/anonymize-presidio.py" verify "${OUTPUT_ROOT}/qual/anonymized/ANON_$(basename "$DATA_FILE")"
+```
+
+If residual PII is found, update the pseudonym key and re-run anonymization.
+
+**Step E: Swap data path.** All subsequent workflow steps MUST use the anonymized files:
+
+```bash
+ANON_DATA_DIR="${OUTPUT_ROOT}/qual/anonymized"
+echo "All workflows will use anonymized data from: $ANON_DATA_DIR"
+ls "$ANON_DATA_DIR"/ANON_* 2>/dev/null || echo "ERROR: No anonymized files found. Run anonymization before proceeding."
+```
+
+#### Path B: Regex Fallback
+
+When Presidio is not installed, use the regex-based procedure below. Note: regex cannot detect person names or institutions by context — only by pattern (capitalized word pairs, known suffixes). Review results carefully.
 
 **Step A: Scan for identifiers.** Before reading any data file, run a local scan (does NOT send data to AI):
 
@@ -141,7 +284,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 ANON_DIR="${OUTPUT_ROOT}/qual/anonymized"
 mkdir -p "$ANON_DIR"
 cat > "${ANON_DIR}/pseudonym-key-DO-NOT-SHARE.csv" << 'KEYHEADER'
-original,pseudonym,type,notes
+original,pseudonym,type,confidence,notes
 KEYHEADER
 echo "Pseudonym key created: ${ANON_DIR}/pseudonym-key-DO-NOT-SHARE.csv"
 echo "WARNING: This key file links real identities to pseudonyms. Store securely and NEVER commit to git or share via AI tools."

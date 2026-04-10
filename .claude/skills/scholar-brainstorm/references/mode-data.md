@@ -8,7 +8,64 @@ This file contains the DATA mode workflow steps. MATERIALS mode reuses Steps 1-4
 
 **If MATERIALS mode: skip this step entirely.** Note in the process log: "Step 0 skipped — MATERIALS mode (no data files)." Set `SAFETY_STATUS=N/A` and proceed to Step 1.
 
-**If DATA mode:** Before reading any data file into context, run a local grep-only scan to detect PII, HIPAA, and restricted data markers. This reuses the scholar-safety SCAN pattern — only match counts are returned, never actual sensitive values.
+**If DATA mode:** Before running the in-skill grep scan below, first check whether the project was initialized via `/scholar-init`. If so, inherit the sidecar decisions and skip the re-scan — this is the scholar-init → scholar-brainstorm handshake, analogous to the one scholar-full-paper uses.
+
+**Step 0a — scholar-init handshake (skip rescan if sidecar exists):**
+
+```bash
+# ── Step 0a: scholar-init sidecar handshake ──
+# If .claude/safety-status.json already classifies every input file, inherit
+# the decisions and skip the redundant in-skill scan below. The PreToolUse
+# hook (scripts/gates/pretooluse-data-guard.sh) remains the mechanical backstop.
+SIDECAR=".claude/safety-status.json"
+SKIP_RESCAN=0
+INHERITED_STATUS=""
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  ALL_REGISTERED=1
+  HAS_UNSAFE=0
+  for F in $DATA_FILES; do
+    [ -f "$F" ] || continue
+    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
+          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
+    S=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
+    [ -z "$S" ] && S=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
+    if [ -z "$S" ]; then
+      ALL_REGISTERED=0; break
+    fi
+    case "$S" in
+      NEEDS_REVIEW:*|HALTED) HAS_UNSAFE=1 ;;
+    esac
+    # Remember the most-restrictive status seen; LOCAL_MODE wins over CLEARED.
+    case "$S" in
+      LOCAL_MODE) INHERITED_STATUS="LOCAL_MODE" ;;
+      ANONYMIZED) [ "$INHERITED_STATUS" != "LOCAL_MODE" ] && INHERITED_STATUS="ANONYMIZED" ;;
+      OVERRIDE)   [ -z "$INHERITED_STATUS" ] && INHERITED_STATUS="OVERRIDE" ;;
+      CLEARED)    [ -z "$INHERITED_STATUS" ] && INHERITED_STATUS="CLEARED" ;;
+    esac
+  done
+  if [ "$HAS_UNSAFE" -eq 1 ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-brainstorm DATA mode refused because .claude/safety-status.json
+contains NEEDS_REVIEW or HALTED entries for one or more input files.
+
+Run:  /scholar-init review
+…then re-invoke /scholar-brainstorm.
+HALTMSG
+    exit 1
+  fi
+  if [ "$ALL_REGISTERED" -eq 1 ]; then
+    SKIP_RESCAN=1
+    echo "✓ scholar-init sidecar covers all DATA files — inheriting SAFETY_STATUS=$INHERITED_STATUS"
+    echo "  Skipping the in-skill grep re-scan below."
+  fi
+fi
+```
+
+If `SKIP_RESCAN=1`, set `SAFETY_STATUS=$INHERITED_STATUS`, log `"Step 0 inherited from .claude/safety-status.json (scholar-init handshake)"` to the process log, and jump directly to Step 1. Otherwise, proceed with the grep scan below.
+
+**Step 0b — In-skill grep scan (fallback when no sidecar exists):**
+
+Before reading any data file into context, run a local grep-only scan to detect PII, HIPAA, and restricted data markers. This reuses the scholar-safety SCAN pattern — only match counts are returned, never actual sensitive values.
 
 **Run this scan for EACH data file** (single Bash block for all files):
 

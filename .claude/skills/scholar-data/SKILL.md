@@ -92,6 +92,49 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 ---
 
+## Step 0 — Data Safety Sidecar Check (Tier B)
+
+If `$ARGUMENTS` includes paths to existing user data files (e.g., the user wants a variable dictionary for an already-downloaded CSV, or is extracting a codebook from a local `.dta`), consult `.claude/safety-status.json` BEFORE any `Read` call. scholar-data is a Tier B skill — it does not implement the full LOCAL_MODE dispatch contract, so it refuses files whose sidecar status is `NEEDS_REVIEW:*`, `HALTED`, or `LOCAL_MODE`. See `_shared/tier-b-safety-gate.md` for the full policy.
+
+This step is a **no-op** when `$ARGUMENTS` contains no file paths (e.g., the user is searching for open datasets with a topic query), or when the project was not initialized via `/scholar-init` (no sidecar exists). The PreToolUse hook (`scripts/gates/pretooluse-data-guard.sh`) remains the mechanical backstop either way.
+
+```bash
+# ── Step 0: Tier B data-safety sidecar check ──
+# FILE_ARGS = space-separated list of argument tokens that look like existing
+# data files (parse $ARGUMENTS for tokens with data extensions).
+SIDECAR=".claude/safety-status.json"
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  UNSAFE=""
+  for F in $FILE_ARGS; do
+    [ -f "$F" ] || continue
+    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
+          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
+    STATUS=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
+    [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
+    case "$STATUS" in
+      CLEARED|ANONYMIZED|OVERRIDE|"") ;;
+      NEEDS_REVIEW:*) UNSAFE="${UNSAFE}
+  - $F → $STATUS  (run: /scholar-init review)" ;;
+      HALTED)         UNSAFE="${UNSAFE}
+  - $F → HALTED  (off-limits)" ;;
+      LOCAL_MODE)     UNSAFE="${UNSAFE}
+  - $F → LOCAL_MODE  (use /scholar-analyze or /scholar-eda — scholar-data is Tier B and does not implement LOCAL_MODE)" ;;
+      *)              UNSAFE="${UNSAFE}
+  - $F → $STATUS  (unrecognized; resolve via /scholar-init review)" ;;
+    esac
+  done
+  if [ -n "$UNSAFE" ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-data Step 0 refused the following file(s):
+$UNSAFE
+HALTMSG
+    exit 1
+  fi
+fi
+```
+
+---
+
 ## WORKFLOW 0: Secondary Data Source Directory
 
 Use when the user needs to identify the best existing dataset for a research question. Always run this workflow first if no data source has been specified.
@@ -164,7 +207,7 @@ Use when the user needs to identify the best existing dataset for a research que
 | Congressional Record | US, 1873– | Floor speeches, committee records | GovInfo / Voteview; free | Immediate |
 | Common Crawl | Web, petabyte-scale | Text from 3+ billion pages | commoncrawl.org; free | Immediate |
 | Google Trends | Global, 2004– | Search interest by topic/region | Google; free API | Immediate |
-| Twitter/X historical | Social media | Text, networks, metadata | Academic API (approval needed) | 2–4 weeks |
+| Twitter/X historical | Social media | Text, networks, metadata | X API v2 Pro+ ($5K/mo; Academic track discontinued Jan 2025) | 2–4 weeks |
 
 **Crime / criminal justice / substance use:**
 
@@ -596,7 +639,7 @@ def fetch_fbi_crime(api_key, offense="burglary", state="US", start=2015, end=202
    |------|--------|-------------|--------|-----------|
    | acs-tract-IL-2022.rds | tidycensus ACS 5-year | 2026-03-03 | 15,420 | medinc, pop, pct_bach, pct_poverty |
    ```
-3. **Log data status**: set `data-status: existing-data` and note `Data File(s): data/raw/[filename]`
+3. **Update PROJECT STATE**: set `data-status: existing-data` and `Data File(s): data/raw/[filename]`
 4. Proceed with all downstream skills in **DATA-AVAILABLE MODE** — no more `[CODE-TEMPLATE]` or `[PLACEHOLDER]`
 
 **If the download fails — API key missing (MOST COMMON):**
@@ -668,7 +711,7 @@ If the user provides a key:
 - Log the specific error message
 - If package missing: attempt `install.packages("[pkg]")` and retry once
 - If network error: inform user and fall back to `[CODE-TEMPLATE]`
-- Keep `data-status: no-data` and note the reason in the process log
+- Keep `data-status: no-data` and note the reason in PROJECT STATE
 
 ---
 
@@ -1265,7 +1308,7 @@ Before any scraping, review:
 ### Web Scraping: Legal and Ethical Checklist
 
 Before scraping, verify:
-- [ ] **Terms of Service**: Does the website/platform prohibit scraping? (Twitter/X: requires Academic API; Reddit: check API terms; LinkedIn: scraping prohibited)
+- [ ] **Terms of Service**: Does the website/platform prohibit scraping? (Twitter/X: Academic API discontinued Jan 2025, Pro tier $5K/mo required for full-archive; Reddit: check API terms; LinkedIn: scraping prohibited)
 - [ ] **robots.txt**: Check `[domain]/robots.txt` for crawl restrictions
 - [ ] **IRB review**: Does your institution consider public social media data as human subjects research? (Many do — check with your IRB)
 - [ ] **Rate limiting**: Implement polite crawling (≥1 second between requests; respect rate limits)
@@ -1276,7 +1319,7 @@ Before scraping, verify:
 **Platform-specific guidance**:
 | Platform | Access Method | Rate Limit | Key Restriction |
 |---|---|---|---|
-| Twitter/X | Academic API (apply) | 10M tweets/month | Must not share raw tweet text; share IDs only |
+| Twitter/X | X API v2 (Basic/Pro/Enterprise tiers; Academic Research track discontinued Jan 2025) | Varies by tier (Basic: 10K reads/mo free; Pro: 1M reads/mo $5K/mo) | Must not share raw tweet text; share IDs only; historical full-archive requires Pro+ |
 | Reddit | Reddit API (register app) | 60 req/min (OAuth) | Respect subreddit rules; user consent not required for public posts |
 | News sites | Web scraping + newspaper3k | Varies (check robots.txt) | Fair use for research; do not republish full text |
 | Congressional Record | congress.gov API | No strict limit | Public domain; no restrictions |
@@ -1291,7 +1334,7 @@ Always prefer an official API over HTML scraping. Prioritize by data type:
 
 | Platform | API / Access route | Package | Notes |
 |----------|--------------------|---------|-------|
-| Twitter / X | X API v2 (Academic Research track) | `academictwitteR` (R), `tweepy` (Py) | Approval required; $0 for academic; historical via full-archive search |
+| Twitter / X | X API v2 (Basic: free 10K reads/mo; Pro: $5K/mo 1M reads; Enterprise: custom; Academic Research track discontinued Jan 2025) | `academictwitteR` (R, limited to existing tokens), `tweepy` (Py) | Pro+ required for full-archive search; Basic tier severely rate-limited; consider Bluesky AT Protocol as alternative |
 | Reddit | Reddit API v2 + PRAW | `RedditExtractoR` (R), `praw` (Py) | Free; rate limits enforced; Pushshift archive restricted as of 2023 |
 | Facebook / Instagram | Meta Content Library (replaces CrowdTangle) | `contentid` + Meta API | Application required; access for academic researchers |
 | TikTok | TikTok Research API | REST + Python SDK | Application required; limited to public content |
@@ -1464,7 +1507,7 @@ with sync_playwright() as p:
 
     # Set academic user-agent
     page.set_extra_http_headers({
-        "User-Agent": "Academic research bot — J. Zhang, University"
+        "User-Agent": "Academic research bot — [Your Name], [Your University]"
     })
 
     page.goto("https://example.com/dynamic-page")
@@ -1489,7 +1532,9 @@ soup = BeautifulSoup(html, "html.parser")
 
 ### Step 6: Social Media Data Collection
 
-#### Twitter / X (Academic Research API v2)
+#### Twitter / X (X API v2)
+
+> **Note (updated 2026):** The Academic Research track was discontinued in January 2025. The code below still works with X API v2 Bearer tokens, but full-archive search now requires a Pro ($5K/mo) or Enterprise tier. The free Basic tier allows only 10K tweet reads/month. For new social media research projects, consider Bluesky (AT Protocol, free firehose access) or Meta Content Library as alternatives.
 
 ```r
 library(academictwitteR)
@@ -1540,7 +1585,7 @@ import praw, pandas as pd, os
 reddit = praw.Reddit(
     client_id     = os.environ["REDDIT_CLIENT_ID"],
     client_secret = os.environ["REDDIT_CLIENT_SECRET"],
-    user_agent    = "Academic research — J. Zhang, University"
+    user_agent    = "Academic research — [Your Name], [Your University]"
 )
 
 # Collect posts from subreddits

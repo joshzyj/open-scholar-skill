@@ -13,13 +13,16 @@ open-scholar-skill/
 ├── CLAUDE.md                    # THIS FILE
 ├── CHANGELOG.md                 # Version history
 ├── README.md / USAGE.md         # User-facing docs
-├── scripts/gates/               # Executable gate scripts (version-check, safety-scan, verify-citations)
+├── scripts/gates/               # Executable gate scripts (version-check, safety-scan, verify-citations,
+│                                #   pretooluse-data-guard, init-handshake, derive-proj, phase-verify)
+├── scripts/init-project.sh      # Project initializer used by scholar-init
 ├── tests/smoke/                 # Smoke tests (run: bash tests/smoke/run-all.sh)
 ├── skills/ → .claude/skills/    # Symlink (DO NOT replace with directory)
 ├── agents/ → .claude/agents/    # Symlink (DO NOT replace with directory)
 └── .claude/
-    ├── skills/                  # 28 skill directories, each with SKILL.md + references/
-    │   ├── _shared/             # Shared protocols (process-logger.md, version-check.md)
+    ├── skills/                  # 29 skill directories, each with SKILL.md + references/
+    │   ├── _shared/             # Shared protocols (process-logger.md, version-check.md, data-handling-policy.md, tier-b-safety-gate.md)
+    │   ├── scholar-init/        # v5.9.0 — project initializer + data safety sidecar populator (4 modes: init/review/add/status)
     │   ├── scholar-analyze/     # Components loaded on-demand via references/component-a-*.md
     │   ├── scholar-auto-improve/# Continuous quality engine (4 modes)
     │   ├── scholar-brainstorm/  # Data-driven RQ generation from codebooks/questionnaires/datasets
@@ -52,7 +55,7 @@ open-scholar-skill/
     └── agents/                  # 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 ```
 
-**Version**: v5.8.0 — 28 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
+**Version**: v5.9.0 — 29 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 
 ---
 
@@ -75,8 +78,23 @@ Skills route to the correct file, then `cat` only what's needed. This cuts conte
 ### Executable Gate Scripts
 Critical gates are enforced by actual scripts in `scripts/gates/`:
 - `version-check.sh <dir> <stem>` — prints `SAVE_PATH=...` (prevents overwriting drafts)
-- `safety-scan.sh <file>` — local PII/HIPAA detection (exits RED/YELLOW/GREEN)
+- `safety-scan.sh <file>` — local PII/HIPAA detection (exits RED/YELLOW/GREEN); routes to Presidio backend if installed. Binary formats (`.xlsx`, `.parquet`, `.dta`, `.sav`, `.rds`, etc.) are promoted to YELLOW even when scanners return GREEN.
+- `safety-scan-presidio.py <file>` — Presidio NER-based PII detection backend (called by safety-scan.sh)
+- `anonymize-presidio.py scan|anonymize|keygen|verify <file>` — Presidio-based anonymizer for qualitative data
+- `pretooluse-data-guard.sh` — PreToolUse hook for `~/.claude/settings.json` (v5.9.0). Intercepts `Read` / `NotebookRead` / `NotebookEdit` / `Grep` / `Glob`, looks up path in nearest `.claude/safety-status.json`, refuses `NEEDS_REVIEW:*` and `HALTED`. Fails closed on missing jq, unresolved symlinks, and system-directory paths. NOT auto-registered by setup.sh — see CHANGELOG v5.9.0 upgrade note.
+- `init-handshake.sh` — standalone handshake helper (bundled for parity; no in-repo caller since `scholar-full-paper` is deliberately absent).
+- `derive-proj.sh` — canonical `${PROJ}` helper.
+- `phase-verify.sh <phase> <project_dir>` — checks PROJECT STATE, output files, word counts per phase (shipped for parity; no in-repo orchestrator uses it).
 - `verify-citations.sh <draft>` — checks for fabricated/orphaned citations
+
+### Data Safety Stack (v5.9.0)
+Three layers. See `CHANGELOG.md` v5.9.0 and README "Data Safety (v5.9.0)" for the full story.
+
+1. **Policy** — `.claude/skills/_shared/data-handling-policy.md`. Defines 5 `SAFETY_STATUS` values (`CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`) + LOCAL_MODE execution contract (`Rscript -e` / `python3 -c` heredocs, forbidden verbs `head(df)` / `print(df)` / `df.head()` / `df.sample()`).
+2. **Ingestion** — `/scholar-init` + `scripts/init-project.sh`. Copies raw files into `data/raw/`, scans each, writes `.claude/safety-status.json`. Interactive `review` mode resolves every `NEEDS_REVIEW` entry — this is the "keep researchers in the loop" moment.
+3. **Enforcement** — `scripts/gates/pretooluse-data-guard.sh`. Intended for global registration in `~/.claude/settings.json`. Refuses unsafe reads even if a sub-skill forgets to check.
+
+The 11 data-touching skills in this repo are all gated (6 Tier A, 5 Tier B). `scholar-full-paper` is deliberately absent per the README — the init-handshake.sh script ships for parity but has no caller here.
 
 ### Citation Rules
 - **ABSOLUTE RULE**: Zero tolerance for citation fabrication

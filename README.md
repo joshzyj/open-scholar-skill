@@ -18,6 +18,8 @@ Open-scholar-skill is designed to **assist** researchers, not replace them. If y
 
 3. **Maintain intellectual ownership.** You are the researcher. Use these tools to accelerate your workflow, not to outsource your thinking. The research questions, theoretical arguments, and interpretations should reflect your expertise and scholarly judgment.
 
+4. **Protect participant privacy with mechanical enforcement.** Reading a data file through Claude Code transmits its contents to the Anthropic API. For restricted datasets, HIPAA-covered records, IRB-protected interviews, or any file with personally identifying information, silent transmission is unacceptable. v5.9.0 introduces a three-layer data-safety stack (policy → ingestion-time scan → PreToolUse hook) that requires an explicit researcher decision on every data file before any skill can Read it. Start with `/scholar-init` to stand up a project; see the [Data Safety](#data-safety-v590) section below for the full story.
+
 ### A Note on the Full-Paper Orchestrator
 
 This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, `scholar-polish`, or `scholar-presentation`. The first four were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
@@ -34,6 +36,30 @@ However, the 28 modular skills provided here are the same building blocks. You a
 ```
 
 Running each skill individually keeps you in the loop at every stage — reviewing outputs, making decisions, and steering the research direction. This is how we believe AI tools should be used in scholarship.
+
+## Data Safety (v5.9.0)
+
+The "keep researchers in the loop" philosophy applies to data access just as much as to paper drafting. Reading a data file through Claude Code transmits its contents to the Anthropic API — silent for a public CSV, potentially a data-use-agreement violation for NHANES, PSID, NLSY, Census RDC, HIPAA-covered records, or IRB-protected interviews. v5.9.0 addresses this with a three-layer defense that requires an explicit researcher decision on every data file.
+
+**Layer 1 — Policy.** `.claude/skills/_shared/data-handling-policy.md` defines five `SAFETY_STATUS` values (`CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`) and the LOCAL_MODE execution contract: bash-only `Rscript -e` / `python3 -c` heredocs, never `Read`, with a forbidden-verb list (`head(df)`, `print(df)`, `df.head()`, `df.sample()`, etc.).
+
+**Layer 2 — Ingestion-time scan.** `/scholar-init` is a new interactive skill that creates a standardized project layout, copies raw files into `data/raw/`, runs a local PII/HIPAA scan on each, and writes `.claude/safety-status.json`. Its `review` mode walks the researcher through every `NEEDS_REVIEW` entry and resolves it to an explicit status. This is the "slow down and decide" half of the stack — maximum in-the-loop behavior, exactly in the spirit of this release.
+
+**Layer 3 — Mechanical enforcement.** `scripts/gates/pretooluse-data-guard.sh` is intended for global registration as a PreToolUse hook in `~/.claude/settings.json`. It intercepts every `Read`, `NotebookRead`, `NotebookEdit`, `Grep`, and `Glob` call, looks up the target path in the nearest `.claude/safety-status.json`, and refuses the call when the status is `NEEDS_REVIEW:*` or `HALTED`. Qualitative audio/video/transcript formats cannot be `OVERRIDE`'d even via a hand-edited sidecar. Paths that canonicalize into system directories (`/etc`, `/dev`, `/proc`, `/sys`, `/System`, `/var/db`, `/var/log`, `/private/*`) are refused outright.
+
+**Typical quickstart:**
+
+```
+bash scripts/init-project.sh --dest ~/research nhanes-bmi ~/Downloads/nhanes.csv
+cd ~/research/nhanes-bmi
+/scholar-init review                      # resolve each NEEDS_REVIEW entry
+/scholar-eda data/raw/nhanes.csv          # proceeds under the sidecar-recorded status
+/scholar-analyze ...                      # inherits the same decisions
+```
+
+**The eleven data-touching skills gated by this stack**: `scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-brainstorm` (Tier A — LOCAL_MODE dispatch); `scholar-data`, `scholar-verify`, `scholar-replication`, `scholar-code-review`, `scholar-write` (Tier B — sidecar check + fail-fast refusal).
+
+**Enabling mechanical enforcement.** The v5.9.0 PreToolUse data guard ships as `scripts/gates/pretooluse-data-guard.sh` but is NOT auto-registered in `~/.claude/settings.json`. To enable mechanical enforcement across every Claude Code session, add a PreToolUse entry pointing to the absolute path of this script. See [CHANGELOG v5.9.0](CHANGELOG.md) for the upgrade note. `jq` is required on the host (`brew install jq` / `apt-get install jq`); the hook fails closed without it.
 
 ## Share Your Work on aiXiv
 
@@ -52,7 +78,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (28 skills + 1 utility = 29 total)
+## Skills Overview (29 skills + 1 utility = 30 total)
 
 ### Core Pipeline Skills
 
@@ -93,6 +119,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 | Skill | Invoke | Purpose |
 |-------|--------|---------|
+| `scholar-init` | `/scholar-init` | **v5.9.0** Project initializer and data-safety decision loop. Creates the standard layout (`data/raw`, `data/interim`, `data/processed`, `materials`, `output`, `.claude`, `logs`), copies or symlinks raw files into place, runs a safety scan on every ingested file, populates `.claude/safety-status.json`, and interactively walks the researcher through `NEEDS_REVIEW` decisions (resolve each to CLEARED / LOCAL_MODE / ANONYMIZED / OVERRIDE / HALTED). Works with the PreToolUse data-safety hook to enforce that no sensitive file reaches the API without an explicit decision. |
 | `scholar-ethics` | `/scholar-ethics` | AI tool data privacy audit, plagiarism check, research integrity audit, IRB/authorship/COI compliance |
 | `scholar-safety` | `/scholar-safety` | Real-time data privacy protection: scan files for PII/HIPAA/restricted data before AI processing |
 | `scholar-auto-improve` | `/scholar-auto-improve` | Continuous quality engine: post-skill output audit, skill-suite health check, fix generation, cross-session pattern analysis |
@@ -148,8 +175,11 @@ bash setup.sh
 1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
 2. Auto-detect your Zotero library (or prompt for path)
 3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 29 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
-5. Write a `.env` file with your configuration
+4. Install all 30 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
+5. Check for `jq` (required by the v5.9.0 PreToolUse data guard)
+6. Write a `.env` file with your configuration
+
+**Requirements:** `bash`, `python3`, `jq`. The data-safety hook fails closed if `jq` is missing, so install it first (`brew install jq` / `apt-get install jq`). Presidio (optional, for NER-based PII detection) is installed via `python3 -m pip install presidio-analyzer presidio-anonymizer`.
 
 After setup, all `/scholar-*` commands work from any directory.
 
@@ -230,6 +260,9 @@ This one prompt builds the entire knowledge base automatically from your PDFs.
 /scholar-replication full for Demography
 /scholar-ling analyze discourse of immigration restrictionism
 # Ethics and safety
+/scholar-init nhanes-bmi ~/Downloads/nhanes.csv    # stand up a project + scan raw files (v5.9.0)
+/scholar-init review                                # resolve NEEDS_REVIEW entries interactively
+/scholar-init status                                # print sidecar and init-report state
 /scholar-ethics pre-submission ethics check for Demography
 /scholar-safety scan data.csv before analysis
 
@@ -265,6 +298,9 @@ Research Question
        ├─► /scholar-brainstorm        ← Generate RQs from codebooks, questionnaires, or datasets
        │
        └─► (or run modular skills below)
+       │
+       ├─► /scholar-init              ← (v5.9.0) Create project layout, copy raw files, scan +
+       │                                  populate .claude/safety-status.json (PreToolUse hook enforces)
        │
        ├─► /scholar-data              ← Find open datasets (100+ sources), auto-fetch, design collection
        │

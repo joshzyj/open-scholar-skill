@@ -3,6 +3,49 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.9.0] - 2026-04-10
+
+End-to-end data-safety hardening. Extends open-scholar-skill's "keep researchers in the loop" philosophy with mechanical enforcement against unsafe data reads. Scholar skills previously loaded user data via the `Read` tool, which transmits file contents to the Anthropic API. v5.9.0 introduces a three-layer defense — policy, ingestion-time scanning, and a PreToolUse hook — so no sensitive file can reach the API without an explicit researcher decision.
+
+This release is a natural fit for the open-scholar-skill philosophy: `/scholar-init review` is an interactive, slow-down-and-decide skill that walks the researcher through every ingested file and records an explicit `SAFETY_STATUS` before any analysis begins. Maximum "in the loop" behavior.
+
+**Note on the deliberate exclusions:** This repo does not ship `scholar-full-paper` (see the README's "Note on the Full-Paper Orchestrator" for rationale). The `scripts/gates/init-handshake.sh` helper is bundled for standalone script use but has no in-repo caller. The 11 data-touching skills present here (analyze, eda, compute, ling, qual, brainstorm, data, verify, replication, code-review, write) are all gated.
+
+### Added
+
+**New skill and policies**
+- **scholar-init**: Project initializer skill (4 modes: `init`, `review`, `add`, `status`). Creates the standard project layout (`data/raw/`, `data/interim/`, `data/processed/`, `materials/`, `output/<slug>/`, `.claude/`, `logs/`), copies or symlinks raw files into place, scans each one, and writes `.claude/safety-status.json`. The interactive `review` mode walks the researcher through every `NEEDS_REVIEW` entry and resolves it to one of `CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, or `HALTED` with logged rationale.
+- **`_shared/data-handling-policy.md`**: Canonical data-handling policy (§0–§11). Defines the five `SAFETY_STATUS` values, the LOCAL_MODE execution contract (`Rscript -e` / `python3 -c` heredocs with a forbidden-verb list), the image-file path classification rules, the binary-format YELLOW promotion rule, and a Known Limitations section.
+- **`_shared/tier-b-safety-gate.md`**: Canonical Tier B gate doc describing the lightweight sidecar check, allowed/refused status matrix, and integration contract for skills that do not implement the full LOCAL_MODE dispatch.
+- **`scripts/init-project.sh`**: Executable project initializer used by `scholar-init`. Validates the slug (`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`), ingests raw files (copy by default, `--link` for symlinks), calls `safety-scan.sh` on every file, writes `.claude/safety-status.json`, and generates `logs/init-report.md` + a project README teaching the researcher how the layout works.
+- **`scripts/gates/pretooluse-data-guard.sh`**: The PreToolUse hook intended for `~/.claude/settings.json`. Intercepts every `Read`, `NotebookRead`, `NotebookEdit`, `Grep`, and `Glob` call. Looks up the target path in the nearest `.claude/safety-status.json` (canonicalized via `python3 → realpath → readlink -f`, falling closed if no resolver is available). Refuses the call when the status is `NEEDS_REVIEW:*` or `HALTED`. Classifies image files by path. Blocks any path that canonicalizes into a system directory. Refuses qualitative-format `OVERRIDE` entries (audio/video/transcripts) at the hook level.
+- **`scripts/gates/init-handshake.sh`**: Standalone handshake helper. Bundled for parity with other scholar-skill variants. Not wired to any caller in this repo since `scholar-full-paper` is deliberately absent.
+- **`scripts/gates/derive-proj.sh`**: Canonical `${PROJ}` derivation helper.
+- **`scripts/gates/safety-scan-presidio.py`**: Presidio NER-based PII detection backend (invoked by `safety-scan.sh` when Presidio is installed).
+- **`scripts/gates/anonymize-presidio.py`**: Presidio-based anonymizer for qualitative data (`scan`, `keygen`, `anonymize`, `verify` subcommands).
+
+**Tier A Step 0 safety gates** (dispatch to LOCAL_MODE Bash heredocs)
+- `scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-brainstorm` — every data-loading path now checks `.claude/safety-status.json` before Reading and dispatches to a LOCAL_MODE Bash heredoc (`Rscript -e` / `python3 -c`) when the status is `LOCAL_MODE`. Forbidden-verb lists (`head(df)`, `print(df)`, `View(df)`, `df.head()`, `df.sample()`, etc.) are embedded in each skill. `scholar-qual` adds a sidecar check on top of its existing anonymization gate.
+
+**Tier B Step 0 safety gates** (lightweight sidecar check, no LOCAL_MODE dispatch)
+- `scholar-data`, `scholar-verify`, `scholar-replication`, `scholar-code-review`, `scholar-write` — consult `.claude/safety-status.json` and fail fast with a clear message when a referenced data file is `NEEDS_REVIEW:*`, `HALTED`, or `LOCAL_MODE`. Tier B skills do not implement the full LOCAL_MODE dispatch contract — they refuse and direct the researcher to `/scholar-analyze` or `/scholar-eda`.
+
+### Changed
+- **`scripts/gates/safety-scan.sh`**: Binary-format YELLOW promotion — `.xlsx`, `.parquet`, `.dta`, `.sav`, `.rds`, `.sqlite`, `.feather`, `.h5`, `.hdf5`, `.pkl`, `.pickle`, `.zip`, `.7z`, `.gz`, `.tar`, `.arrow`, `.orc` are promoted to YELLOW (`NEEDS_REVIEW:BINARY`) even when Presidio/regex return GREEN, because text scanners cannot inspect compressed content. Unreadable-file fail-closed — files that exist but are not readable by the scanner are returned as YELLOW rather than silently GREEN. System-directory list expanded to include `/private/etc`, `/private/var/db`, and `/private/var/log` (the canonicalized macOS paths).
+- **`scripts/gates/phase-verify.sh`**: Phase-entry regex now uses a whitelist-alternation boundary. Shipped for parity; no in-repo orchestrator uses it here.
+- **`setup.sh`**: Adds a hard check for `jq` (the PreToolUse data guard requires it); installs Presidio via `python3 -m pip`; `link_dir` now refuses to recursively delete a real (non-symlink) directory unless `SCHOLAR_FORCE_MIGRATE=1` is set (prevents clobbering existing skill trees in `~/.claude/`).
+- **`.claude-plugin/plugin.json`**: Version bumped from stale `5.4.0` → `5.9.0` to match CHANGELOG. Skill count updated in description.
+
+### Security
+- **Qualitative OVERRIDE refusal**: the PreToolUse hook refuses `OVERRIDE` entries for audio/video/transcript formats (`wav mp3 flac m4a ogg aac aiff mp4 mov avi mkv webm eaf textgrid trs cha praat`) even when a researcher has hand-edited the sidecar. These formats cannot be safely loaded in LOCAL_MODE and must use dedicated qualitative pipelines.
+- **System-directory escape blocking**: the hook refuses any path that canonicalizes to `/etc`, `/dev`, `/proc`, `/sys`, `/System`, `/var/db`, `/var/log`, `/private/etc`, `/private/var/db`, or `/private/var/log`, blocking symlink escape attempts.
+- **Canonicalize with symlink resolution**: the hook canonicalizes paths via `python3 → realpath → readlink -f`. If none of these are available, the hook fails closed on any symlink rather than risking a traversal bypass.
+- **jq-missing fail-closed**: when `jq` is not available and a gated tool call cannot be parsed via the `sed` fallback, the hook refuses the call rather than allowing it through.
+
+### Upgrade note — register the PreToolUse hook
+
+This release ships the hook script at `scripts/gates/pretooluse-data-guard.sh` but does NOT auto-register it in `~/.claude/settings.json`. To enable mechanical enforcement across all Claude Code sessions, add a PreToolUse entry pointing to the full absolute path of the script in your global settings. Without this step, the hook scripts and `.claude/safety-status.json` sidecars still function as documentation, but nothing is blocked mechanically.
+
 ## [5.8.0] - 2026-04-03
 
 ### Added

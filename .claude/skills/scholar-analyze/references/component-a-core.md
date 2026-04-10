@@ -103,15 +103,26 @@ If the user confirms `/scholar-causal` was already run, or the analysis is purel
 
 **Step 6 — Create output directories:**
 ```bash
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-mkdir -p "${OUTPUT_ROOT}/tables" "${OUTPUT_ROOT}/figures" "${OUTPUT_ROOT}/scripts"
+# Re-derive ${PROJ} via the canonical helper so this writes to
+# output/<slug>/ (scholar-init context) or output/_staging (legacy),
+# NOT a bare `output/tables/` at the project root.
+. "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh"
+mkdir -p "${PROJ}/tables" "${PROJ}/figures" "${PROJ}/scripts"
 ```
 
 ---
 
 ### A1 — Data Loading and Inspection
 
+**PREREQUISITE:** Step 0 (Data Safety Gate) in SKILL.md must have run and `SAFETY_STATUS` must be set. If it is not set, STOP and run the gate. Do not load data without it.
+
 #### Mode 1 — Local file
+
+**Branch on `SAFETY_STATUS`.** The policy is defined in `.claude/skills/_shared/data-handling-policy.md` §3.
+
+##### Mode 1a — CLEARED / ANONYMIZED / OVERRIDE (in-context loader)
+
+When `SAFETY_STATUS ∈ {CLEARED, ANONYMIZED, OVERRIDE}`, the user has authorized the data to enter the Anthropic API. Standard loader applies.
 
 **R:**
 ```r
@@ -132,6 +143,83 @@ ext = data_path.rsplit('.', 1)[-1]
 df = {'csv': pd.read_csv, 'dta': pd.read_stata,
       'parquet': pd.read_parquet}[ext](data_path)
 ```
+
+##### Mode 1b — LOCAL_MODE (Bash-only loader, summary output only)
+
+When `SAFETY_STATUS=LOCAL_MODE`, the data file must never enter Claude's context. Do NOT call the `Read` tool on the file, do NOT run the CLEARED loader above, do NOT print `head(df)` / `df.head()` / `print(df)` / `View(df)`.
+
+Instead, wrap the load + entire analytic pipeline in a single `Rscript -e "..."` (or `python -c "..."`) Bash call. Only aggregated output may be printed to stdout.
+
+**R — LOCAL_MODE template:**
+```bash
+Rscript -e '
+suppressPackageStartupMessages({
+  library(tidyverse); library(haven); library(arrow); library(readxl); library(skimr)
+})
+
+load_data <- function(path) {
+  ext <- tolower(tools::file_ext(path))
+  switch(ext,
+    csv     = readr::read_csv(path, show_col_types = FALSE),
+    tsv     = readr::read_tsv(path, show_col_types = FALSE),
+    dta     = haven::read_dta(path),
+    sav     = haven::read_sav(path),
+    rds     = readRDS(path),
+    xlsx    = readxl::read_excel(path),
+    xls     = readxl::read_excel(path),
+    parquet = arrow::read_parquet(path),
+    stop("Unsupported extension: ", ext)
+  )
+}
+
+df <- load_data("[DATA_FILE_PATH]")
+
+# Safe summary output ONLY
+cat("N =", nrow(df), "\n")
+cat("Variables =", ncol(df), "\n")
+cat("Columns:\n", paste(names(df), collapse = ", "), "\n\n")
+str(df, list.len = ncol(df), give.attr = FALSE)
+cat("\n---- Missingness (%) ----\n")
+print(round(colMeans(is.na(df)) * 100, 1))
+cat("\n---- skimr summary ----\n")
+print(skim(df))
+# DO NOT: head(df), print(df), View(df), df[1:5,]
+'
+```
+
+**Python — LOCAL_MODE template:**
+```bash
+python3 - << 'PY'
+import pandas as pd, os, sys
+path = "[DATA_FILE_PATH]"
+ext = os.path.splitext(path)[1].lower().lstrip(".")
+loaders = {"csv": pd.read_csv, "tsv": lambda p: pd.read_csv(p, sep="\t"),
+           "dta": pd.read_stata, "xlsx": pd.read_excel, "xls": pd.read_excel,
+           "parquet": pd.read_parquet}
+if ext not in loaders:
+    sys.exit(f"Unsupported extension: {ext}")
+df = loaders[ext](path)
+print(f"N = {len(df)}")
+print(f"Variables = {df.shape[1]}")
+print("Columns:", ", ".join(df.columns))
+print(df.dtypes)
+print("Missingness:")
+print(df.isna().mean().round(3))
+print(df.describe(include="all").T)
+# DO NOT: df.head(), print(df), df.sample()
+PY
+```
+
+**All downstream A3–A8 model code under LOCAL_MODE** must be appended to the SAME `Rscript -e` / `python3 -` heredoc and emit only coefficient tables, SEs, test statistics, and fit indices — never row-level output, never `broom::augment()` without aggregation. Save the script to `output/[slug]/scripts/` exactly as in CLEARED mode (the code is not sensitive, only the data is).
+
+**Small-cell suppression.** When producing cross-tabs or group counts under LOCAL_MODE, suppress any cell with `n < 10`. Example:
+```r
+tab <- table(df$x, df$y)
+tab[tab < 10] <- NA   # suppress small cells before printing
+print(tab)
+```
+
+**Figures under LOCAL_MODE.** Save figures to `output/[slug]/figures/` as usual, but do NOT embed the image in the conversation. Report only the file path and the caption.
 
 #### Mode 2 — Inline / pasted data
 

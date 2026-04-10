@@ -41,6 +41,8 @@ Parse:
 - **Mode**: `full` (default) | `stage1` | `stage2` | `numerics` | `figures` | `logic` | `completeness`
 - **Manuscript path**: path to manuscript file (.md, .tex, .docx) — auto-detect if not specified
 - **Output directory**: override for save location (default: `output/verify/`)
+- **`--manuscript [path]`**: Explicit manuscript path — skip auto-detection entirely. Use when called from orchestrators (scholar-book, scholar-full-paper) whose file paths differ from the default globs.
+- **`--artifacts-dir [path]`**: Override directory for tables/figures/scripts. When specified, look for artifacts in `[path]/tables/`, `[path]/figures/`, and `[path]/scripts/` instead of the default `output/tables/` etc. Use when called from project-scoped orchestrators (e.g., `--artifacts-dir output/segregation/`).
 
 ---
 
@@ -61,6 +63,47 @@ Parse:
 
 ## Step 0: Setup & Input Assembly
 
+### 0a-safety. Data Safety Sidecar Check (Tier B)
+
+scholar-verify reads raw analysis output files (CSVs, HTML tables, figure PDFs/PNGs) and the manuscript. In the normal path these artifacts are aggregated outputs from scholar-analyze and are safe to Read. But if the `--artifacts-dir` override points to a location that includes raw data files, or the user points scholar-verify at `output/eda/tables/` where some files might contain row-level data, the Tier B sidecar check prevents scholar-verify from accidentally Reading a `NEEDS_REVIEW` / `HALTED` / `LOCAL_MODE` file. See `_shared/tier-b-safety-gate.md` for the full policy.
+
+This step is a **no-op** when `.claude/safety-status.json` does not exist. The PreToolUse hook is the mechanical backstop either way.
+
+```bash
+# ── Step 0a-safety: Tier B sidecar check ──
+# CANDIDATE_FILES = list of raw table/figure/script files assembled in 0a below
+# (run this check AFTER 0a has enumerated them, but BEFORE 0b reads them).
+SIDECAR=".claude/safety-status.json"
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  UNSAFE=""
+  for F in $CANDIDATE_FILES; do
+    [ -f "$F" ] || continue
+    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
+          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
+    STATUS=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
+    [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
+    case "$STATUS" in
+      CLEARED|ANONYMIZED|OVERRIDE|"") ;;
+      NEEDS_REVIEW:*|HALTED|LOCAL_MODE) UNSAFE="${UNSAFE}
+  - $F → $STATUS" ;;
+      *) UNSAFE="${UNSAFE}
+  - $F → $STATUS (unrecognized)" ;;
+    esac
+  done
+  if [ -n "$UNSAFE" ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-verify refused because one or more input artifacts are not
+safe for cloud AI processing:
+$UNSAFE
+
+Run /scholar-init review, or narrow --artifacts-dir to a directory that
+contains only aggregated outputs (tables/figures/scripts).
+HALTMSG
+    exit 1
+  fi
+fi
+```
+
 ### 0a. Locate Artifacts
 
 ```bash
@@ -68,16 +111,18 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 mkdir -p "${OUTPUT_ROOT}/verify" "${OUTPUT_ROOT}/logs"
 ```
 
-1. **Locate manuscript**: Check user-provided path first. If not provided, auto-detect:
+1. **Locate manuscript**: If `--manuscript` was provided, use that path directly. Otherwise, auto-detect:
    ```
    Glob: output/manuscript/full-paper-*.md → most recent
    Glob: output/drafts/draft-*.md → most recent
+   Glob: output/*/book/chapters/scholar-book-ch*.md → book chapters (if called from scholar-book)
+   Glob: output/*/book/scholar-book-manuscript-*.md → assembled book manuscript
    ```
    If no manuscript found, halt with error and ask user for path.
 
-2. **Locate raw table outputs**: `Glob: output/tables/*` — all .html, .tex, .csv, .docx files
-3. **Locate raw figure outputs**: `Glob: output/figures/*` — all .pdf, .png, .svg files
-4. **Locate analysis scripts**: `Glob: output/scripts/*` — all .R, .py files
+2. **Locate raw table outputs**: If `--artifacts-dir` was provided, use `[artifacts-dir]/tables/*`. Otherwise: `Glob: output/tables/*` — all .html, .tex, .csv, .docx files
+3. **Locate raw figure outputs**: If `--artifacts-dir` provided, use `[artifacts-dir]/figures/*`. Otherwise: `Glob: output/figures/*` — all .pdf, .png, .svg files
+4. **Locate analysis scripts**: If `--artifacts-dir` provided, use `[artifacts-dir]/scripts/*`. Otherwise: `Glob: output/scripts/*` — all .R, .py files
 5. **Locate artifact registry**: `Read: output/manuscript/artifact-registry.md` (if exists)
 6. **Locate EDA outputs**: `Glob: output/eda/*` (if exists)
 
@@ -388,9 +433,10 @@ Before presenting results, verify:
 |-------|-------------------|------|-------|
 | **scholar-analyze** | After tables/figures produced (post-Save Output recommendation) | `stage1` | No — recommendation to user |
 | **scholar-write** | Step 5b: After review panel accepts draft, before save | `stage2` | Conditional — skips if no raw outputs; user chooses fix/save/skip |
-
+| **scholar-grant** | Phase 5G: After prose polish, before mock panel | `stage2` (or text-only if no raw outputs) | Yes — CRITICAL issues must be fixed before Phase 6 |
 | **scholar-respond** | Step 3b: After consistency check, before revision summary (REVISE mode) | `full` | Yes — CRITICAL issues fixed before proceeding |
 | **scholar-journal** | Step 6b item 6: Pre-submission cross-skill integration check | `full` | Yes — MAJOR ISSUES halts submission prep |
+| **scholar-full-paper** | Phase 7b: Between write (Phase 7) and citation (Phase 8) | `full` | Yes — MAJOR ISSUES halts pipeline |
 | **scholar-replication** | Verification checklist: 2 items consume verify-completeness + verify-numerics reports | — (reads existing report) | Checklist items |
 
 ---

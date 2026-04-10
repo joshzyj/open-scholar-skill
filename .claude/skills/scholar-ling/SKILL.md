@@ -10,6 +10,9 @@ user-invocable: true
 
 You are an expert sociolinguist with deep knowledge of quantitative variation analysis, acoustic phonetics, conversation analysis, discourse analysis, language contact, language attitudes, and computational approaches to language in society. You design rigorous studies, execute analyses with R and Python, and write up results for top linguistics and interdisciplinary venues.
 
+
+> **CITATION INTEGRITY RULE:** Never fabricate, hallucinate, or invent any citation, reference, author name, title, year, journal, or DOI. Every citation must be verified against the local reference library (Zotero/Mendeley/BibTeX) or external APIs (CrossRef, Semantic Scholar, OpenAlex). Unverified citations must be flagged as `[CITATION NEEDED]`. This rule applies to all text output from this skill.
+
 ## Arguments
 
 The user has provided: `$ARGUMENTS`
@@ -124,6 +127,63 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 ```
 
 **IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive LOG_FILE before appending.
+
+---
+
+## Step 0.5 — Data Safety Gate (MANDATORY, blocking)
+
+Sociolinguistic data is among the most sensitive material in the social sciences. Speech recordings are voiceprints (direct biometric identifiers), interview transcripts contain quoted speech that re-identifies speakers, speaker metadata routinely includes birth year / neighborhood / ethnic background / gender identity, and matched-guise experiments may collect perceptual judgments tied to participant demographics. Before dispatching to any MODULE, follow the mandatory gate defined in `.claude/skills/_shared/data-handling-policy.md`.
+
+**Skip conditions:**
+- The module operates entirely on a public corpus fetched by the script itself from a standard repository (COCA/COHA/BNC via quanteda, congressional records via `congress`, etc.).
+- The skill is invoked from `scholar-full-paper` and `SAFETY_STATUS` is already set in `PROJECT_STATE`. Read it; never downgrade.
+
+**Otherwise, for every user-supplied data artifact** (interview audio, transcripts, speaker metadata, corpus archive, elicitation recordings, experimental response data, TextGrids, Praat logs, matched-guise stimulus sets):
+
+```bash
+# ── Step 0.5: Safety Gate ──
+# See _shared/data-handling-policy.md §1-§2 for the full spec.
+GATE_SCRIPT="${SCHOLAR_SKILL_DIR:-.}/scripts/gates/safety-scan.sh"
+for FILE in [DATA_ARTIFACT_PATHS]; do
+  [ -f "$FILE" ] || { echo "missing: $FILE"; continue; }
+  bash "$GATE_SCRIPT" "$FILE"
+  echo "gate exit: $?  file: $FILE"
+done
+```
+
+For corpus directories, also scan any `speakers.csv` / `metadata.tsv` / `demographics.xlsx` companion files — these almost always contain direct identifiers.
+
+**Defaults for sociolinguistic artifacts** (stricter than the generic policy):
+
+| Artifact | Default SAFETY_STATUS unless user overrides |
+|----------|---------------------------------------------|
+| Interview audio (.wav, .mp3, .flac) | `LOCAL_MODE` (voiceprint is biometric PII) |
+| Interview transcripts (.txt, .eaf, .TextGrid) | `LOCAL_MODE` (quoted speech re-identifies) |
+| Speaker metadata (.csv with demographics) | Run the gate; default to `LOCAL_MODE` if any name / DOB / address / phone is detected |
+| Matched-guise stimulus sets | `CLEARED` if synthesized; `LOCAL_MODE` if human speaker recordings |
+| Matched-guise response data | Run the gate; default to `LOCAL_MODE` if participant IDs map to demographics |
+| Public corpus (COCA, COHA, BNC, Congress) | `CLEARED` (public licensed corpus) |
+| Student elicitations / classroom recordings | `LOCAL_MODE` — students are vulnerable participants |
+
+**Do not offer `[D] OVERRIDE` for audio files or interview transcripts.** For these artifacts, the only valid choices are `[C] LOCAL MODE`, `[B] ANONYMIZE` (via `scholar-qual`'s presidio anonymizer), or `[A] HALT`. Voiceprints cannot be "overridden" as non-sensitive.
+
+**Module-specific LOCAL_MODE behavior:**
+
+| Module | LOCAL_MODE behavior |
+|--------|---------------------|
+| MODULE 2 Step 2a (Variation / Rbrul) | Never `Read` the token-level dataset. Fit Rbrul / mixed-effects models via `Rscript -e`; emit only factor weights, coefficients, AIC, random-effect variances. Suppress speaker-by-speaker output tables if |speakers|<10 per cell. |
+| MODULE 2 Step 2b (Acoustic phonetics) | Never `Read` audio files. Extract formants/F0/VOT/duration via Praat or parselmouth scripts; emit only aggregated acoustic tables (speaker-level means, SDs). Do not print token-level measurements tagged with speaker+word. |
+| MODULE 3 (CA / IS) | Conversation analysis requires reading transcripts, which is incompatible with LOCAL_MODE. If `SAFETY_STATUS=LOCAL_MODE` and the user invokes MODULE 3, **halt** and require the user to either (a) anonymize the transcript via `scholar-qual`'s presidio gate, or (b) switch to a public-corpus CA dataset. Do not attempt CA on identifying speech. |
+| MODULE 4 (Language attitudes / IAT) | Run scoring, reaction-time models, factorial vignette analyses via `Rscript -e`; emit only coefficients and group means. Suppress subgroup cells with `n<10`. |
+| MODULE 5 (CDA / corpus) | Build the corpus index, run keyness / collocation analyses via scripts; emit only keyness tables and top-collocate lists. Do NOT print KWIC concordances under LOCAL_MODE — the concordance line is the sentence it came from. |
+| MODULE 6 (Computational: conText, BERT, STM, LLM annotation) | Same rules as scholar-compute MODULE 1 under LOCAL_MODE. Run embedding regression and classifier training inside scripts; emit only coefficient tables, validation statistics, and aggregated topic tables. For LLM annotation, the annotator API call belongs inside the user's analysis script — not through this conversation — so the raw text only touches the annotator's API. |
+| MODULE 7 (Experimental sociolinguistics) | Run regression / mixed-effects models on response data via scripts; emit only coefficient tables and marginal effects. |
+| MODULE 8 (Biber MDA) | Compute 67-feature vectors and dimension scores via scripts; emit only feature tables and dimension loadings, not the texts they came from. |
+| MODULE 9 (TTS matched guise) | TTS stimuli are synthetic — safe. Response data follows MODULE 4 rules. |
+
+**Sub-skill propagation:** When a MODULE invokes `/scholar-qual` or `/scholar-compute`, pass `SAFETY_STATUS` forward.
+
+**LOCAL_MODE loader template:** Use the R/Python templates in `_shared/data-handling-policy.md` §3a / §3b as the header of every script this skill generates under LOCAL_MODE.
 
 ---
 

@@ -12,7 +12,7 @@ description: >
   and in-text statistic has a producing script; (5) ARCHIVE — create versioned
   release, Zenodo DOI, GitHub integration, repository deposit preparation;
   (6) FULL — run all modes sequentially. Consumes output/[slug]/scripts/ from
-  scholar-analyze/scholar-compute. Targets ASR, AJS,
+  scholar-analyze/scholar-compute/scholar-full-paper. Targets ASR, AJS,
   Demography, Science Advances, NHB, NCS, APSR.
 tools: Read, Write, Bash, WebSearch, Glob, Grep
 argument-hint: "[BUILD|DOCUMENT|TEST|VERIFY|ARCHIVE|FULL] [project description or journal name]"
@@ -30,6 +30,38 @@ user-invocable: true
 ---
 
 ## Step 0: Argument Parsing & Inventory
+
+### 0a-safety. Data Safety Sidecar Check (Tier B)
+
+scholar-replication's TEST mode (Step 3) runs scripts against data to verify the clean-run reproducibility check. If any script references a file that scholar-init marked `NEEDS_REVIEW:*`, `HALTED`, or `LOCAL_MODE`, the test run would expose that file to the Claude Code harness via Bash → Read chains. Before enumerating artifacts, consult the sidecar for every file in `data/raw/` and refuse to proceed if anything is unsafe. See `_shared/tier-b-safety-gate.md` for the full policy.
+
+This step is a **no-op** when `.claude/safety-status.json` does not exist. The PreToolUse hook is the mechanical backstop either way.
+
+```bash
+# ── Step 0a-safety: Tier B sidecar check ──
+# Scan every file registered in .claude/safety-status.json for unsafe statuses.
+# scholar-replication does NOT implement LOCAL_MODE dispatch, so any LOCAL_MODE
+# file must be excluded from the replication package (or linked as a stub).
+SIDECAR=".claude/safety-status.json"
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  UNSAFE=$(jq -r 'to_entries | map(select(.value | test("^(NEEDS_REVIEW|HALTED|LOCAL_MODE)"))) | map("  - " + .key + " → " + .value) | .[]' "$SIDECAR")
+  if [ -n "$UNSAFE" ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-replication cannot test-run a package containing files
+with unsafe SAFETY_STATUS values:
+$UNSAFE
+
+Options:
+  1. Run /scholar-init review to resolve NEEDS_REVIEW entries
+  2. Exclude LOCAL_MODE/HALTED files from the replication package — they
+     should be published as stubs or with access instructions, never bundled
+  3. Run scholar-replication in BUILD mode only (skip TEST)
+HALTMSG
+    exit 1
+  fi
+  echo "✓ scholar-replication Step 0a-safety: all registered files CLEARED / ANONYMIZED / OVERRIDE"
+fi
+```
 
 ### 0a. Parse mode and arguments
 
@@ -699,7 +731,7 @@ Generate a Dockerfile if:
 # Build: docker build -t replication-[slug] .
 # Run:   docker run --rm -v $(pwd)/output:/replication/output replication-[slug]
 
-FROM rocker/r-ver:4.4.0
+FROM rocker/r-ver:4.4.1
 
 # System dependencies
 RUN apt-get update && apt-get install -y \

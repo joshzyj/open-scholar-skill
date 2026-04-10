@@ -57,6 +57,49 @@ Parse:
 
 ## Step 0: Setup & Script Discovery
 
+### 0a-safety. Data Safety Sidecar Check (Tier B)
+
+scholar-code-review reads analysis scripts (always safe — they're code) but the review-code-data-handling agent may want to consult the actual data file referenced by a script to verify sample construction or recoding. If that data file is marked `NEEDS_REVIEW:*`, `HALTED`, or `LOCAL_MODE`, the agent must NOT open it. The Tier B gate consults `.claude/safety-status.json` for every data file path that appears inside the reviewed scripts and halts if any are unsafe. See `_shared/tier-b-safety-gate.md` for the full policy.
+
+This step is a **no-op** when `.claude/safety-status.json` does not exist. The PreToolUse hook is the mechanical backstop either way.
+
+```bash
+# ── Step 0a-safety: Tier B sidecar check for referenced data files ──
+# After 0a enumerates scripts, grep them for data-file path references
+# and check each path against the sidecar BEFORE the agents run.
+SIDECAR=".claude/safety-status.json"
+if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  UNSAFE=""
+  # Common data-file extensions referenced from R/Python/Stata scripts
+  REFS=$(grep -rhoE '"[^"]*\.(csv|tsv|dta|sav|rds|rdata|parquet|feather|xlsx|xls|h5|hdf5|arrow|orc|pkl|pickle)"' \
+         $SCRIPT_PATHS 2>/dev/null | tr -d '"' | sort -u)
+  for F in $REFS; do
+    [ -f "$F" ] || continue
+    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
+          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
+    STATUS=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
+    [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
+    case "$STATUS" in
+      CLEARED|ANONYMIZED|OVERRIDE|"") ;;
+      NEEDS_REVIEW:*|HALTED|LOCAL_MODE) UNSAFE="${UNSAFE}
+  - $F → $STATUS (referenced by reviewed script)" ;;
+    esac
+  done
+  if [ -n "$UNSAFE" ]; then
+    cat >&2 <<HALTMSG
+⛔ HALT — scholar-code-review refused because reviewed scripts reference
+files with unsafe SAFETY_STATUS values:
+$UNSAFE
+
+The review-code-data-handling agent would open these files to verify sample
+construction. Run /scholar-init review to resolve, or invoke scholar-code-review
+with a script path list that does not reference restricted data.
+HALTMSG
+    exit 1
+  fi
+fi
+```
+
 ### 0a. Locate Scripts
 
 ```bash
@@ -471,6 +514,8 @@ Before presenting results, verify:
 | **scholar-analyze** | Post-save recommendation to user | `full` | No — recommendation |
 | **scholar-compute** | Post-save recommendation to user | `full` | No — recommendation |
 | **scholar-eda** | Post-save recommendation to user | `correctness robustness` | No — recommendation |
+| **scholar-full-paper** | Phase 5.5 (after analyze/Phase 5, before Mid-Pipeline Audit and Phase 7 write) | `full` | Yes — MAJOR ISSUES blocks Phase 7 |
+| **scholar-grant** | Phase 5G.0 (before verification gate, conditional on scripts existing) | `full` | Yes — MAJOR ISSUES blocks Phase 6 (mock panel) |
 | **scholar-replication** | Verification checklist (consumes existing report; recommends running if none exists) | reads report | Checklist item |
 | **scholar-verify** | Complementary: scholar-verify checks output consistency; scholar-code-review checks code correctness | — | Independent |
 

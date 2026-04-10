@@ -1,7 +1,7 @@
 ---
 name: scholar-analyze
 description: "Run data analytics and produce publication-quality tables and visualizations for social science research. Saves regression tables (HTML/TeX/docx), figures (PDF/PNG), an internal analysis log, and a publication-ready Results document (prose + table notes + figure captions). Accepts file paths, inline/pasted data, or fetches from online sources (NHANES, IPUMS, GSS, World Bank, etc.). Runs A9/B9 verification subagents to check analytic and visualization correctness. For causal designs, invokes /scholar-causal first. Use after /scholar-design."
-tools: Read, Bash, Write, WebSearch
+tools: Read, Bash, Write, WebSearch, Agent
 argument-hint: "[data source + model spec, e.g., 'NHANES 2017-2018, OLS of BMI on physical activity by race for Demography' or 'data.csv, fixed effects of education on earnings for ASR']"
 user-invocable: true
 ---
@@ -78,6 +78,36 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 ```
 
 **IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive LOG_FILE before appending.
+
+---
+
+## Step 0 — Data Safety Gate (MANDATORY, blocking)
+
+Before any Component A step that loads data, follow the mandatory gate defined in `.claude/skills/_shared/data-handling-policy.md`. This is non-optional for Modes 1 and 2 (local file or pasted data). Mode 3 (online public data fetched by the skill itself, e.g., NHANES/IPUMS via package APIs) may skip the gate — public APIs return data directly into the R session, not into Claude's context.
+
+**Skip the gate only if:** the skill is invoked from `scholar-full-paper` and Phase -1 has already set `SAFETY_STATUS` in `PROJECT_STATE`. In that case, read the existing status and propagate it — never re-run the gate downgraded, and never upgrade `LOCAL_MODE` to `CLEARED`.
+
+**Otherwise, for every data-file argument:**
+
+```bash
+# ── Step 0: Safety Gate ──
+# See _shared/data-handling-policy.md §1 for the full spec.
+GATE_SCRIPT="${SCHOLAR_SKILL_DIR:-.}/scripts/gates/safety-scan.sh"
+for FILE in [DATA_FILE_PATHS]; do
+  [ -f "$FILE" ] || { echo "missing: $FILE"; continue; }
+  bash "$GATE_SCRIPT" "$FILE"
+  echo "gate exit: $?  file: $FILE"
+done
+```
+
+Set `SAFETY_STATUS` ∈ {`CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`} per the state machine in `_shared/data-handling-policy.md` §2. Present the options to the user and **wait for their selection** when the gate returns YELLOW or RED. Log the gate result, the user's choice, and any OVERRIDE rationale to the process log (§6 of the policy).
+
+**Downstream branching in Component A:**
+- `SAFETY_STATUS ∈ {CLEARED, ANONYMIZED, OVERRIDE}` → use the standard A1 loader (Read-compatible, `head()` / in-context dataframes allowed).
+- `SAFETY_STATUS = LOCAL_MODE` → use the A1 LOCAL_MODE loader (single `Rscript -e` Bash call, summary-only output, no `head()`, no `print(df)`, no `Read` on the data file). See `component-a-core.md` A1.
+- `SAFETY_STATUS = HALTED` → stop the skill. Do not proceed to A1.
+
+Any sub-skill invoked from Component A (e.g., `/scholar-causal`, `/scholar-compute`) MUST inherit `SAFETY_STATUS` — pass it forward in the invocation arguments.
 
 ---
 
@@ -197,7 +227,7 @@ Before generating any figure code, produce a **Figure Plan** table and present i
 2. For each figure, specify: plot type, which variables map to which aesthetics (x, y, fill, color, facet), target dimensions (width × height in inches), journal preset if applicable, and purpose (which finding it illustrates)
 3. **Present the table to the user and wait for confirmation** before proceeding to B1
 4. The user may add, remove, reorder, or modify figures — update the plan accordingly
-5. If the user has pre-approved the figure plan, proceed without pause (auto-confirm)
+5. If running inside `/scholar-full-paper` pipeline, proceed without pause (auto-confirm)
 
 After confirmation, generate figures in the order specified in the plan.
 
@@ -1002,7 +1032,7 @@ echo "| $(date '+%Y-%m-%d %H:%M') | A3 | OLS with HC3 robust SEs | Default SEs, 
 - **Missing data strategy**: Listwise deletion vs. MI; justification
 - **Robustness design**: Which alternative specs and why they test the right threat
 
-This incremental-persistence pattern protects against context compaction — decisions are on disk the moment they are made.
+This incremental-persistence pattern (same as Phase 2 search log in scholar-full-paper) protects against context compaction — decisions are on disk the moment they are made.
 
 ### D3 — Script Index Update
 
@@ -1255,7 +1285,7 @@ This is a recommendation, not a gate — the user may proceed directly to `/scho
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available 2>/dev/null; then

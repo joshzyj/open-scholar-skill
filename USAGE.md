@@ -1,7 +1,7 @@
 # Open Scholar Skill — User Guide
 
 A Claude Code project for social scientists writing for top-tier journals.
-28 scholar skills + 1 utility (29 total) covering the full research pipeline from idea exploration to collaboration.
+29 scholar skills + 1 utility (30 total) covering the full research pipeline from idea exploration to collaboration.
 
 ---
 
@@ -66,6 +66,7 @@ The text after the skill name is passed directly as context. The more specific t
 | `/scholar-collaborate` | Multi-author collaboration management | `credit 4-author paper on immigrant integration` |
 | `/scholar-ling` | Sociolinguistics work | `variationist analysis of t-deletion` |
 | `/scholar-ethics` | Research ethics compliance | `pre-submission ethics check for Demography` |
+| `/scholar-init` | **v5.9.0** Stand up a project directory, scan raw files, populate `.claude/safety-status.json` so the PreToolUse hook knows which files Claude may Read | `nhanes-bmi ~/Downloads/nhanes.csv` or `review` |
 | `/scholar-safety` | Real-time data privacy protection | `scan data.csv before analysis` |
 | `/scholar-verify` | Verify analysis-to-manuscript consistency | `full output/drafts/full-paper-2026-03-10.md` |
 | `/scholar-code-review` | Multi-agent code review of analysis scripts (6 agents) | `full output/scripts/` |
@@ -750,6 +751,73 @@ cause → journal ladder by subfield → rewrite introduction for new journal).
 ```
 
 7 workflows: Codebook Development, Grounded Theory (open → axial → selective coding), Reflexive Thematic Analysis (Braun & Clarke 6-phase), Systematic Content Analysis (Krippendorff), LLM-Assisted Qualitative Coding (with human validation and inter-rater reliability), Inter-Rater Reliability (Krippendorff's alpha, Fleiss' kappa, Gwet's AC1), Mixed-Methods Integration (case selection, joint displays, qual-to-quant transformation).
+
+---
+
+### 14b. Project Initialization — `/scholar-init` (v5.9.0)
+
+```
+# Create a fresh project (copies raw files into data/raw/ by default)
+/scholar-init nhanes-bmi ~/Downloads/nhanes-2017.csv materials/codebook.pdf
+
+# Same, but symlink raw files instead of copying
+bash scripts/init-project.sh --dest ~/research --link nhanes-bmi ~/Downloads/nhanes-2017.csv
+
+# Resolve NEEDS_REVIEW entries interactively
+/scholar-init review
+
+# Ingest new files into an existing project
+/scholar-init add ~/Downloads/new-wave.csv
+
+# Check current state
+/scholar-init status
+```
+
+**What it does.** Stands up the canonical project layout, ingests raw files, scans each one with `scripts/gates/safety-scan.sh` (Presidio backend if installed, regex otherwise), and writes `.claude/safety-status.json` — a per-file `SAFETY_STATUS` sidecar that the PreToolUse hook consults on every `Read` / `NotebookRead` / `Grep` / `Glob` call.
+
+```
+<dest>/<slug>/
+├── README.md                 ← teaches the researcher how the project works
+├── .claude/
+│   └── safety-status.json    ← per-file SAFETY_STATUS (CLEARED / LOCAL_MODE / ANONYMIZED / OVERRIDE / HALTED / NEEDS_REVIEW:*)
+├── data/
+│   ├── raw/                  ← copies (or symlinks with --link) of ingested files
+│   ├── interim/              ← scripts write here
+│   └── processed/            ← analytic datasets
+├── materials/                ← codebooks, questionnaires, protocols
+├── output/                   ← scripts write results here
+└── logs/
+    └── init-report.md        ← permanent ingest record
+```
+
+**Why this exists.** Before v5.9.0, data-touching skills loaded files via the `Read` tool, which sends contents to the Anthropic API. For IRB-protected interviews, restricted NHANES/PSID data, HIPAA-covered health records, and any file containing PII, that was a data-use-agreement violation waiting to happen. `/scholar-init` is the ingestion-time half of the fix: every file that lands in `data/raw/` gets scanned and triaged before any downstream skill can touch it. The interactive `review` mode walks you through every `NEEDS_REVIEW` entry — this is the "slow down and decide" step that keeps you in the loop exactly as the README's ethical-use section describes.
+
+**The five `SAFETY_STATUS` values (defined in `.claude/skills/_shared/data-handling-policy.md`):**
+
+| Status | Meaning | What downstream skills may do |
+|---|---|---|
+| `CLEARED` | Safe, open data | Read normally (Read tool allowed) |
+| `LOCAL_MODE` | Sensitive, must stay local | Bash-only `Rscript -e` / `python3 -c` heredocs that print aggregated results; forbidden verbs: `head(df)`, `print(df)`, `View(df)`, `df.head()`, `df.sample()` |
+| `ANONYMIZED` | De-identified derivative exists | Read the ANONYMIZED derivative only; never the raw file |
+| `OVERRIDE` | Researcher explicitly waived the scan | Read with explicit acknowledgment. Audio/video/transcript formats (`wav mp3 flac mp4 mov eaf textgrid cha ...`) CANNOT be `OVERRIDE`'d — the hook refuses them even if the sidecar says otherwise |
+| `HALTED` | Off-limits | PreToolUse hook refuses any `Read` / `Grep` / `Glob` call targeting this file |
+| `NEEDS_REVIEW:<level>` | Pending triage (RED / YELLOW / BINARY / UNKNOWN) | PreToolUse hook refuses until resolved via `/scholar-init review` |
+
+**The 11 data-touching skills that consult the sidecar:**
+- **Tier A** (LOCAL_MODE dispatch): `scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-brainstorm`
+- **Tier B** (sidecar check + fail-fast refusal): `scholar-data`, `scholar-verify`, `scholar-replication`, `scholar-code-review`, `scholar-write`
+
+**Note on deliberate exclusions.** `scholar-full-paper` is not bundled in this repo (see README's "Note on the Full-Paper Orchestrator"). The `scripts/gates/init-handshake.sh` helper is shipped for standalone script use but has no in-repo caller — no orchestrator dispatches on it here. The sidecar + hook work fully for the 11 modular skills listed above.
+
+**Quickstart:**
+
+```
+bash scripts/init-project.sh --dest ~/research nhanes-bmi ~/Downloads/nhanes.csv
+cd ~/research/nhanes-bmi
+/scholar-init review                      # resolve each NEEDS_REVIEW entry
+/scholar-eda data/raw/nhanes.csv          # proceeds under the sidecar-recorded status
+/scholar-analyze ...                      # inherits the same decisions
+```
 
 ---
 

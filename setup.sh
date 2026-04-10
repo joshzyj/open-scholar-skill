@@ -15,9 +15,23 @@ echo ""
 echo "▸ Checking symlinks..."
 
 if [ -L "$SCRIPT_DIR/skills" ]; then
-  echo "  ✓ skills/ symlink exists"
+  # Verify symlink points to the right target
+  link_target="$(readlink "$SCRIPT_DIR/skills")"
+  if [ "$link_target" = ".claude/skills" ] || [ "$link_target" = "$SCRIPT_DIR/.claude/skills" ]; then
+    echo "  ✓ skills/ symlink exists"
+  else
+    echo "  ⚠ skills/ symlink points to $link_target (expected .claude/skills)"
+    echo "    Repairing..."
+    rm "$SCRIPT_DIR/skills"
+    ln -sf .claude/skills "$SCRIPT_DIR/skills"
+    echo "  ✓ Repaired skills/ → .claude/skills/"
+  fi
 elif [ -d "$SCRIPT_DIR/.claude/skills" ]; then
-  rm -rf "$SCRIPT_DIR/skills"
+  if [ -e "$SCRIPT_DIR/skills" ]; then
+    echo "  ✗ skills/ exists as a real directory — refusing to delete."
+    echo "    Please remove or rename it manually, then re-run setup.sh."
+    exit 1
+  fi
   ln -sf .claude/skills "$SCRIPT_DIR/skills"
   echo "  ✓ Created skills/ → .claude/skills/"
 else
@@ -25,9 +39,23 @@ else
 fi
 
 if [ -L "$SCRIPT_DIR/agents" ]; then
-  echo "  ✓ agents/ symlink exists"
+  # Verify symlink points to the right target
+  link_target="$(readlink "$SCRIPT_DIR/agents")"
+  if [ "$link_target" = ".claude/agents" ] || [ "$link_target" = "$SCRIPT_DIR/.claude/agents" ]; then
+    echo "  ✓ agents/ symlink exists"
+  else
+    echo "  ⚠ agents/ symlink points to $link_target (expected .claude/agents)"
+    echo "    Repairing..."
+    rm "$SCRIPT_DIR/agents"
+    ln -sf .claude/agents "$SCRIPT_DIR/agents"
+    echo "  ✓ Repaired agents/ → .claude/agents/"
+  fi
 elif [ -d "$SCRIPT_DIR/.claude/agents" ]; then
-  rm -rf "$SCRIPT_DIR/agents"
+  if [ -e "$SCRIPT_DIR/agents" ]; then
+    echo "  ✗ agents/ exists as a real directory — refusing to delete."
+    echo "    Please remove or rename it manually, then re-run setup.sh."
+    exit 1
+  fi
   ln -sf .claude/agents "$SCRIPT_DIR/agents"
   echo "  ✓ Created agents/ → .claude/agents/"
 else
@@ -131,6 +159,59 @@ echo "  ✓ Knowledge graph: $KNOWLEDGE_DIR"
 
 echo ""
 
+# ── 3c. Presidio PII detection (optional) ───────────────────────
+echo "▸ Checking jq (required for PreToolUse data guard)..."
+if command -v jq >/dev/null 2>&1; then
+  echo "  ✓ jq found at $(command -v jq)"
+else
+  cat <<'JQ_MISSING'
+  ⚠ jq is NOT installed.
+
+    The PreToolUse data guard (scripts/gates/pretooluse-data-guard.sh)
+    requires jq to parse Claude Code hook payloads reliably. Without it,
+    the guard falls back to a minimal sed-based parser and fails CLOSED
+    on data files — every Read of a .csv/.dta/.xlsx will be blocked
+    with "install jq" until jq is available.
+
+    Install jq before using this plugin:
+      macOS:  brew install jq
+      Linux:  apt-get install jq   (or dnf / pacman / etc.)
+
+JQ_MISSING
+fi
+echo ""
+
+echo "▸ PII detection setup..."
+
+PRESIDIO_INSTALLED=false
+if python3 -c "import presidio_analyzer" 2>/dev/null; then
+  echo "  ✓ Presidio already installed"
+  PRESIDIO_INSTALLED=true
+else
+  echo "  Presidio enables NER-based PII detection (names, addresses, entities)"
+  echo "  in addition to the built-in regex patterns. Requires ~500MB disk."
+  read -rp "  Install Presidio? [y/N] " install_presidio
+  if [[ "${install_presidio:-N}" =~ ^[Yy] ]]; then
+    echo "  Installing presidio-analyzer and spaCy model..."
+    # Use `python3 -m pip` so we target the same interpreter safety-scan
+    # will use at runtime. Bare `pip` on mixed systems (multiple pythons,
+    # pyenv, Homebrew) can install into the wrong site-packages.
+    if python3 -m pip install presidio-analyzer spacy 2>/dev/null && \
+       python3 -m spacy download en_core_web_lg 2>/dev/null; then
+      echo "  ✓ Presidio installed"
+      PRESIDIO_INSTALLED=true
+    else
+      echo "  ⚠ Presidio installation failed — regex fallback will be used"
+      echo "    To install manually: python3 -m pip install presidio-analyzer spacy && python3 -m spacy download en_core_web_lg"
+    fi
+  else
+    echo "  → Skipping. Regex-based detection will be used."
+    echo "    To install later: python3 -m pip install presidio-analyzer spacy && python3 -m spacy download en_core_web_lg"
+  fi
+fi
+
+echo ""
+
 # ── 4. Write .env file ───────────────────────────────────────────
 echo "▸ Writing .env file..."
 
@@ -168,56 +249,90 @@ echo ""
 # ── 5. Install as personal skills (global access) ────────────────
 echo "▸ Installing as personal Claude Code skills..."
 
-PERSONAL_SKILLS_DIR="$HOME/.claude/skills"
-PERSONAL_AGENTS_DIR="$HOME/.claude/agents"
+PERSONAL_SKILLS="$HOME/.claude/skills"
+PERSONAL_AGENTS="$HOME/.claude/agents"
+SKILLS_SRC="$SCRIPT_DIR/.claude/skills"
+AGENTS_SRC="$SCRIPT_DIR/.claude/agents"
 
-mkdir -p "$PERSONAL_SKILLS_DIR"
-mkdir -p "$PERSONAL_AGENTS_DIR"
+# Helper: ensure a directory-level symlink points to the right target.
+#
+# SAFETY: this function NEVER recursively deletes a real (non-symlink)
+# directory. Earlier versions of this script did, which could wipe a
+# user's pre-existing ~/.claude/skills/ or ~/.claude/agents/ — any
+# personal skills the user had installed outside this project.
+#
+# If $target is a real directory, we refuse to touch it and print a
+# clear migration message. The user can:
+#   1. Move or rename $target, then re-run setup.sh, OR
+#   2. Re-run with SCHOLAR_FORCE_MIGRATE=1 if they are certain the
+#      directory is safe to replace.
+link_dir() {
+  local target="$1" src="$2" label="$3"
+  if [ -L "$target" ]; then
+    existing="$(readlink "$target")"
+    if [ "$existing" = "$src" ]; then
+      echo "  ✓ $label (already installed)"
+    else
+      rm "$target"
+      ln -s "$src" "$target"
+      echo "  ✓ $label (repaired — was pointing to $existing)"
+    fi
+  elif [ -d "$target" ]; then
+    # Real directory at $target — do NOT delete.
+    if [ "${SCHOLAR_FORCE_MIGRATE:-0}" = "1" ]; then
+      echo "  ⚠ $label — SCHOLAR_FORCE_MIGRATE=1 set, replacing real directory"
+      echo "    Backup: moving $target → ${target}.bak-$(date +%Y%m%d-%H%M%S)"
+      mv "$target" "${target}.bak-$(date +%Y%m%d-%H%M%S)"
+      ln -s "$src" "$target"
+      echo "  ✓ $label (migrated — prior contents saved to .bak-*)"
+    else
+      cat <<MIGRATE_MSG
 
-# Symlink _shared/ protocol directory
-shared_src="$SCRIPT_DIR/.claude/skills/_shared"
-shared_target="$PERSONAL_SKILLS_DIR/_shared"
-if [ -d "$shared_src" ]; then
-  if [ -L "$shared_target" ] || [ -d "$shared_target" ]; then
-    echo "  ✓ _shared (already installed)"
+  ✗ $label — cannot install: $target exists and is a REAL directory.
+    This script refuses to delete unrelated user content in ~/.claude/.
+
+    If the directory contains your OWN skills/agents that you want to
+    keep, move or rename it:
+        mv "$target" "${target}.my-skills"
+    then re-run: bash setup.sh
+
+    If you are SURE the directory is safe to replace (e.g., it was
+    created by a previous run of this setup that left stale state),
+    re-run with:
+        SCHOLAR_FORCE_MIGRATE=1 bash setup.sh
+    The existing directory will be renamed to ${target}.bak-<timestamp>
+    before the symlink is created — nothing is rm -rf'd.
+
+MIGRATE_MSG
+      return 1
+    fi
   else
-    ln -s "$shared_src" "$shared_target"
-    echo "  ✓ _shared (installed)"
+    ln -s "$src" "$target"
+    echo "  ✓ $label (installed)"
   fi
+}
+
+mkdir -p "$HOME/.claude"
+
+if [ -d "$SKILLS_SRC" ]; then
+  link_dir "$PERSONAL_SKILLS" "$SKILLS_SRC" "skills/"
+  skill_count=$(find "$SKILLS_SRC" -maxdepth 1 -type d | wc -l)
+  skill_count=$((skill_count - 1))  # subtract the directory itself
+else
+  echo "  ⚠ .claude/skills/ not found — skipping"
+  skill_count=0
 fi
 
-# Symlink each skill directory
-skill_count=0
-for skill_dir in "$SCRIPT_DIR/.claude/skills"/scholar-*/ "$SCRIPT_DIR/.claude/skills"/sync-docs/; do
-  [ -d "$skill_dir" ] || continue
-  name="$(basename "$skill_dir")"
-  target="$PERSONAL_SKILLS_DIR/$name"
-  if [ -L "$target" ] || [ -d "$target" ]; then
-    echo "  ✓ $name (already installed)"
-  else
-    ln -s "$skill_dir" "$target"
-    echo "  ✓ $name (installed)"
-  fi
-  skill_count=$((skill_count + 1))
-done
+if [ -d "$AGENTS_SRC" ]; then
+  link_dir "$PERSONAL_AGENTS" "$AGENTS_SRC" "agents/"
+  agent_count=$(find "$AGENTS_SRC" -maxdepth 1 -name '*.md' | wc -l)
+else
+  echo "  ⚠ .claude/agents/ not found — skipping"
+  agent_count=0
+fi
 
-# Symlink each agent file
-agent_count=0
-for agent_file in "$SCRIPT_DIR/.claude/agents"/*.md; do
-  [ -f "$agent_file" ] || continue
-  name="$(basename "$agent_file")"
-  target="$PERSONAL_AGENTS_DIR/$name"
-  if [ -L "$target" ] || [ -f "$target" ]; then
-    echo "  ✓ $name (already installed)"
-  else
-    ln -s "$agent_file" "$target"
-    echo "  ✓ $name (installed)"
-  fi
-  agent_count=$((agent_count + 1))
-done
-
-echo "  → $skill_count skills, $agent_count agents installed to ~/.claude/"
-echo "  → Skills are now available in ALL projects via Claude Code"
+echo "  → $skill_count skills, $agent_count agents available via ~/.claude/"
+echo "  → New skills added to the repo are automatically available in all sessions"
 echo ""
 
 # ── 6. Add SCHOLAR_SKILL_DIR to shell profile ────────────────────

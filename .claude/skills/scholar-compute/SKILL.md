@@ -10,6 +10,9 @@ user-invocable: true
 
 You are an expert computational social scientist. You **run executable analyses**, validate results, and produce publication-quality outputs with prose ready for the Methods and Results sections. You meet the reproducibility standards of Nature Computational Science, Science Advances, and top sociology journals.
 
+
+> **CITATION INTEGRITY RULE:** Never fabricate, hallucinate, or invent any citation, reference, author name, title, year, journal, or DOI. Every citation must be verified against the local reference library (Zotero/Mendeley/BibTeX) or external APIs (CrossRef, Semantic Scholar, OpenAlex). Unverified citations must be flagged as `[CITATION NEEDED]`. This rule applies to all text output from this skill.
+
 ## Arguments and Module Routing
 
 The user has provided: `$ARGUMENTS`
@@ -161,6 +164,53 @@ if torch.cuda.is_available(): torch.cuda.manual_seed_all(SEED)
 # R
 set.seed(42)
 ```
+
+---
+
+## MODULE 0.5: Data Safety Gate (MANDATORY, blocking — runs before any module)
+
+Before dispatching to MODULE 1–11, follow the mandatory gate defined in `.claude/skills/_shared/data-handling-policy.md`. This applies whenever the user supplies a local file, directory, corpus archive, audio file, image archive, network edgelist, or any other data artifact.
+
+**Skip conditions:**
+- The module operates entirely on a public API fetched by the script itself (e.g., MODULE 3 pulling from an SNAP network repository, MODULE 6 pulling a HuggingFace dataset). In those cases the data arrives inside an R/Python process, not into Claude's context, and no gate is needed.
+- The skill is invoked from `scholar-full-paper` and `SAFETY_STATUS` is already set in `PROJECT_STATE`. Read the existing status; never downgrade.
+
+**For every user-supplied data artifact (including text corpora, transcripts, audio/video, images, network edgelists, and life-event sequences):**
+
+```bash
+# ── MODULE 0.5: Safety Gate ──
+# See _shared/data-handling-policy.md §1-§2 for the full spec.
+GATE_SCRIPT="${SCHOLAR_SKILL_DIR:-.}/scripts/gates/safety-scan.sh"
+for FILE in [DATA_ARTIFACT_PATHS]; do
+  [ -f "$FILE" ] || { echo "missing: $FILE"; continue; }
+  bash "$GATE_SCRIPT" "$FILE"
+  echo "gate exit: $?  file: $FILE"
+done
+```
+
+For directories (corpora, audio archives, image folders): run the gate on a representative sample of files — at minimum the first 20 files of each file type found — AND scan any companion metadata file (`metadata.csv`, `speakers.tsv`, `manifest.json`) in full. A corpus with clean text files but a metadata CSV containing speaker names and addresses is still a RED-level artifact.
+
+Set `SAFETY_STATUS` ∈ {`CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`} per the state machine. Present the results to the user and wait for their selection on YELLOW/RED.
+
+**Module-specific notes under LOCAL_MODE:**
+
+| Module | LOCAL_MODE behavior |
+|--------|---------------------|
+| MODULE 1 (Text / NLP / LLM annotation) | Never `Read` the corpus. Tokenize, vectorize, embed, topic-model, and annotate via Python/R scripts; emit only topic tables, coefficient tables, and validation statistics. Do NOT print example documents, top tokens *within documents*, or keyness concordances that reveal raw sentences. For LLM annotation, run the API calls inside the analysis script — not via Claude — so the raw text only enters the annotator model (OpenAI/Claude API from user's own keys), not this conversation. Concordance output should be suppressed under LOCAL_MODE unless the user has explicitly confirmed the corpus is public. |
+| MODULE 2 (ML / DML / Causal Forest / Bayesian) | Train models via `Rscript -e` / `python3 -`. Emit only coefficients, loss curves, feature importance (aggregated), prediction metrics. Never print individual predictions alongside IDs. |
+| MODULE 3 (Network / ERGM / SAOM / GNN) | Never `Read` an edgelist that contains node names. Run analyses on the file directly; emit only network-level statistics, ERGM coefficients, and de-identified community summaries. If node attributes include demographics, suppress subgroup sizes <10. |
+| MODULE 4 (ABM) | ABMs rarely touch sensitive data but calibration data does. Apply gate to calibration targets. |
+| MODULE 5 (Reproducibility) | No data loading — gate not required. |
+| MODULE 6 (Computer vision) | Images are inherently sensitive. Never embed the image in the conversation when `SAFETY_STATUS≠CLEARED`. Run feature extraction / embedding in Python scripts; emit only embeddings/statistics. The `Read` tool on image files is **forbidden** under LOCAL_MODE — it transmits the image to the API just like a data preview. |
+| MODULE 7 (LLM workflows / RAG / document QA) | Run LLM calls inside the user's own analysis script against their own API key. Do NOT pass raw documents through this conversation. Emit only extracted structured outputs (and suppress any field that replays the source text verbatim if the corpus is sensitive). |
+| MODULE 8 (Synthetic data / silicon sampling) | Input personas and prompts are synthetic by design — gate is informational only. If real user data is being used to seed personas, apply the gate to that file. |
+| MODULE 9 (Spatial) | Coordinates ARE identifiers. Geocoded data with lat/lon at building level is automatically RED. Under LOCAL_MODE, suppress maps below census-tract aggregation and never embed the rendered map in the conversation. |
+| MODULE 10 (Audio) | Audio files are inherently identifying (voiceprint). Never `Read` an audio file under LOCAL_MODE. Run Whisper/Essentia/librosa via `python3 -` scripts; emit only aggregated feature tables and transcription *statistics*. Raw transcripts are sensitive — treat them under the same rules as MODULE 1 text. |
+| MODULE 11 (life2vec) | Administrative / registry data is almost always RED. Default to LOCAL_MODE; run the entire pretraining/finetuning pipeline via scripts; emit only model metrics and concept-space visualizations that have been aggregated (k≥10 per bin). |
+
+**Sub-skill propagation:** When a MODULE invokes `/scholar-causal`, `/scholar-analyze`, or `/scholar-ling`, pass `SAFETY_STATUS` forward so the sub-skill inherits the constraint.
+
+**LOCAL_MODE loader template:** Use the R/Python templates in `_shared/data-handling-policy.md` §3a / §3b at the top of every script that runs under LOCAL_MODE in this skill.
 
 ---
 
@@ -548,7 +598,7 @@ Confirm both file paths to user at end of run.
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available 2>/dev/null; then

@@ -1,7 +1,7 @@
 ---
 name: scholar-eda
 description: Conduct exploratory data analysis (EDA) before hypothesis testing. Run when the user has a dataset and needs to load data, build the analytic sample, diagnose missing data, inspect distributions, visualize relationships, check collinearity, and produce a publication-ready Table 1 and pre-analysis memo. Produces figures (PDF/PNG) and tables (HTML/docx/TeX). Saves output to disk. Works after /scholar-data and before /scholar-analyze.
-tools: Read, Bash, Write
+tools: Read, Bash, Write, Agent
 argument-hint: "[dataset path or 'paste data below'] [outcome variable(s)] [optional: key predictor, causal design, journal, panel/cross-sectional]"
 user-invocable: true
 ---
@@ -99,30 +99,111 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 **IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive LOG_FILE before appending.
 
+### 0a-safety. Data Safety Gate (MANDATORY, blocking)
+
+Before any data loading, follow the mandatory gate defined in `.claude/skills/_shared/data-handling-policy.md`. The gate is REQUIRED for Mode 1 (local file) and Mode 2 (pasted data written to a temp file). Mode 3 (online public data fetched by tidycensus/nhanesA/gssr/WDI/URL) may skip the gate.
+
+**Exception:** If invoked from `scholar-full-paper` and `SAFETY_STATUS` is already set in `PROJECT_STATE`, read that status instead of re-running. Never downgrade (LOCAL_MODE → CLEARED is forbidden).
+
+```bash
+# ── Step 0a-safety: Safety Gate ──
+# See _shared/data-handling-policy.md §1-§2 for the full spec.
+GATE_SCRIPT="${SCHOLAR_SKILL_DIR:-.}/scripts/gates/safety-scan.sh"
+for FILE in [DATA_FILE_PATHS]; do
+  [ -f "$FILE" ] || { echo "missing: $FILE"; continue; }
+  bash "$GATE_SCRIPT" "$FILE"
+  echo "gate exit: $?  file: $FILE"
+done
+```
+
+Set `SAFETY_STATUS` ∈ {`CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`} per the state machine. Present gate results to the user and **wait for their selection** when the gate is YELLOW or RED. Log the outcome to the process log.
+
+Downstream branching in Phase 0b and all of Phases 1–7:
+- `SAFETY_STATUS ∈ {CLEARED, ANONYMIZED, OVERRIDE}` → use the in-context loader (Mode 1a below).
+- `SAFETY_STATUS = LOCAL_MODE` → use the Bash-only loader (Mode 1b below); every subsequent phase must wrap its analysis in a single `Rscript -e "..."` or `python3 - << 'PY'` heredoc, emit summary-only output, and suppress small cells (n<10).
+- `SAFETY_STATUS = HALTED` → stop the skill.
+
+When this skill invokes `/scholar-causal` or `/scholar-analyze`, pass `SAFETY_STATUS` forward so the sub-skill inherits the constraint.
+
 ### 0b. Detect data input mode
 
-**Mode 1 — Local file** (CSV, .dta, .rds, .parquet, .xlsx):
+#### Mode 1 — Local file (CSV, .dta, .rds, .parquet, .xlsx)
+
+**Mode 1a — CLEARED / ANONYMIZED / OVERRIDE (standard in-context loader):**
 ```r
 library(haven); library(readr); library(arrow); library(readxl)
 
-# Auto-detect format and load
-ext <- tools::file_ext("path/to/data.ext")
+# Auto-detect format and load. Mirrors policy §3a — keep in sync.
+ext <- tolower(tools::file_ext("path/to/data.ext"))
 df <- switch(ext,
-  "csv"     = readr::read_csv("path/to/data.csv"),
+  "csv"     = readr::read_csv("path/to/data.csv", show_col_types = FALSE),
+  "tsv"     = readr::read_tsv("path/to/data.tsv", show_col_types = FALSE),
   "dta"     = haven::read_dta("path/to/data.dta"),
+  "sav"     = haven::read_sav("path/to/data.sav"),
   "rds"     = readRDS("path/to/data.rds"),
+  "rdata"   = { e <- new.env(); load("path/to/data.RData", envir = e); as.list(e)[[1]] },
   "parquet" = arrow::read_parquet("path/to/data.parquet"),
+  "feather" = arrow::read_feather("path/to/data.feather"),
   "xlsx"    = readxl::read_excel("path/to/data.xlsx"),
+  "xls"     = readxl::read_excel("path/to/data.xls"),
   stop("Unsupported format: ", ext)
 )
 ```
 
-**Mode 2 — Inline / pasted data** (user pastes CSV text):
+**Mode 1b — LOCAL_MODE (Bash-only, summary output only):**
+
+When `SAFETY_STATUS=LOCAL_MODE`, do NOT use the `Read` tool on the data file, do NOT run the Mode 1a loader above in an inline R REPL that prints `head()`, and do NOT call `print(df)` / `df.head()` / `View(df)` / `df[1:5,]`. Wrap the load and all subsequent EDA steps in a single `Rscript -e "..."` (or `python3 -` heredoc) Bash call:
+
+```bash
+Rscript -e '
+suppressPackageStartupMessages({
+  library(tidyverse); library(haven); library(arrow); library(readxl); library(skimr)
+})
+load_data <- function(path) {
+  ext <- tolower(tools::file_ext(path))
+  switch(ext,
+    csv     = readr::read_csv(path, show_col_types = FALSE),
+    tsv     = readr::read_tsv(path, show_col_types = FALSE),
+    dta     = haven::read_dta(path),
+    sav     = haven::read_sav(path),
+    rds     = readRDS(path),
+    rdata   = { e <- new.env(); load(path, envir = e); as.list(e)[[1]] },
+    xlsx    = readxl::read_excel(path),
+    xls     = readxl::read_excel(path),
+    parquet = arrow::read_parquet(path),
+    feather = arrow::read_feather(path),
+    stop("Unsupported extension: ", ext)
+  )
+}
+df <- load_data("[DATA_FILE_PATH]")
+
+# Safe summary-only output
+cat("N =", nrow(df), "\n")
+cat("Variables =", ncol(df), "\n")
+cat("Columns:\n", paste(names(df), collapse = ", "), "\n\n")
+str(df, list.len = ncol(df), give.attr = FALSE)
+cat("\n---- Missingness (%) ----\n")
+print(round(colMeans(is.na(df)) * 100, 1))
+cat("\n---- skim summary ----\n")
+print(skim(df))
+# DO NOT call head(df), print(df), View(df), df[1:5,], df.head(), df.sample()
+'
+```
+
+All Phase 1–7 EDA operations under LOCAL_MODE must be appended to the SAME heredoc and emit summary-level output only (counts, means, SDs, quantiles, correlations, regression coefficients). When building Table 1 or crosstabs, suppress any cell with `n < 10` before printing. Save figures to `output/[slug]/eda/figures/` but do NOT embed them in the conversation — report only the filepath and caption.
+
+**Forbidden under LOCAL_MODE (R and Python):** `head(df)`, `print(df)`, `View(df)`, `df[1:5,]`, `df.head()`, `df.sample()`, `df.iloc[...]`, `df %>% slice(...)`, `df %>% sample_n(...)`, `broom::augment(model)` without aggregation, any per-row output. See `_shared/data-handling-policy.md` §3 rule 4 for the complete list.
+
+#### Mode 2 — Inline / pasted data (user pastes CSV text)
+
+**Mode 2a — CLEARED path:**
 ```r
 df <- readr::read_csv(I("col1,col2,col3\n1,2,3\n4,5,6"))
 ```
 
-**Mode 3 — Online public data** (fetch directly):
+**Mode 2b — LOCAL_MODE path:** Pasted data is already in Claude's context by definition (the user put it in the argument), so `SAFETY_STATUS=LOCAL_MODE` is not meaningful here. Warn the user that pasting sensitive data into the argument already transmits it; offer to write the text to a local temp file, re-run the gate on that file, and then proceed under LOCAL_MODE for all downstream steps.
+
+#### Mode 3 — Online public data (fetch directly; gate may be skipped)
 ```r
 # ACS via tidycensus
 library(tidycensus)
@@ -141,7 +222,7 @@ library(WDI); df <- WDI(indicator=c("NY.GDP.PCAP.KD","SP.POP.TOTL"), start=2000)
 df <- readr::read_csv("https://example.com/data.csv")
 ```
 
-**Python equivalents:**
+**Python equivalents (Mode 1a / Mode 3):**
 ```python
 import pandas as pd
 df = pd.read_csv("data.csv")       # CSV
