@@ -11,6 +11,30 @@ import sys
 import json
 import os
 
+# Opaque binary formats: compressed/encoded data where reading raw bytes
+# as text produces garbage that wastes Presidio cycles and never finds
+# anything useful. Mirror the binary list in safety-scan.sh so we exit
+# fast. Note: PDF/DOCX/XLSX are intentionally OMITTED — those formats
+# often contain extractable plaintext fragments (PDF content streams,
+# OOXML XML) that Presidio CAN usefully scan, so we let them through.
+OPAQUE_BINARY_EXTENSIONS = frozenset({
+    "dta", "sav", "rds", "rdata", "parquet", "feather", "arrow",
+    "h5", "hdf5", "mat", "pkl", "npy", "npz", "pickle",
+    "sqlite", "db",
+    "wav", "mp3", "flac", "m4a", "ogg", "aac", "aiff",
+    "mp4", "mov", "avi", "mkv", "webm",
+    "jpg", "jpeg", "png", "tiff", "tif", "heic", "heif", "bmp", "webp", "gif",
+})
+
+# spaCy's default nlp.max_length is 1,000,000 chars. Research files
+# (CSV codebooks, multi-MB PDFs) routinely exceed this and crash the
+# default pipeline with ValueError [E088]. Bump the limit on the
+# analyzer's NLP backbone, and truncate text as a last-ditch backstop
+# in case the API differs across Presidio versions.
+SPACY_MAX_LENGTH = 10_000_000        # 10M chars ≈ 10 MB of text
+TEXT_TRUNCATION_LIMIT = 9_500_000    # leave headroom under SPACY_MAX_LENGTH
+
+
 def check_presidio_available():
     try:
         from presidio_analyzer import AnalyzerEngine
@@ -209,6 +233,34 @@ def classify(entity_type, score):
 
 
 def scan_file(file_path, output_json=False):
+    # ── Opaque binary short-circuit ──
+    # Stata, SPSS, parquet, hdf5, pickle, audio, video, raster images
+    # store data zlib-compressed or in proprietary encodings. Reading
+    # them as text gives garbage that wastes spaCy/Presidio cycles and
+    # never matches anything useful. Exit fast with a YELLOW the bash
+    # wrapper recognizes — the user will be prompted to choose
+    # LOCAL_MODE or HALT for these files.
+    ext = os.path.splitext(file_path)[1].lstrip(".").lower()
+    if ext in OPAQUE_BINARY_EXTENSIONS:
+        if output_json:
+            print(json.dumps({
+                "file": file_path,
+                "red_count": 0,
+                "yellow_count": 1,
+                "issues": [{
+                    "severity": "YELLOW",
+                    "entity_type": "BINARY_FORMAT",
+                    "score": 1.0,
+                    "snippet": f".{ext}",
+                }],
+            }, indent=2))
+        else:
+            print(f"YELLOW: Binary format (.{ext}) — Presidio cannot inspect compressed/encoded content")
+            print(f"  YELLOW: File extension '.{ext}' is opaque to text-based PII analyzers")
+            print(f"  YELLOW: Recommend LOCAL_MODE: analyze via Rscript -e / python3 -c")
+            print(f"  YELLOW: without transmitting row-level data to the API.")
+        return 2
+
     # Wrap analyzer construction AND execution in a fallback guard.
     # Presidio depends on spaCy models, tldextract cache files, and
     # transient network fetches for its NER backbone; any of these can
@@ -229,12 +281,40 @@ def scan_file(file_path, output_json=False):
         )
         return 99
 
+    # Bump spaCy's per-pipeline max_length so larger codebooks/PDFs
+    # don't crash with ValueError [E088]. The default 1M-char ceiling is
+    # far below what modern hardware can comfortably handle. We reach
+    # into the analyzer's NLP backbone via Presidio's nlp_engine API,
+    # but that API has changed across versions — wrap defensively and
+    # let the truncation safety net (below) catch any version where
+    # this bump silently fails.
+    try:
+        nlp_dict = analyzer.nlp_engine.nlp
+        for engine in nlp_dict.values():
+            engine.max_length = SPACY_MAX_LENGTH
+    except (AttributeError, KeyError, TypeError):
+        pass
+
     try:
         with open(file_path, "r", errors="replace") as f:
             text = f.read()
     except OSError as exc:
         print(f"ERROR: Could not read {file_path}: {exc}", file=sys.stderr)
         return 1
+
+    # Truncation safety net: even with the max_length bump above,
+    # extremely large text inputs would exhaust memory or take minutes
+    # to NER. Cap at TEXT_TRUNCATION_LIMIT and warn so the user knows
+    # the scan was partial. (Headers/variable names sit at the top of
+    # most research files, so the front of the file is the highest-
+    # information region anyway.)
+    if len(text) > TEXT_TRUNCATION_LIMIT:
+        print(
+            f"WARNING: Truncating {file_path} from {len(text):,} to "
+            f"{TEXT_TRUNCATION_LIMIT:,} chars for Presidio analysis",
+            file=sys.stderr,
+        )
+        text = text[:TEXT_TRUNCATION_LIMIT]
 
     try:
         results = analyzer.analyze(
