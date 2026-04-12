@@ -81,7 +81,8 @@ Critical gates are enforced by actual scripts in `scripts/gates/`:
 - `safety-scan.sh <file>` — local PII/HIPAA detection (exits RED/YELLOW/GREEN); routes to Presidio backend if installed. Binary formats (`.xlsx`, `.parquet`, `.dta`, `.sav`, `.rds`, etc.) are promoted to YELLOW even when scanners return GREEN.
 - `safety-scan-presidio.py <file>` — Presidio NER-based PII detection backend (called by safety-scan.sh)
 - `anonymize-presidio.py scan|anonymize|keygen|verify <file>` — Presidio-based anonymizer for qualitative data
-- `pretooluse-data-guard.sh` — PreToolUse hook for `~/.claude/settings.json` (v5.9.0). Intercepts `Read` / `NotebookRead` / `NotebookEdit` / `Grep` / `Glob`, looks up path in nearest `.claude/safety-status.json`, refuses `NEEDS_REVIEW:*` and `HALTED`. Fails closed on missing jq, unresolved symlinks, and system-directory paths. NOT auto-registered by setup.sh — see CHANGELOG v5.9.0 upgrade note.
+- `pretooluse-data-guard.sh` — PreToolUse hook auto-registered in `~/.claude/settings.json` by `setup.sh`. Intercepts `Read` / `NotebookRead` / `NotebookEdit` / `Grep` / `Glob`, walks upward to discover nearest `.claude/safety-status.json` (ancestor lookup — works from subdirectories), validates sidecar schema, refuses `NEEDS_REVIEW:*`, `HALTED`, and qualitative-text `OVERRIDE`. Fails closed on missing `jq` or `python3`, unresolved symlinks, and system-directory paths.
+- `sidecar-schema.sh` — shared sidecar schema validator. Sourced by both `pretooluse-data-guard.sh` and `init-handshake.sh`. Rejects non-string values and unknown status strings.
 - `init-handshake.sh` — standalone handshake helper (bundled for parity; no in-repo caller since `scholar-full-paper` is deliberately absent).
 - `derive-proj.sh` — canonical `${PROJ}` helper.
 - `phase-verify.sh <phase> <project_dir>` — checks PROJECT STATE, output files, word counts per phase (shipped for parity; no in-repo orchestrator uses it).

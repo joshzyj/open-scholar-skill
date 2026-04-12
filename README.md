@@ -22,20 +22,25 @@ Open-scholar-skill is designed to **assist** researchers, not replace them. If y
 
 ### A Note on the Full-Paper Orchestrator
 
-This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, `scholar-polish`, or `scholar-presentation`. The first four were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
+This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, `scholar-polish`, `scholar-book`, or `scholar-presentation`. The first five were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
 
-However, the 28 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
+However, the 30 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
 
 ```
-/scholar-idea  →  /scholar-lit-review-hypothesis  →  /scholar-design
-→  /scholar-causal  →  /scholar-data  →  /scholar-safety
-→  /scholar-eda  →  /scholar-analyze  →  /scholar-compute (if needed)
-→  /scholar-write  →  /scholar-verify  →  /scholar-citation
-→  /scholar-journal  →  /scholar-open  →  /scholar-ethics
-→  /scholar-respond (simulate review)  →  revise and submit
+/scholar-init (set up project + data safety)
+    →  /scholar-idea  →  /scholar-brainstorm (or /scholar-conceptual)
+    →  /scholar-lit-review (or /scholar-lit-review-hypothesis)
+    →  /scholar-hypothesis  →  /scholar-design
+    →  /scholar-causal  →  /scholar-data  →  /scholar-safety
+    →  /scholar-eda  →  /scholar-analyze  →  /scholar-compute (if needed)
+    →  /scholar-qual (if qualitative)  →  /scholar-ling (if sociolinguistic)
+    →  /scholar-write  →  /scholar-citation  →  /scholar-verify
+    →  /scholar-journal  →  /scholar-open  →  /scholar-replication
+    →  /scholar-ethics  →  /scholar-code-review
+    →  /scholar-respond (simulate review)  →  revise and submit
 ```
 
-Running each skill individually keeps you in the loop at every stage — reviewing outputs, making decisions, and steering the research direction. This is how we believe AI tools should be used in scholarship.
+Not every project needs every skill. Skip what doesn't apply, repeat what does (`/scholar-write` → `/scholar-verify` → revise → repeat). Running each skill individually keeps you in the loop at every stage — reviewing outputs, making decisions, and steering the research direction. This is how we believe AI tools should be used in scholarship.
 
 ## Data Safety (v5.9.0)
 
@@ -59,7 +64,7 @@ cd ~/research/nhanes-bmi
 
 **The eleven data-touching skills gated by this stack**: `scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-brainstorm` (Tier A — LOCAL_MODE dispatch); `scholar-data`, `scholar-verify`, `scholar-replication`, `scholar-code-review`, `scholar-write` (Tier B — sidecar check + fail-fast refusal).
 
-**Enabling mechanical enforcement.** The v5.9.0 PreToolUse data guard ships as `scripts/gates/pretooluse-data-guard.sh` but is NOT auto-registered in `~/.claude/settings.json`. To enable mechanical enforcement across every Claude Code session, add a PreToolUse entry pointing to the absolute path of this script. See [CHANGELOG v5.9.0](CHANGELOG.md) for the upgrade note. `jq` is required on the host (`brew install jq` / `apt-get install jq`); the hook fails closed without it.
+**Enabling mechanical enforcement.** `setup.sh` automatically registers `scripts/gates/pretooluse-data-guard.sh` as a PreToolUse hook in `~/.claude/settings.json`. The hook intercepts every `Read`, `NotebookRead`, `NotebookEdit`, `Grep`, and `Glob` call. `jq` and `python3` are required on the host; the hook fails closed without either.
 
 ## Share Your Work on aiXiv
 
@@ -175,11 +180,12 @@ bash setup.sh
 1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
 2. Auto-detect your Zotero library (or prompt for path)
 3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 30 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — available in **every** Claude Code session, any project
-5. Check for `jq` (required by the v5.9.0 PreToolUse data guard)
-6. Write a `.env` file with your configuration
+4. Install all 30 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — installed per-entry alongside any existing personal skills
+5. Register the PreToolUse data-safety hook in `~/.claude/settings.json` (idempotent; preserves existing settings)
+6. Check for `jq` and `python3` (required by the data-safety hook)
+7. Write a `.env` file with your configuration
 
-**Requirements:** `bash`, `python3`, `jq`. The data-safety hook fails closed if `jq` is missing, so install it first (`brew install jq` / `apt-get install jq`). Presidio (optional, for NER-based PII detection) is installed via `python3 -m pip install presidio-analyzer presidio-anonymizer`.
+**Requirements:** `bash`, `python3`, `jq`. The data-safety hook fails closed if `jq` or `python3` is missing, so install both first (`brew install jq` / `apt-get install jq`). Presidio (optional, for NER-based PII detection) is installed via `python3 -m pip install presidio-analyzer presidio-anonymizer`.
 
 After setup, all `/scholar-*` commands work from any directory.
 

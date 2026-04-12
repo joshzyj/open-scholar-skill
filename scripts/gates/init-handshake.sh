@@ -23,6 +23,14 @@
 
 set -uo pipefail
 
+# Source the shared sidecar schema validator so the handshake and the
+# PreToolUse guard never diverge on what constitutes a valid sidecar.
+HANDSHAKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${HANDSHAKE_DIR}/sidecar-schema.sh" ]; then
+  # shellcheck source=./sidecar-schema.sh
+  . "${HANDSHAKE_DIR}/sidecar-schema.sh"
+fi
+
 # ─── 1. Detect scholar-init project context ────────────────────────────
 # Requires all seven marker files/directories created by init-project.sh.
 if ! { [ -f ".claude/safety-status.json" ] \
@@ -56,7 +64,31 @@ EOF
   exit 1
 fi
 
-# ─── 3. Check for unresolved NEEDS_REVIEW entries ───────────────────────
+# ─── 3. Validate sidecar schema before counting NEEDS_REVIEW ────────────
+# Use the shared validator (sourced above). Object-valued statuses,
+# unknown strings, and "HALTED: lgtm" style typos are all caught here.
+# Without this, a malformed sidecar that happened to count 0
+# NEEDS_REVIEW entries would silently pass the handshake.
+if declare -F validate_sidecar_schema >/dev/null 2>&1; then
+  SCHEMA_ERRORS="$(validate_sidecar_schema .claude/safety-status.json 2>/dev/null || true)"
+  if [ -n "$SCHEMA_ERRORS" ]; then
+    cat >&2 <<EOF
+⛔ HALT — .claude/safety-status.json failed schema validation.
+
+Every value must be a JSON string matching one of:
+  CLEARED | ANONYMIZED | OVERRIDE | LOCAL_MODE | HALTED | NEEDS_REVIEW[:LEVEL]
+
+Invalid entries:
+${SCHEMA_ERRORS}
+
+Fix the sidecar (edit by hand or re-run /scholar-init), then re-invoke
+/scholar-full-paper.
+EOF
+    exit 1
+  fi
+fi
+
+# ─── 3b. Check for unresolved NEEDS_REVIEW entries ──────────────────────
 UNRESOLVED=$(jq -r '[.[] | select(type=="string" and startswith("NEEDS_REVIEW:"))] | length' .claude/safety-status.json 2>/dev/null)
 if ! [[ "${UNRESOLVED:-}" =~ ^[0-9]+$ ]]; then
   cat >&2 <<EOF
@@ -97,9 +129,18 @@ mkdir -p "${PROJ}"/{drafts,logs,protocols,reports,tables,figures,scripts,citatio
 # ─── 5. Write or append PROJECT STATE ──────────────────────────────────
 STATE_FILE="${PROJ}/logs/project-state.md"
 
-if [ -f "$STATE_FILE" ] && grep -q "^## Phase" "$STATE_FILE" 2>/dev/null; then
-  # State already has phase entries — this is a re-entry. Append a note
-  # instead of clobbering the accumulated phases.
+# Re-entry detection: only consider this a re-entry if THIS script
+# previously ran. We look for either marker it writes on first-run:
+#   - "Initialized via: scholar-init" (in the header preamble), or
+#   - "## Phase -1 — Safety Gate" (its own section header).
+# Earlier versions matched any `^## Phase` header, which would treat a
+# PROJECT STATE that some other skill had pre-populated (e.g. with
+# Phase 0) as a re-entry and skip the fresh-state initialization.
+if [ -f "$STATE_FILE" ] \
+   && { grep -q "Initialized via: scholar-init" "$STATE_FILE" 2>/dev/null \
+        || grep -q "^## Phase -1 — Safety Gate" "$STATE_FILE" 2>/dev/null; }; then
+  # State was previously written by this handshake — this is a re-entry.
+  # Append a note instead of clobbering the accumulated phases.
   {
     printf '\n## Phase -1 — Safety Gate Re-Entry (%s)\n' "$(date '+%Y-%m-%d %H:%M')"
     printf -- '- Status: SKIPPED (already complete; scholar-init handshake previously detected)\n'

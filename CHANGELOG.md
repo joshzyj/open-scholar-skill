@@ -3,6 +3,32 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.9.1] - 2026-04-12
+
+Data-safety guard hardening based on external code review. Fixes 4 critical bypass routes in the PreToolUse hook, strengthens installer, and adds comprehensive regression tests.
+
+### Fixed
+- **Sidecar subdirectory bypass (P0):** Guard now walks upward from cwd to find nearest `.claude/safety-status.json` via `find_project_root()`. Previously only checked `$CWD/.claude/`, so tool calls from `project/subdir/` bypassed the project-root sidecar entirely.
+- **Glob enumeration bypass (P0):** Non-empty Glob patterns like `**/*` from a scholar-init project root are now blocked. Previously only empty patterns triggered the project-root check.
+- **Grep/Glob qualitative text leak (P0):** `is_rawdata_path()` now includes `materials/`, `transcripts/`, `interviews/`, `field-notes/`, `fieldnotes/` so Grep and Glob on qualitative-text directories are blocked the same way Read is.
+- **OVERRIDE on text transcripts (P0):** OVERRIDE refusal now uses path classification (`is_qual_path()`), not just extension. A `.txt` or `.docx` in `transcripts/` can no longer bypass the qualitative-data OVERRIDE ban via hand-edited sidecar.
+- **Relative-path classifier evasion:** `canonicalize()` now prepends `${CWD}` to relative inputs before resolution. Previously a Grep with `path="data/raw"` (relative) bypassed `is_rawdata_path`'s `*/data/raw` pattern.
+- **Sidecar schema validation:** New shared `sidecar-schema.sh` library used by both guard and handshake. Rejects non-string values, unknown status strings, and non-object roots.
+- **setup.sh hook registration:** `setup.sh` now actually registers the PreToolUse hook in `~/.claude/settings.json` (idempotent jq merge, preserves existing settings). Previously only documented.
+- **setup.sh per-entry install:** Skills and agents are now installed as individual symlinks inside `~/.claude/skills/` and `~/.claude/agents/`, preserving pre-existing user skills. Previously replaced the entire directory.
+- **Presidio install path:** `setup.sh` now installs both `presidio-analyzer` and `presidio-anonymizer`.
+
+### Added
+- `scripts/gates/sidecar-schema.sh` — shared sidecar validator sourced by guard + handshake
+- `python3` hard-dependency check in the guard for gated tools (Read/Grep/Glob/NotebookRead/NotebookEdit)
+- Case-insensitive SAFE_SCOPE allowlist for macOS compatibility
+- 7 new smoke test files with 66 guard assertions, 14 setup assertions, and init-project/phase-verify/consistency coverage
+- Error-checked destructive operations in `setup.sh` (`link_entry`, `repo_convenience_link`)
+
+### Changed
+- `init-handshake.sh` re-entry detection uses its own markers instead of generic `## Phase` headers
+- `setup.sh` uses `set -uo pipefail` instead of `set -euo pipefail` for non-interactive stdin compatibility
+
 ## [5.9.0] - 2026-04-10
 
 End-to-end data-safety hardening. Extends open-scholar-skill's "keep researchers in the loop" philosophy with mechanical enforcement against unsafe data reads. Scholar skills previously loaded user data via the `Read` tool, which transmits file contents to the Anthropic API. v5.9.0 introduces a three-layer defense — policy, ingestion-time scanning, and a PreToolUse hook — so no sensitive file can reach the API without an explicit researcher decision.

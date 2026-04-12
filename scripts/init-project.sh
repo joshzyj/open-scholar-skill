@@ -682,7 +682,7 @@ Depending on what you ingested:
 | A codebook / questionnaire (no data yet) | `/scholar-brainstorm materials <path to codebook>` |
 | A dataset you want to explore | `/scholar-eda <path to data>`                       |
 | A causal research question | `/scholar-causal <treatment> -> <outcome>`         |
-| A full paper to run | `/scholar-full-paper <topic description>`           |
+| A research idea to develop | `/scholar-idea <topic description>`             |
 | Interview transcripts | `/scholar-qual <path to transcripts>`               |
 | A text corpus / NLP task | `/scholar-compute text <corpus path>`            |
 | Sociolinguistic variation / acoustic data | `/scholar-ling <module> <path>`          |
@@ -767,5 +767,5 @@ echo "    cat README.md          # read the operating manual"
 if [ "$NEEDS_REVIEW_COUNT" -gt 0 ]; then
   echo "    /scholar-init review   # resolve NEEDS_REVIEW entries"
 fi
-echo "    /scholar-full-paper    # begin the pipeline, or invoke any scholar-* skill"
+echo "    /scholar-idea          # start with an idea, or invoke any scholar-* skill"
 echo ""
