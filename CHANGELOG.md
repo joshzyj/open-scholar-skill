@@ -3,6 +3,34 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.10.0] - 2026-04-13
+
+Pipeline hardening against wrong-results propagation. A real project run surfaced a failure class where a buggy coefficient (sign-flip from missing fixed effects + NA-as-0 recoding) shaped a 9,000-word manuscript before post-hoc review caught the underlying bug. Because this fork intentionally excludes `scholar-full-paper` / `scholar-grant` / `scholar-book` to keep researchers in the loop, the fixes land in `scholar-analyze`, `scholar-respond`, and shared reference files in `_shared/`.
+
+### Added
+
+**Shared reference files (`_shared/`)**
+- **`code-review-fix-loop.md`**: fix-loop spec for any pre-execution code-review gate. Classifies CRITICAL findings as AUTO_FIX (mechanical / design-blueprint-specified: missing clustering, FE, wrong SE type, NA-as-0, missing AME export, missing seed, hardcoded paths, deprecated APIs) or ESCALATE (design-level: tautological outcome, sample-restriction mismatch, identification-strategy violation). AUTO_FIX uses the Edit tool with max 2 iterations; all changes logged to `code-review-fixes-[date].md`; ESCALATE halts with `code-review-escalation-[date].md`.
+- **`results-registry-contract.md`**: mandates machine-readable analysis artifacts that replace Task agent prose as source of truth. Every analysis run emits `results-registry.csv` (hypothesis × model spec mapping), `adjudication-log.csv`, `ame-*.csv` (mandatory for every logit / probit via `marginaleffects::avg_slopes()`), and `coefficients-*.csv`. Orchestrators read from disk, never from agent return text; disagreements logged to `reconcile-[date].md` and the CSV wins.
+- **`phase-runtime-sanity.md`**: five runtime checks script review cannot see — plausibility scan (AME > 1, |β/SE| > 100, zero-N, NaN, inverted CIs, out-of-range p), direction consistency across M1–M4 specifications (`DIRECTION_UNSTABLE` flag), clean-room re-run in isolated R session (auto-on for ASR/AJS/Demography/Nature/Science; opt-in elsewhere via `SCHOLAR_FORCE_CLEANROOM=1`), runtime invariants via `stopifnot()`, pre-analysis-plan compliance (missing pre-registered tests CRITICAL, extra tests label EXPLORATORY).
+
+**New scholar-analyze reference**
+- **`scholar-analyze/references/adjudication-rule.md`**: deterministic coded rule replacing prose adjudication. Maps (direction, p-value, α) → `adjudication_code ∈ {SUPPORTED, SUPPORTED_NULL, CONTRADICTED, AMBIGUOUS, NOT_SUPPORTED, INCONSISTENT_FLAG}` with corresponding `prose_verb`. Includes reusable R helper `adjudicate()` and schema for `adjudication-log.csv`. Results prose must cite the log verbatim — "directionally consistent" is reserved for `AMBIGUOUS`.
+
+**scholar-respond — New-Analysis Gate (MANDATORY)**
+- New Step 3a in `scholar-respond/SKILL.md`. When R&R reviewers request additional analyses (the #1 R&R failure mode: "run with state FE", "cluster differently", "subset sample"), the new analysis flows through script generation → code-review + fix loop → registry emission (`rr-results-registry.csv`, `rr-adjudication-log.csv`) → runtime sanity → disk citation. Previously these analyses bypassed every gate and numbers were dropped into the response letter via Task agent prose paraphrase.
+- `response-templates.md` "Analysis added" block rewritten to require `[rr-results-registry.csv row=X model_id=Y]` disk citations for every numeric claim. Step 3b verify-numerics now cross-checks response-letter numbers against the registry cell-for-cell.
+
+### Changed
+
+- **`scholar-analyze/SKILL.md`**: replaced the permissive "Avoid 'proves' — use 'is consistent with,' 'supports,' 'suggests'" writing rule with a pointer to `adjudication-rule.md`. Every hypothesis statement must use the `prose_verb` column from `adjudication-log.csv` verbatim. Quality Checklist now requires `results-registry.csv`, `adjudication-log.csv`, `ame-[model].csv` for every logit / probit, and `coefficients-[model].csv` for every fitted model.
+
+### Why
+
+A real project run showed a Task agent returning prose that claimed "H1c is precisely negative" while the disk CSV showed the opposite sign. Post-hoc code review caught 33 CRITICAL issues (missing clustering, missing province fixed effects, NA-as-0 recoding, a tautological outcome) — but only after results had shaped a 9,000-word manuscript. After fixes, the coefficient was null (p=0.48), invalidating the theoretical re-framing the manuscript had been built around. Root cause: review gates ran sequentially after generation, so errors propagated forward before being caught backward. This release makes gates concurrent with generation. Smoke tests: 238 PASS, 0 FAIL.
+
+---
+
 ## [5.9.1] - 2026-04-12
 
 Data-safety guard hardening based on external code review. Fixes 4 critical bypass routes in the PreToolUse hook, strengthens installer, and adds comprehensive regression tests.

@@ -169,9 +169,10 @@ Sincerely,
 **Text deleted**:
 - "We have removed [description] from [section] (formerly p. X) to [reason — reduce word count / eliminate redundancy / sharpen the argument]."
 
-**Analysis added**:
-- "We have run the analysis suggested by Reviewer [N]. Results are presented in [Table X / Appendix Table A1]."
-- "We have added [a fixed-effects specification / AME / robustness check] as Table [X] in the Online Appendix."
+**Analysis added** (MANDATORY disk-citation format — every numeric claim must carry the `rr-results-registry.csv` row reference so reviewers and editors can audit the exact specification; numbers must match the CSV cell-for-cell):
+- "We have run the [specification name] suggested by Reviewer [N]. The focal coefficient is β = [value], SE = [value], 95% CI = [lo, hi], p = [value], N = [value] [rr-results-registry.csv row=H_new model_id=[ID]]. Results are presented in [Table X / Appendix Table A1]."
+- "We have added [a fixed-effects specification / AME / robustness check] as Table [X] in the Online Appendix. The main effect is AME = [value], 95% CI = [lo, hi], p = [value] [rr-results-registry.csv row=H_new model_id=[ID]]."
+- Do NOT paraphrase the Task agent's prose summary; always cite the CSV row. Step 3b verify-numerics enforces equivalence.
 
 **New citation added**:
 - "We have added citations to [Author Year] and [Author Year] in the [Literature Review] section."

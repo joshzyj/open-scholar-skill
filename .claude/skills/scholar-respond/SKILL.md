@@ -1,7 +1,7 @@
 ---
 name: scholar-respond
 description: "Simulate peer review, draft point-by-point responses to reviewer comments, revise a manuscript, plan a resubmission to a new journal after rejection, or write an R&R cover letter. 5 modes — simulate (3–4 parallel journal-calibrated reviewer agents + severity matrix + revision roadmap), respond (categorized triage dashboard + point-by-point letter + changes summary table), revise (word-budget-tracked section edits via /scholar-write), resubmit (rejection diagnosis + journal retargeting + cover letter), cover-letter (standalone R&R or resubmission cover letter). Supports multi-round R&R tracking. Saves response letter, revision plan, and cover letter to disk."
-tools: Read, Glob, Grep, WebSearch, Bash, Task, Write
+tools: Read, Glob, Grep, WebSearch, Bash, Task, Write, Agent
 argument-hint: "[simulate|respond|revise|resubmit|cover-letter] [paper file or reviewer comments] [journal] [round:R1|R2|R3]"
 user-invocable: true
 ---
@@ -67,9 +67,9 @@ cat "$SKILL_DIR/.claude/agents/peer-reviewer-computational.md"
 
 ```bash
 # Load multi-backend reference search infrastructure
-# See .claude/skills/scholar-citation/references/refmanager-backends.md
+# See .claude/skills/_shared/refmanager-backends.md
 # Run auto-detection to set $REF_SOURCES, $REF_PRIMARY, $ZOTERO_DB, etc.
-eval "$(cat "$SKILL_DIR/.claude/skills/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
+eval "$(cat "$SKILL_DIR/.claude/skills/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
 ```
 
 ### 0c — Create Output Directory
@@ -365,10 +365,10 @@ When a reviewer recommends citing a specific paper or author:
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 # Fallback: try with .claude/skills prefix if direct path fails
 if ! type scholar_search &>/dev/null 2>&1; then
-  eval "$(cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  eval "$(cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 fi
 
 # Uses the multi-backend search function from Step 0b
@@ -631,7 +631,7 @@ Confirm the revision plan with the user before executing.
 **Step 2a — Re-load reference manager** (shell state does not persist between Bash calls):
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 echo "REF_SOURCES=$REF_SOURCES | ZOTERO_DB=${ZOTERO_DB:-not found}"
 ```
 
@@ -685,13 +685,42 @@ After all revisions:
 - [ ] Word count is within journal limit after all revisions
 - [ ] All [CITATION NEEDED] markers from revision are flagged for `/scholar-citation`
 - [ ] **NEW citations introduced during R&R** are verified via local library, CrossRef, Semantic Scholar, or OpenAlex — not inserted from Claude's memory alone
+- [ ] **Claim verification (MANDATORY):** All prose claims attributing findings to newly added citations are checked against Knowledge Graph or PDF text — run `scholar-citation` Step V-3.5. R&R citations added under time pressure are the highest risk for mischaracterization. Flag all 7 marker types: `[CLAIM-REVERSED]`, `[CLAIM-MISCHARACTERIZED]`, `[CLAIM-OVERCAUSAL]`, `[CLAIM-UNSUPPORTED]`, `[CLAIM-WRONG-POPULATION]`, `[CLAIM-IMPRECISE]`, `[CLAIM-NOT-CHECKABLE]`. Correct all error-level markers before saving.
 - [ ] Reference list includes all newly cited works and removes any dropped citations
 - [ ] Tracked changes / blue text marking is applied consistently
 - [ ] No new typos or grammatical errors introduced by revisions
 
+**Run the claim verification gate on the revised manuscript:**
+```bash
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/verify-claims.sh" "[revised_manuscript_path]"
+```
+
+### Step 3a: New-Analysis Gate (MANDATORY when reviewers request new analyses)
+
+**Purpose:** R&R reviewers routinely ask for new regressions (add state FE, cluster SEs differently, subset sample, different outcome). The highest failure mode in R&R is running the new analysis without the rigor of the original pipeline, then dropping numbers into the response letter via prose paraphrase. This gate forces new analyses through the same contract as the initial study.
+
+**Trigger:** any "Items Requiring Author Action" in the response strategy that involves re-running or adding a regression / subset / specification.
+
+**Protocol — every new analysis dispatched from an R&R response must:**
+
+1. Generate the analysis script under `${PROJ}/scripts/rr-NN-[description].R`, do NOT execute yet.
+2. Run `scholar-code-review` in `statistics` + `data-handling` + `correctness` mode against the new script, using the Phase 3 design blueprint (if available) or the reviewer's specification as compliance reference. Apply the **Code-Review Fix Loop** from `cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/code-review-fix-loop.md"`. CRITICAL halts.
+3. Load the registry contract and adjudication rule:
+   ```bash
+   cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/results-registry-contract.md"
+   cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/scholar-analyze/references/adjudication-rule.md"
+   ```
+   The new script must emit `${PROJ}/tables/rr-results-registry.csv` and (if hypothesis-bearing) `${PROJ}/tables/rr-adjudication-log.csv` in the same schemas as the originals, appended or separate.
+4. Execute in a clean R session, then run plausibility + direction-consistency + (for ASR/AJS/Demography/Nature/Science) clean-room re-run checks from `cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/phase-runtime-sanity.md"`. CRITICAL halts.
+5. Disk-citation discipline in the response letter (Step 4 below): every numeric claim from a new analysis must carry `[rr-results-registry.csv row=X model_id=Y]` — never a prose paraphrase of the agent's return text.
+
+**Skip only if:** the reviewer's comment is handled without new statistics (rewording, adding citations, arguing against the request, noting a limitation).
+
+---
+
 ### Step 3b: Verification Gate (scholar-verify)
 
-**Purpose:** R&R revisions often introduce new numbers, change table references, or alter statistical claims. Run `scholar-verify` on the revised manuscript to catch inconsistencies introduced during revision.
+**Purpose:** R&R revisions often introduce new numbers, change table references, or alter statistical claims. Run `scholar-verify` on the revised manuscript to catch inconsistencies introduced during revision. When new analyses were run in Step 3a, `verify-numerics` and `verify-logic` MUST also compare prose claims against `rr-results-registry.csv` and `rr-adjudication-log.csv`.
 
 **Check for raw outputs:**
 ```bash
@@ -1130,7 +1159,7 @@ Confirm all saved file paths to the user.
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available 2>/dev/null; then

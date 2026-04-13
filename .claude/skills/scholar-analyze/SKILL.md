@@ -892,7 +892,7 @@ Append this check to the analysis log and include it in the Results prose output
 - Report exact p-values in text (p = .034); use stars only in tables
 - Reference tables and figures inline: "(Table 2, Column 3)"; "(Figure 2)"
 - Report effect sizes alongside p-values — p < .001 without β is uninterpretable
-- Avoid "proves" — use "is consistent with," "supports," "suggests"
+- Hypothesis verdicts are NOT chosen by the writer. Apply the coded rule in `references/adjudication-rule.md`; every hypothesis statement uses the `prose_verb` column from `adjudication-log.csv` verbatim. "Directionally consistent" is reserved for `adjudication_code = AMBIGUOUS` and must NOT read as "supported". Never write "proves".
 - Null findings must be reported with full statistics, not just "not significant"
 - No passive voice constructions ("was found to be") — active voice only
 
@@ -1074,7 +1074,11 @@ See [coding-decisions-log.md](coding-decisions-log.md) for the full decision rat
 - [ ] **Causal gate**: if causal design detected, `/scholar-causal` invoked (or confirmed already run)
 - [ ] Table 1 descriptives saved as HTML + TeX + docx + CSV
 - [ ] Regression table saved as HTML + TeX + docx
-- [ ] AME table saved (HTML + TeX + docx) for any logit/ordered logit model
+- [ ] AME table saved (HTML + TeX + docx + **CSV as `ame-[model].csv`**) for every logit / probit / ordered-logit model (MANDATORY per results-registry-contract.md — do not hand-compute AMEs from coefficients; use `marginaleffects::avg_slopes()`)
+- [ ] **`results-registry.csv` saved** — one row per (hypothesis × model spec) mapping hypothesis_id → coefficient, AME, table_ref, figure_ref (see `../_shared/results-registry-contract.md`)
+- [ ] **`adjudication-log.csv` saved** — one row per hypothesis with `adjudication_code` computed by the coded rule in `references/adjudication-rule.md` (no prose-only adjudication)
+- [ ] **`coefficients-[model].csv` saved** for every fitted model (raw β, SE, CI, p, n)
+- [ ] **Results prose cites adjudication-log.csv verbatim** — every hypothesis statement uses the `prose_verb` column from the log; no synonyms invented by the writer
 - [ ] Robustness table saved as HTML + TeX + docx
 - [ ] **A9 Analysis Verification subagent run** — PASS confirmed (or all issues fixed)
 - [ ] At least one figure saved as PDF + PNG (300 DPI)
