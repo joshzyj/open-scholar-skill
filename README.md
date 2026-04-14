@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="Open Scholar Skill" width="560">
+</p>
+
 # Open Scholar Skill — Academic Paper Writing for Claude Code
 
 > **Copyright (c) 2025-2026 Open Scholar Skill Contributors**

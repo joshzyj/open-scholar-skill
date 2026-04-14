@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Open Scholar Skill mark">
+  <title>Open Scholar Skill</title>
+  <defs>
+    <linearGradient id="page2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e9eef5"/>
+    </linearGradient>
+  </defs>
+  <rect width="200" height="200" rx="28" fill="#0f1f3d"/>
+  <g transform="translate(22,36)">
+    <path d="M10 135 Q80 115 150 135 L150 145 Q80 125 10 145 Z" fill="#000" opacity="0.35"/>
+    <path d="M12 40 Q45 28 80 40 L80 132 Q45 120 12 132 Z" fill="url(#page2)" stroke="#c9d3e3" stroke-width="2"/>
+    <path d="M80 40 Q115 28 148 40 L148 132 Q115 120 80 132 Z" fill="url(#page2)" stroke="#c9d3e3" stroke-width="2"/>
+    <line x1="80" y1="40" x2="80" y2="132" stroke="#c9d3e3" stroke-width="2"/>
+    <g stroke="#9fb1cc" stroke-width="2" stroke-linecap="round">
+      <line x1="22" y1="60" x2="70" y2="54"/>
+      <line x1="22" y1="74" x2="68" y2="68"/>
+      <line x1="90" y1="54" x2="138" y2="60"/>
+      <line x1="90" y1="68" x2="136" y2="74"/>
+    </g>
+    <g transform="translate(80,28)">
+      <path d="M-14 -6 A14 14 0 0 1 14 -6 L14 2" fill="none" stroke="#f28c1f" stroke-width="5" stroke-linecap="round"/>
+      <rect x="-15" y="0" width="30" height="22" rx="4" fill="#f28c1f"/>
+      <circle cx="0" cy="10" r="3" fill="#ffffff"/>
+      <rect x="-1.5" y="10" width="3" height="7" fill="#ffffff"/>
+    </g>
+  </g>
+</svg>

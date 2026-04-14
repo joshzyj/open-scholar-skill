@@ -12,14 +12,14 @@ Skills and agents live in the `.claude/` directory:
 ```
 open-scholar-skill/
 ├── .claude/
-│   ├── skills/           ← 28 skills (scholar-*) + 1 utility (sync-docs)
+│   ├── skills/           ← 29 skills (scholar-*) + 1 utility (sync-docs)
 │   ├── agents/           ← 9 reviewer agents (peer-reviewer-*) + 4 verification agents (verify-*) + 6 code-review agents (review-code-*)
 │   └── settings.local.json
 ├── README.md
 └── USAGE.md
 ```
 
-All 29 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
+All 30 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
 
 ---
 

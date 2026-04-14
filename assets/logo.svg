@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" role="img" aria-label="Open Scholar Skill">
+  <title>Open Scholar Skill</title>
+  <defs>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e9eef5"/>
+    </linearGradient>
+    <linearGradient id="cover" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1f3a68"/>
+      <stop offset="1" stop-color="#0f1f3d"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Mark: open book with open-access lock -->
+  <g transform="translate(20,30)">
+    <!-- Book cover shadow -->
+    <path d="M10 135 Q80 115 150 135 L150 145 Q80 125 10 145 Z" fill="#0f1f3d" opacity="0.25"/>
+
+    <!-- Left page -->
+    <path d="M12 40 Q45 28 80 40 L80 132 Q45 120 12 132 Z"
+          fill="url(#page)" stroke="#1f3a68" stroke-width="2" stroke-linejoin="round"/>
+    <!-- Right page -->
+    <path d="M80 40 Q115 28 148 40 L148 132 Q115 120 80 132 Z"
+          fill="url(#page)" stroke="#1f3a68" stroke-width="2" stroke-linejoin="round"/>
+    <!-- Spine -->
+    <line x1="80" y1="40" x2="80" y2="132" stroke="#1f3a68" stroke-width="2"/>
+
+    <!-- Text lines on pages -->
+    <g stroke="#9fb1cc" stroke-width="2" stroke-linecap="round">
+      <line x1="22" y1="58"  x2="70" y2="52"/>
+      <line x1="22" y1="70"  x2="70" y2="64"/>
+      <line x1="22" y1="82"  x2="65" y2="76"/>
+      <line x1="90" y1="52"  x2="138" y2="58"/>
+      <line x1="90" y1="64"  x2="138" y2="70"/>
+      <line x1="90" y1="76"  x2="133" y2="82"/>
+    </g>
+
+    <!-- Open-access padlock emblem (orange, unlocked) -->
+    <g transform="translate(80,28)">
+      <!-- Shackle (open) -->
+      <path d="M-14 -6 A14 14 0 0 1 14 -6 L14 2"
+            fill="none" stroke="#f28c1f" stroke-width="5" stroke-linecap="round"/>
+      <!-- Body -->
+      <rect x="-15" y="0" width="30" height="22" rx="4" fill="#f28c1f"/>
+      <circle cx="0" cy="10" r="3" fill="#ffffff"/>
+      <rect x="-1.5" y="10" width="3" height="7" fill="#ffffff"/>
+    </g>
+
+    <!-- Code brackets flanking the book -->
+    <text x="-6" y="92" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="42" font-weight="700" fill="#1f3a68">{</text>
+    <text x="156" y="92" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="42" font-weight="700" fill="#1f3a68">}</text>
+  </g>
+
+  <!-- Wordmark -->
+  <g transform="translate(210,0)">
+    <text x="0" y="95"
+          font-family="Georgia, 'Times New Roman', serif"
+          font-size="46" font-weight="700" fill="#0f1f3d"
+          letter-spacing="0.5">
+      Open Scholar
+    </text>
+    <text x="2" y="132"
+          font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="22" font-weight="600" fill="#f28c1f"
+          letter-spacing="3">
+      /skill
+    </text>
+    <text x="170" y="132"
+          font-family="Georgia, 'Times New Roman', serif"
+          font-size="16" font-style="italic" fill="#4a5a77">
+      a Claude Code skill
+    </text>
+    <!-- Thin rule -->
+    <line x1="0" y1="148" x2="400" y2="148" stroke="#c9d3e3" stroke-width="1.5"/>
+    <text x="0" y="170"
+          font-family="Georgia, 'Times New Roman', serif"
+          font-size="14" fill="#4a5a77">
+      Scholarship, end-to-end — with the researcher in the loop.
+    </text>
+  </g>
+</svg>

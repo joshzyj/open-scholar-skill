@@ -20,7 +20,7 @@ open-scholar-skill/
 ├── skills/ → .claude/skills/    # Symlink (DO NOT replace with directory)
 ├── agents/ → .claude/agents/    # Symlink (DO NOT replace with directory)
 └── .claude/
-    ├── skills/                  # 29 skill directories, each with SKILL.md + references/
+    ├── skills/                  # 30 skill directories, each with SKILL.md + references/
     │   ├── _shared/             # Shared protocols (process-logger.md, version-check.md, data-handling-policy.md, tier-b-safety-gate.md)
     │   ├── scholar-init/        # v5.9.0 — project initializer + data safety sidecar populator (4 modes: init/review/add/status)
     │   ├── scholar-analyze/     # Components loaded on-demand via references/component-a-*.md
@@ -55,7 +55,7 @@ open-scholar-skill/
     └── agents/                  # 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 ```
 
-**Version**: v5.9.0 — 29 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
+**Version**: v5.10.0 — 30 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 
 ---
 

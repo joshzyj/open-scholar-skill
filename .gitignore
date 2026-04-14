@@ -29,3 +29,6 @@ venv/
 # Claude Code local config (contains personal paths)
 .claude/settings.local.json
 .claude/projects/
+assets/xhs-*
+assets/xhs-post.md
+assets/make_xhs_images.py
