@@ -2,19 +2,12 @@
 name: scholar-open
 description: >
   Implement open science practices for a social science study. Five modes:
-  (1) PREREGISTER — OSF / AsPredicted / EGAP / Registered Reports; secondary-data
-  preregistration; deviation reporting; (2) DATA-SHARE — FAIR principles,
-  de-identification, repository selection (Harvard Dataverse / ICPSR / Zenodo /
-  QDR), platform-specific social media policies, computational data (model weights,
-  embeddings), data availability statement templates; (3) CODE-SHARE — replication
-  packages (minimum + gold-standard), README template, renv / conda / Docker /
-  Makefile reproducibility environments, CITATION.cff, Zenodo DOI via GitHub;
-  (4) FULL-PACKAGE — data management plan (NSF/NIH DMP template), CRediT authorship,
-  COI declaration, IRB statement, preprint strategy, open access options with APC
-  waiver guidance; (5) REPLICATION-PACKAGE — end-to-end audit against journal
-  requirements. Required for Nature journals; increasingly expected at ASR,
-  Demography, and Science Advances. Saves preregistration document, data management
-  plan, and replication-package README to disk.
+  (1) PREREGISTER — OSF / AsPredicted / EGAP / Registered Reports; secondary-data preregistration; deviation reporting;
+  (2) DATA-SHARE — FAIR principles, de-identification, repository selection (Dataverse / ICPSR / Zenodo / QDR), social media policies, computational data (model weights, embeddings), data availability statements;
+  (3) CODE-SHARE — minimum + gold-standard replication packages, README template, renv / conda / Docker / Makefile environments, CITATION.cff, Zenodo DOI via GitHub;
+  (4) FULL-PACKAGE — data management plan (NSF/NIH template), CRediT authorship, COI, IRB statement, preprint strategy, open access + APC waiver guidance;
+  (5) REPLICATION-PACKAGE — end-to-end audit against journal requirements.
+  Required at Nature journals; increasingly expected at ASR, Demography, and Science Advances. Saves preregistration document, data management plan, and replication-package README to disk.
 tools: Read, Write, Bash, WebSearch
 argument-hint: "[PREREGISTER|DATA-SHARE|CODE-SHARE|FULL-PACKAGE|REPLICATION-PACKAGE] [study description or journal name]"
 user-invocable: true

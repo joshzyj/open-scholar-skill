@@ -1,24 +1,16 @@
 ---
 name: scholar-knowledge
 description: >
-  User-scoped, cross-project knowledge graph that persists extracted intellectual
-  content (findings, mechanisms, theories, paper relationships) across projects
-  and sessions. Layers on top of Zotero to provide richer content than raw
-  bibliographic metadata. Eight modes: (1) INGEST — add papers from Zotero, PDF,
-  lit-review output, DOI, or manual entry, extracting findings/theories/methods;
-  (2) SEARCH — query the knowledge graph by topic, author, theory, method, or
-  finding; (3) RELATE — add or view relationships between papers (cites,
-  contradicts, extends, replicates, uses-method, uses-theory); (4) STATUS —
-  show graph stats, recent additions, coverage by topic/method/theory;
-  (5) EXPORT — export a project-specific subset as markdown or NDJSON;
-  (6) COMPILE — generate a browsable Obsidian-compatible markdown wiki from
-  the knowledge graph (paper pages, concept pages, topic clusters, contradiction
-  map, research gaps); (7) ASK — answer complex research questions by reading
-  the compiled wiki and saving answers back into it (feedback loop);
-  (8) RE-EXTRACT — re-run intellectual content extraction on raw sources to
-  upgrade papers (e.g., abstract-only → full-PDF) or apply new schema fields.
-  Storage: ~/.claude/scholar-knowledge/ (configurable via SCHOLAR_KNOWLEDGE_DIR).
-  Raw sources archived in raw/ subdirectory (PDFs symlinked, API responses saved).
+  User-scoped, cross-project knowledge graph that persists extracted intellectual content (findings, mechanisms, theories, paper relationships) across projects and sessions. Layers on top of Zotero with richer content than raw bibliographic metadata. Eight modes:
+  (1) INGEST — add papers from Zotero, PDF, lit-review output, DOI, or manual entry;
+  (2) SEARCH — query by topic, author, theory, method, or finding;
+  (3) RELATE — add or view inter-paper relationships (cites, contradicts, extends, replicates, uses-method, uses-theory);
+  (4) STATUS — graph stats, recent additions, coverage;
+  (5) EXPORT — project subset as markdown or NDJSON;
+  (6) COMPILE — generate Obsidian-compatible markdown wiki (papers, concepts, topic clusters, contradictions, gaps);
+  (7) ASK — answer research questions from the compiled wiki, save answers back;
+  (8) RE-EXTRACT — re-run extraction on raw sources to upgrade papers or apply new schema.
+  Storage: ~/.claude/scholar-knowledge/ (set via SCHOLAR_KNOWLEDGE_DIR). Raw sources archived in raw/.
 tools: Read, Bash, Write, WebSearch, WebFetch
 argument-hint: "[ingest|search|relate|status|export|compile|ask|re-extract] [arguments], e.g., 'compile' or 'ask what are the main theories of segregation?' or 're-extract all abstract_only'"
 user-invocable: true

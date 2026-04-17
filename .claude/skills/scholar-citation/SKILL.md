@@ -2,32 +2,15 @@
 name: scholar-citation
 description: >
   Full citation management for social science manuscripts. Eight modes:
-  (1) INSERT — add in-text citations to uncited claims in a draft section;
-  (2) AUDIT — check an existing draft for orphaned citations, missing references,
-  year/author mismatches, and duplicate entries;
-  (3) CONVERT-STYLE — convert a reference list from one style to another
-  (ASA → APA, numbered → author-date, etc.);
-  (4) FULL-REBUILD — end-to-end citation workflow: inventory claims → search
-  Zotero + CrossRef → insert in-text citations → assemble reference list →
-  run consistency audit;
-  (5) VERIFY — systematic verification of every reference against local reference
-  library (Zotero/Mendeley/BibTeX/EndNote), CrossRef API, and WebSearch to confirm
-  each source actually exists with correct metadata; produces a verification report
-  with VERIFIED / UNVERIFIED / CORRECTED status per entry.
-  (6) EXPORT — generate a BibTeX .bib file from a manuscript's reference list for
-  LaTeX workflows; maps references to @article/@book/@inproceedings etc. with cite
-  keys, DOIs, and enriched metadata from Zotero/CrossRef.
-  (7) RETRACTION-CHECK — cross-reference all cited works against Retraction Watch
-  database API; flag retracted papers; suggest replacement citations.
-  (8) REPORTING-SUMMARY — generate pre-filled NHB/NCS Reporting Summary with study
-  design, statistics, data availability fields for Nature Human Behaviour and Nature
-  Computational Science submissions.
-  ABSOLUTE RULE: Never
-  fabricate citations — every reference must be verified against at least one
-  authoritative database before inclusion. Searches local reference library first
-  (Zotero 20,000+ items, Mendeley, BibTeX .bib files, or EndNote XML) before any
-  web search. Flags unsupported claims as SOURCE NEEDED. Saves citation-complete
-  draft and audit log to disk.
+  (1) INSERT — add in-text citations to uncited claims;
+  (2) AUDIT — find orphans, missing refs, year/author mismatches, duplicates;
+  (3) CONVERT-STYLE — convert between styles (ASA, APA, numbered, author-date);
+  (4) FULL-REBUILD — inventory claims → search Zotero + CrossRef → insert → assemble → audit;
+  (5) VERIFY — verify each ref against local library (Zotero/Mendeley/BibTeX/EndNote), CrossRef, WebSearch; VERIFIED/UNVERIFIED/CORRECTED;
+  (6) EXPORT — generate BibTeX .bib for LaTeX with cite keys, DOIs, enriched metadata;
+  (7) RETRACTION-CHECK — cross-reference Retraction Watch; flag and suggest replacements;
+  (8) REPORTING-SUMMARY — pre-filled NHB/NCS Reporting Summary (design, statistics, data availability) for Nature Human Behaviour and NCS.
+  ABSOLUTE RULE: never fabricate — every reference verified against ≥1 authoritative database; local library searched first. Flags unsupported claims SOURCE NEEDED. Saves complete draft + audit log.
 tools: Read, Bash, WebSearch, WebFetch, Write
 argument-hint: "[draft text or section] [journal or style: ASA|APA|Chicago|Nature|NCS|numbered] [mode: insert|audit|convert-style|full-rebuild|verify|export|retraction-check|reporting-summary (default: insert)]"
 user-invocable: true
