@@ -123,9 +123,9 @@ Query the user's local reference library to find stored papers for use as citati
 
 ```bash
 # Load multi-backend reference search infrastructure
-# See .claude/skills/scholar-citation/references/refmanager-backends.md
+# See .claude/skills/_shared/refmanager-backends.md
 # Run auto-detection to set $REF_SOURCES, $REF_PRIMARY, $ZOTERO_DB, etc.
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
 
 # Search for papers by keyword (returns up to 15 results across all detected backends)
 scholar_search "your_keyword" 15 keyword
@@ -138,7 +138,7 @@ scholar_search "your_keyword" 15 keyword
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Search by topic keywords (run 3-5 keyword searches covering the section's main claims)
 scholar_search "keyword1" 15 keyword | scholar_format_citations

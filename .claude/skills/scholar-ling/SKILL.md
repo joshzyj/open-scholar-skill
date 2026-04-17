@@ -136,7 +136,7 @@ Sociolinguistic data is among the most sensitive material in the social sciences
 
 **Skip conditions:**
 - The module operates entirely on a public corpus fetched by the script itself from a standard repository (COCA/COHA/BNC via quanteda, congressional records via `congress`, etc.).
-- The skill is invoked from `scholar-full-paper` and `SAFETY_STATUS` is already set in `PROJECT_STATE`. Read it; never downgrade.
+- The skill is invoked from an upstream orchestrator and `SAFETY_STATUS` is already set in `PROJECT_STATE`. Read it; never downgrade.
 
 **Otherwise, for every user-supplied data artifact** (interview audio, transcripts, speaker metadata, corpus archive, elicitation recordings, experimental response data, TextGrids, Praat logs, matched-guise stimulus sets):
 

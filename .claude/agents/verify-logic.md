@@ -64,12 +64,20 @@ Common errors:
 - H predicts interaction → interaction term is significant but in the wrong direction → text says "confirmed" (WRONG)
 - H not explicitly adjudicated anywhere in the paper
 
+### Phase 3b: Directional Comparison Accuracy (ABSOLUTE RULE #8)
+
+For every comparison in prose ("exceeds," "is greater than," "is less than," "falls short of," "nearly doubles," etc.):
+1. Extract the two quantities being compared
+2. Verify the arithmetic direction is correct
+3. When rounded values appear equal or differ by less than the rounding precision, check unrounded source values before flagging. If unrounded values support the claim → INFO (recommend extra decimal). If they contradict → CRITICAL.
+
 ### Phase 4: Cross-Section Consistency
 
 Check that the same finding is described consistently across sections:
 
 | Comparison | What to check |
 |-----------|---------------|
+| **Period-label consistency (RULE #7)** | Build a period-label inventory from Methods. For each prose claim, verify the period label matches the analysis that produced the cited value. Flag mismatches where a value from period A is attributed to period B. Check for `period-definitions.csv` as authoritative source. |
 | **Abstract ↔ Results** | Every number in abstract matches Results section and tables |
 | **Results ↔ Discussion** | Discussion doesn't overstate what Results showed |
 | **Introduction ↔ Discussion** | Contribution claimed in intro matches what was demonstrated |

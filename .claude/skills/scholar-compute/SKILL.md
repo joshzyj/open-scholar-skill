@@ -173,7 +173,7 @@ Before dispatching to MODULE 1–11, follow the mandatory gate defined in `.clau
 
 **Skip conditions:**
 - The module operates entirely on a public API fetched by the script itself (e.g., MODULE 3 pulling from an SNAP network repository, MODULE 6 pulling a HuggingFace dataset). In those cases the data arrives inside an R/Python process, not into Claude's context, and no gate is needed.
-- The skill is invoked from `scholar-full-paper` and `SAFETY_STATUS` is already set in `PROJECT_STATE`. Read the existing status; never downgrade.
+- The skill is invoked from an upstream orchestrator and `SAFETY_STATUS` is already set in `PROJECT_STATE`. Read the existing status; never downgrade.
 
 **For every user-supplied data artifact (including text corpora, transcripts, audio/video, images, network edgelists, and life-event sequences):**
 

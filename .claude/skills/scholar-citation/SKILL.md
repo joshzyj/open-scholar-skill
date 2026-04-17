@@ -39,7 +39,7 @@ You are a social science citation editor with expertise in ASA, APA, Chicago, an
 
 ---
 
-> **ABSOLUTE RULE — ZERO TOLERANCE FOR CITATION FABRICATION**
+> **ABSOLUTE RULE — ZERO TOLERANCE FOR CITATION FABRICATION AND MISCHARACTERIZATION**
 >
 > **NEVER fabricate, hallucinate, or invent any citation, reference, author name, title, year, journal, volume, page number, or DOI.** Every single reference included in any output MUST be verified to exist via at least ONE of these authoritative sources:
 >
@@ -47,9 +47,11 @@ You are a social science citation editor with expertise in ASA, APA, Chicago, an
 > 2. **CrossRef API** — returned by DOI or title+author query with matching metadata
 > 3. **WebSearch** — confirmed to exist via web search with matching title, author, and publication venue
 >
-> If a source cannot be verified through any of these channels, it MUST be flagged as `**[SOURCE NEEDED: describe required evidence]**` — NEVER inserted as if it were real.
+> **NEVER mischaracterize what a cited source says.** Every prose claim that attributes a finding, argument, or conclusion to a cited paper MUST be verified against the paper's actual content — via the Knowledge Graph (pre-extracted findings) or PDF text. A real paper cited for a claim it doesn't make is as misleading as a fabricated paper.
 >
-> **Violations include:** inventing plausible-sounding author names; guessing publication years, volumes, or page numbers; generating fake DOIs; combining real author names with fabricated titles; citing papers that do not exist. ALL are strictly prohibited.
+> If a source cannot be verified through any of these channels, it MUST be flagged as `**[SOURCE NEEDED: describe required evidence]**` — NEVER inserted as if it were real. If a prose claim cannot be verified against the cited paper's content, it MUST be flagged as `**[CLAIM-NOT-CHECKABLE: Author Year]**` for author review.
+>
+> **Violations include:** inventing plausible-sounding author names; guessing publication years, volumes, or page numbers; generating fake DOIs; combining real author names with fabricated titles; citing papers that do not exist; attributing findings to papers that report different or opposite results; using causal language for correlational findings; applying findings to populations not studied in the cited paper. ALL are strictly prohibited.
 >
 > This rule applies to ALL modes (INSERT, AUDIT, CONVERT-STYLE, FULL-REBUILD, VERIFY) and cannot be overridden.
 
@@ -79,7 +81,7 @@ If style is missing, default to **ASA author-date** and state the assumption.
 | "full rebuild", "rebuild references", "from scratch" | FULL-REBUILD | End-to-end: inventory → Zotero → CrossRef → insert → list → audit |
 | "verify", "check references", "verify citations", "validate references" | VERIFY | Verify every reference against Zotero + CrossRef + WebSearch |
 | "export", "generate bib", "bibtex export", "bib file" | EXPORT | Generate .bib file from reference list |
-| "verify-claims", "check claims" (flag within VERIFY) | VERIFY + claim check | Verify + PDF-based claim support check |
+| "verify-claims", "check claims" | VERIFY | Verify references exist + verify prose claims match cited content (mandatory in all VERIFY runs) |
 | "retraction", "retracted", "retraction check", "retraction watch" | RETRACTION-CHECK | Cross-reference citations against Retraction Watch |
 | "reporting summary", "NHB reporting", "NCS reporting", "nature reporting" | REPORTING-SUMMARY | Generate pre-filled NHB/NCS Reporting Summary |
 | File path to .md/.docx draft | FULL-REBUILD | Treat file as input; run full pipeline |
@@ -96,7 +98,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 # This sources all backend search functions (scholar_search, scholar_format_citations, etc.)
 # and runs auto-detection to set $REF_SOURCES, $REF_PRIMARY, $ZOTERO_DB, etc.
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
 ```
 
 ```bash
@@ -500,13 +502,14 @@ In-text: `(Marx [1867] 1976, as cited in Smith 2020:45)`
 
 1. **Never cite a source you have not verified exists.** Run at least one database check (Zotero keyword/author search, CrossRef DOI/title lookup, or WebSearch) for EVERY reference before including it. If no match is found, flag `**[SOURCE NEEDED]**` — never insert an unverified reference.
 2. **Never cite based on a title match alone.** Verify the source actually supports the claim, and cross-check author + year + publication venue.
-3. **No invisible citation stacking.** Do not insert long parenthetical citation lists to pad references. Each citation must do work.
-4. **Match claim strength to evidence strength.** If the source shows correlation, do not write "causes" in the claim.
-5. **Original source preferred over secondary.** If Smith cites Jones, cite Jones directly (and locate Jones in Zotero/CrossRef).
-6. **Seminal works deserve citation.** Classic theoretical works (Granovetter 1973, Bourdieu 1984, etc.) should be cited at their first mention even if common knowledge.
-7. **Same-year disambiguation.** If an author has two cited works in the same year, assign `a`/`b` suffix consistently in both text and references.
-8. **Verification before output.** Before saving any citation-complete draft, run MODE 5 VERIFY (or its equivalent steps) on the full reference list. No reference list should be saved to disk with unverified entries — unverified items must be flagged `**[UNVERIFIED]**` or replaced with `**[SOURCE NEEDED]**`.
-9. **Metadata accuracy over speed.** If a verified source has different metadata (year, volume, pages) than what was originally cited, update to the verified metadata. Accuracy of bibliographic details is non-negotiable.
+3. **Verify prose claims match cited content (MANDATORY).** Every sentence attributing a finding, argument, or conclusion to a cited source must be checked against the paper's actual content — via Knowledge Graph pre-extracted findings (fast path) or PDF text. Flag mischaracterizations, reversed directionality, causal inflation, and population mismatches. This is not optional — it runs as Step V-3.5 in every VERIFY and FULL-REBUILD execution.
+4. **No invisible citation stacking.** Do not insert long parenthetical citation lists to pad references. Each citation must do work.
+5. **Match claim strength to evidence strength.** If the source shows correlation, do not write "causes" in the claim. If the source says "suggestive evidence," do not write "strong evidence." If the source studied US adults, do not generalize to "all Western democracies."
+6. **Original source preferred over secondary.** If Smith cites Jones, cite Jones directly (and locate Jones in Zotero/CrossRef).
+7. **Seminal works deserve citation.** Classic theoretical works (Granovetter 1973, Bourdieu 1984, etc.) should be cited at their first mention even if common knowledge.
+8. **Same-year disambiguation.** If an author has two cited works in the same year, assign `a`/`b` suffix consistently in both text and references.
+9. **Verification before output.** Before saving any citation-complete draft, run MODE 5 VERIFY (or its equivalent steps) on the full reference list. No reference list should be saved to disk with unverified entries — unverified items must be flagged `**[UNVERIFIED]**` or replaced with `**[SOURCE NEEDED]**`. No prose claims should remain unchecked — all must pass Step V-3.5 claim verification.
+10. **Metadata accuracy over speed.** If a verified source has different metadata (year, volume, pages) than what was originally cited, update to the verified metadata. Accuracy of bibliographic details is non-negotiable.
 
 ---
 
@@ -710,10 +713,21 @@ Before finalizing output, verify:
 - [ ] Semantic Scholar checked for references not found in CrossRef (Tier 2b)
 - [ ] OpenAlex checked for references not found in Semantic Scholar (Tier 2c)
 - [ ] Remaining unmatched references checked against WebSearch (Tier 3)
-- [ ] PDF claim verification run for critical claims (if verify-claims flag set)
 - [ ] Verification report includes per-entry status
 - [ ] Metadata corrections applied where authoritative source differs
 - [ ] UNVERIFIED entries removed or flagged (never silently included)
+
+**Claim Verification (MANDATORY — Step V-3.5)**
+- [ ] All prose claims attributing findings/arguments to cited sources extracted
+- [ ] Each claim checked against Knowledge Graph findings[] first (fast path)
+- [ ] Claims not resolvable via KG checked against PDF text (abstract + results + discussion)
+- [ ] No CLAIM-REVERSED or CLAIM-MISCHARACTERIZED errors remain uncorrected
+- [ ] CLAIM-OVERCAUSAL instances corrected (causal language → associational language where appropriate)
+- [ ] CLAIM-WRONG-POPULATION instances corrected (scope qualifiers added)
+- [ ] CLAIM-IMPRECISE warnings flagged for author review
+- [ ] CLAIM-NOT-CHECKABLE items listed with note that author must manually verify
+- [ ] Claim verification report appended to verification output
+- [ ] KG updated with any new findings discovered during PDF reading (feedback loop)
 
 **Output**
 - [ ] Citation-complete draft saved to output/[slug]/citations/

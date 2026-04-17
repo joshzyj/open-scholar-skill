@@ -6,7 +6,7 @@ description: >
   structural health check; (3) IMPROVE — propose and apply fixes to skill definitions;
   (4) EVOLVE — cross-session pattern analysis and systemic improvements.
   Designed to run automatically at the end of any scholar-skill invocation.
-tools: Read, Bash, Write, Glob, Grep, Task, WebSearch
+tools: Read, Bash, Write, Glob, Grep, Task, WebSearch, Agent
 argument-hint: "[mode: observe|audit|improve|evolve] [optional: skill-name] [optional: output-path]"
 user-invocable: true
 ---
@@ -113,6 +113,21 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 ```
 
 **IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive `OUTPUT_ROOT` and `LOG_FILE` before appending.
+
+## Canonical reference — `references/diagnostic-patterns.md`
+
+Before running OBSERVE (Mode 1) or AUDIT (Mode 2), load the canonical diagnostic reference:
+
+```bash
+cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/scholar-auto-improve/references/diagnostic-patterns.md"
+```
+
+That file is the single source of truth for:
+- **Expected output specifications per skill** — used by Mode 1 Step 1a (Artifact Inventory) and Step 1b (Content Quality Scan) to decide what counts as MISSING / EMPTY / UNEXPECTED.
+- **Common Issue Categories 1–6** — Citation Integrity, Format Compliance, Cross-Skill Consistency, Output Completeness, Structural Issues, Academic Quality. Use these labels verbatim when writing findings so OBSERVE + AUDIT reports are comparable across runs.
+- **Severity definitions** (CRITICAL / ERROR / WARN / INFO) and the exact action each triggers.
+- **Health score formula** — `base 100; −20 per CRITICAL, −5 per ERROR, −1 per WARN; floor 0` — and the GREEN/YELLOW/ORANGE/RED band mapping.
+- **Structural checks A1–A10** — the canonical specification behind the A1–A10 table in Mode 2 Step 2b.
 
 ---
 
@@ -430,9 +445,22 @@ Parse all issues with severity >= WARN.
 
 If no prior report exists, run AUDIT first (Mode 2), then proceed.
 
-### Step 3b: Fix Generation
+### Step 3b: Fix Generation (Agentic Error Analyst)
 
-For each issue, generate a concrete fix proposal:
+For each issue from Step 3a, do NOT propose a fix directly. Run a bounded ReAct-style diagnostic loop that produces a **verified causal explanation** before emitting any patch. Patches without a verified cause are **discarded from the confirmation list** and routed to a human-triage file.
+
+**Design rationale**: Trace2Skill (arXiv:2603.25158) reports that agentic error analysis outperforms single-pass LLM analysis by up to +13.3pp and that LLM-only analyzers over-attribute parse failures (57% vs 14% for agentic). Requiring a verified cause prevents fabricated diagnoses and noisy patches.
+
+**Diagnostic loop (per issue — max 3 hypothesis-test cycles, max 6 tool calls):**
+
+1. **Read the artifact** where the issue was detected (the actual output file — `.md`, `.R`, `.py`, `.csv`, `.log`, etc.).
+2. **Read the skill spec** that produced it — specifically the "Save Output" contract, the quality checklist, and the step that should have prevented this issue.
+3. **Read upstream dependencies** when relevant (prior-phase output, data sidecar `.claude/safety-status.json`).
+4. **State a hypothesis** in the form: "The issue occurred because [mechanism]." Name the mechanism, not the symptom.
+5. **Test the hypothesis** against the artifacts: does the evidence in the files confirm this mechanism? Cite `file:line`.
+6. **Iterate** steps 4–5 up to 3 times. If no confirmed cause emerges, **STOP** and route this issue to `output/[slug]/auto-improve/unexplained-issues-[date].md` for human triage.
+
+**Patch proposal (only when a cause is verified):**
 
 ```markdown
 ### Fix Proposal #[N]
@@ -441,6 +469,9 @@ For each issue, generate a concrete fix proposal:
 **Severity**: [CRITICAL/ERROR/WARN]
 **Affected File**: [path]
 **Affected Lines**: [line range]
+
+**Verified Cause**: [mechanism, one sentence]
+**Evidence**: [1–2 line quote from artifact or spec, with file:line reference]
 
 **Current** (old_string):
 ```
@@ -452,10 +483,12 @@ For each issue, generate a concrete fix proposal:
 [replacement text]
 ```
 
-**Rationale**: [why this fix is correct]
+**Rationale**: [how this fix addresses the verified cause]
 **Risk**: [LOW/MEDIUM/HIGH] — [what could go wrong]
 **Dependencies**: [other fixes that must be applied first or after]
 ```
+
+**Gate**: Issues routed to `unexplained-issues-[date].md` are NOT included in the Step 3d confirmation list and are NOT applied automatically. They require human inspection.
 
 ### Step 3c: Fix Prioritization
 
@@ -509,6 +542,7 @@ After applying fixes:
 
 - **File 1**: `output/[slug]/auto-improve/improve-[date].md` — fix proposals + application log
 - **File 2**: Update `output/[slug]/auto-improve/improvement-log.md`
+- **File 3** (if any issues failed the verified-cause gate): `output/[slug]/auto-improve/unexplained-issues-[date].md` — issues routed to human triage, listing the hypotheses tested and why each failed
 
 ---
 
@@ -643,6 +677,8 @@ Before finalizing any auto-improve output, verify:
 ### Improve Mode
 - [ ] Fix proposals reference specific file paths and line numbers
 - [ ] Each fix includes old_string and new_string
+- [ ] Each fix proposal includes a **Verified Cause** and **Evidence** field (file:line)
+- [ ] Issues that failed the diagnostic loop were routed to `unexplained-issues-[date].md` and NOT shown in the confirmation gate
 - [ ] Fixes are prioritized by severity
 - [ ] User confirmed before any fix was applied
 - [ ] Post-fix verification ran

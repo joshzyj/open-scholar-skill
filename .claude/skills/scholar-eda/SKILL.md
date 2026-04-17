@@ -103,7 +103,7 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 Before any data loading, follow the mandatory gate defined in `.claude/skills/_shared/data-handling-policy.md`. The gate is REQUIRED for Mode 1 (local file) and Mode 2 (pasted data written to a temp file). Mode 3 (online public data fetched by tidycensus/nhanesA/gssr/WDI/URL) may skip the gate.
 
-**Exception:** If invoked from `scholar-full-paper` and `SAFETY_STATUS` is already set in `PROJECT_STATE`, read that status instead of re-running. Never downgrade (LOCAL_MODE → CLEARED is forbidden).
+**Exception:** If invoked from an upstream orchestrator and `SAFETY_STATUS` is already set in `PROJECT_STATE`, read that status instead of re-running. Never downgrade (LOCAL_MODE → CLEARED is forbidden).
 
 ```bash
 # ── Step 0a-safety: Safety Gate ──

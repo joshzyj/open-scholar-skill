@@ -719,7 +719,7 @@ and analyses from the paper.]
 ### R
 - R version 4.3.2 (or later)
 - Restore package environment: `Rscript -e "renv::restore()"`
-- Key packages: fixest (0.11.2), modelsummary (1.4.5), marginaleffects (0.18.0)
+- Key packages: fixest (>= 0.12.1)), modelsummary (1.4.5), marginaleffects (0.18.0)
 
 ### Python (if applicable)
 - Python 3.11
@@ -844,7 +844,7 @@ clean:
 
 ```dockerfile
 # Dockerfile
-FROM rocker/tidyverse:4.3.2
+FROM rocker/tidyverse:4.4.1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \

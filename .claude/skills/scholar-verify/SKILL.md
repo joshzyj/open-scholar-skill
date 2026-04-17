@@ -30,6 +30,12 @@ You are a pre-submission verification engine that ensures perfect consistency be
 3. **Severity levels are binding** — CRITICAL issues must be fixed before submission; WARNINGS are advisory.
 4. **Zero tolerance for false confidence** — if a value cannot be verified, report it as UNVERIFIABLE, never as PASS.
 5. **All 4 agents run in parallel** — they receive the same input package and run simultaneously.
+6. **Number traceability** — every numeric value in prose MUST trace to a saved CSV/HTML file. This extends the existing table-level UNTRACEABLE check to individual prose values. Two severity tiers:
+   - **UNTRACEABLE (CRITICAL)**: A prose number cannot be derived from ANY combination of saved outputs. No provenance exists on disk. Example: an analysis script computes group-specific means but never saves them to CSV; prose cites "Group A mean 0.174 → 0.449" but no output file contains those values.
+   - **DERIVED-UNVERIFIED (WARNING)**: A prose number can be derived from saved outputs (e.g., difference of two cells, percentage of a sum) but the derivation itself was not saved. The verifier should re-compute the derivation and confirm the arithmetic. If correct, downgrade to PASS. If incorrect, upgrade to CRITICAL.
+   Scholar-analyze Rule T1 mandates saving `group-period-means.csv` for decomposition analyses; check for its existence when verifying group-specific claims.
+7. **Period-label consistency** — check that the manuscript uses consistent period labels across sections. Flag any mismatch (in either direction) between the period label used in prose and the period definition where the cited value originates. Build a period-label inventory first, then cross-check each claim against the correct period for that analysis. Different period definitions for different analyses are acceptable IF the manuscript includes: (a) a sentence in Methods stating the rationale, (b) table/figure notes indicating which period is used, or (c) labeled panel/column headers. Check for `period-definitions.csv` (from scholar-analyze Rule T3) and use it as the authoritative source.
+8. **Directional comparison accuracy** — when the prose says one quantity "exceeds," "is greater than," "is less than," or "falls short of" another, verify the arithmetic. When rounded values appear equal or differ by less than the rounding precision, check the unrounded source values before flagging. If unrounded values support the claim, classify as INFO (recommend showing one additional decimal). If they contradict, classify as CRITICAL.
 
 ---
 
@@ -41,8 +47,9 @@ Parse:
 - **Mode**: `full` (default) | `stage1` | `stage2` | `numerics` | `figures` | `logic` | `completeness`
 - **Manuscript path**: path to manuscript file (.md, .tex, .docx) — auto-detect if not specified
 - **Output directory**: override for save location (default: `output/verify/`)
-- **`--manuscript [path]`**: Explicit manuscript path — skip auto-detection entirely. Use when called from orchestrators (scholar-book, scholar-full-paper) whose file paths differ from the default globs.
+- **`--manuscript [path]`**: Explicit manuscript path — skip auto-detection entirely. Use when called from an upstream orchestrator whose file paths differ from the default globs.
 - **`--artifacts-dir [path]`**: Override directory for tables/figures/scripts. When specified, look for artifacts in `[path]/tables/`, `[path]/figures/`, and `[path]/scripts/` instead of the default `output/tables/` etc. Use when called from project-scoped orchestrators (e.g., `--artifacts-dir output/segregation/`).
+- **`--no-manuscript`**: Skip manuscript auto-detection and run Stage 1 without a manuscript. Used for pre-draft verification where no manuscript exists yet. In this mode, `verify-numerics` cross-checks raw table outputs (HTML/TeX/CSV) against `results-registry.csv` for internal consistency (matching coefficients, SEs, p-values, significance stars, N). `verify-figures` confirms each figure file exists, is non-empty, and matches any registry entry. Stage 2 agents are skipped (they require a manuscript). If mode is `full` or `stage2`, `--no-manuscript` is an error.
 
 ---
 
@@ -111,14 +118,12 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 mkdir -p "${OUTPUT_ROOT}/verify" "${OUTPUT_ROOT}/logs"
 ```
 
-1. **Locate manuscript**: If `--manuscript` was provided, use that path directly. Otherwise, auto-detect:
+1. **Locate manuscript**: If `--no-manuscript` was provided, skip this step entirely — set `MANUSCRIPT=""` and proceed. Stage 1 pre-draft mode does not need a manuscript. If `--manuscript` was provided, use that path directly. Otherwise, auto-detect:
    ```
    Glob: output/manuscript/full-paper-*.md → most recent
    Glob: output/drafts/draft-*.md → most recent
-   Glob: output/*/book/chapters/scholar-book-ch*.md → book chapters (if called from scholar-book)
-   Glob: output/*/book/scholar-book-manuscript-*.md → assembled book manuscript
    ```
-   If no manuscript found, halt with error and ask user for path.
+   If no manuscript found AND mode requires one (stage2, full, logic, completeness), halt with error and ask user for path. If mode is `stage1`, `numerics`, or `figures`, downgrade to WARN and continue without a manuscript (equivalent to implicit `--no-manuscript`).
 
 2. **Locate raw table outputs**: If `--artifacts-dir` was provided, use `[artifacts-dir]/tables/*`. Otherwise: `Glob: output/tables/*` — all .html, .tex, .csv, .docx files
 3. **Locate raw figure outputs**: If `--artifacts-dir` provided, use `[artifacts-dir]/figures/*`. Otherwise: `Glob: output/figures/*` — all .pdf, .png, .svg files
@@ -130,7 +135,9 @@ If no tables AND no figures found, halt with error: "No analysis outputs found. 
 
 ### 0b. Read All Inputs
 
-Read the manuscript in full. Read every raw table file. Read/view figure files (images displayed visually). Read the artifact registry if it exists. Read analysis scripts to understand what outputs they produce.
+If a manuscript was located (i.e., `--no-manuscript` was NOT set and a manuscript was found), read the manuscript in full. If no manuscript is available (pre-draft mode), skip the manuscript read — Stage 1 agents will cross-check raw outputs against the results-registry and each other instead of against manuscript tables.
+
+Read every raw table file. Read/view figure files (images displayed visually). Read the artifact registry if it exists. Read analysis scripts to understand what outputs they produce.
 
 ### 0c. Build Input Package
 
@@ -433,10 +440,8 @@ Before presenting results, verify:
 |-------|-------------------|------|-------|
 | **scholar-analyze** | After tables/figures produced (post-Save Output recommendation) | `stage1` | No — recommendation to user |
 | **scholar-write** | Step 5b: After review panel accepts draft, before save | `stage2` | Conditional — skips if no raw outputs; user chooses fix/save/skip |
-| **scholar-grant** | Phase 5G: After prose polish, before mock panel | `stage2` (or text-only if no raw outputs) | Yes — CRITICAL issues must be fixed before Phase 6 |
 | **scholar-respond** | Step 3b: After consistency check, before revision summary (REVISE mode) | `full` | Yes — CRITICAL issues fixed before proceeding |
 | **scholar-journal** | Step 6b item 6: Pre-submission cross-skill integration check | `full` | Yes — MAJOR ISSUES halts submission prep |
-| **scholar-full-paper** | Phase 7b: Between write (Phase 7) and citation (Phase 8) | `full` | Yes — MAJOR ISSUES halts pipeline |
 | **scholar-replication** | Verification checklist: 2 items consume verify-completeness + verify-numerics reports | — (reads existing report) | Checklist items |
 
 ---

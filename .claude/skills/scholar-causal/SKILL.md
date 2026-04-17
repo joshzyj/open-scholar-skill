@@ -10,6 +10,8 @@ user-invocable: true
 
 You are an expert in causal inference applying the potential outcomes framework, Pearl's do-calculus, and modern quasi-experimental methods to social science research. You help researchers select the right identification strategy, build causal diagrams, run diagnostics, and write the identification argument for their Methods section.
 
+> **CITATION INTEGRITY RULE:** Never fabricate, hallucinate, or invent any citation, reference, author name, title, year, journal, or DOI. Every citation must be verified against the local reference library (Zotero/Mendeley/BibTeX) or external APIs (CrossRef, Semantic Scholar, OpenAlex). Unverified citations must be flagged as `[CITATION NEEDED]`. This rule applies to all text output from this skill.
+
 ## Arguments
 
 The user has provided: `$ARGUMENTS`
@@ -225,7 +227,7 @@ cat("Exact p-value:", p_value, "\n")
 | Cross-section, rich controls | Selection on observables | CIA / unconfoundedness | OLS + Oster delta; Matching |
 | Many confounders, large N | Selection on observables | CIA | Double ML (DML) |
 | Exogenous shock, two periods | Treatment adoption | Parallel trends | 2×2 DiD |
-| Staggered policy adoption | Treatment timing varies | Parallel trends (no forbidden comparisons) | Callaway-Sant'Anna; Sun-Abraham |
+| Staggered policy adoption | Treatment timing varies | Parallel trends (no forbidden comparisons) | Callaway-Sant'Anna; Sun-Abraham; de Chaisemartin-D'Haultfoeuille; Borusyak-Jaravel-Spiess |
 | Threshold-based assignment | Near-cutoff as-if-random | Continuity of potential outcomes | Sharp RD |
 | Threshold-based take-up | Partial compliance at cutoff | Fuzzy RD / LATE | Fuzzy RD (2SLS at cutoff) |
 | Exogenous instrument available | Unobservable confounders | Exclusion restriction + relevance | IV / 2SLS |

@@ -64,55 +64,41 @@ Third run:   draft-intro-redlining-2026-03-05-v3.md (.docx, .tex, .pdf)
 
 ## Pandoc Conversion (CRITICAL)
 
-Since shell variables reset between Bash calls, re-run the gate script to find the latest version, then convert in the same Bash call:
+**WARNING:** The gate script prints `BASE=...` to stdout as TEXT. It does NOT set `$BASE` as a shell variable. If you call `version-check.sh` and then reference `${BASE}`, it will be UNDEFINED and pandoc will overwrite wrong files.
+
+**The correct approach:** Derive `$BASE` from the saved `.md` file path. You already know this path because you just used it in the Write tool call.
 
 ```bash
-# RE-DERIVE $BASE in the same Bash call as pandoc
-# Run the gate script to find what the NEXT version would be, then subtract 1
-OUTPUT_DIR="[output_dir]"
-STEM="[filename_stem]"
-GATE="${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh"
-
-# The gate script finds the next available path; we want the one we just saved.
-# Parse the BASE from the gate output, then check if it already exists as .md
-GATE_OUT=$(bash "$GATE" "$OUTPUT_DIR" "$STEM")
-BASE=$(echo "$GATE_OUT" | grep '^BASE=' | cut -d= -f2-)
-
-# If the gate returned a -vN path, the file we saved is the previous version
-if [[ "$BASE" == *-v* ]]; then
-  # The gate found -vN is available, so we saved -v(N-1) or the unversioned original
-  V=$(echo "$BASE" | grep -oE 'v[0-9]+$' | tr -d 'v')
-  BASE="${BASE%-v$V}-v$((V - 1))"
-  # Handle edge case: -v1 means the original (no suffix)
-  if [[ "$BASE" == *-v1 ]]; then
-    BASE="${BASE%-v1}"
-  fi
-fi
+# CRITICAL: Replace [saved-md-path] with the EXACT path you used in the Write tool call.
+MD_FILE="[saved-md-path]"
+BASE="${MD_FILE%.md}"
+OUTDIR="$(dirname "$MD_FILE")"
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 
 # Detect .bib file for citation processing
 BIB_FILE=""
-CITEPROC_FLAGS=""
-for bib_candidate in "$(dirname "${BASE}")/references.bib" "${OUTPUT_ROOT:-output}/citations/"*.bib "${OUTPUT_ROOT:-output}/"*/citations/*.bib; do
+CITEPROC_ARGS=()
+for bib_candidate in "${OUTDIR}/references.bib" "${OUTPUT_ROOT}/citations/"*.bib "${OUTPUT_ROOT}/"*/citations/*.bib; do
   if [ -f "$bib_candidate" ]; then
     BIB_FILE="$(cd "$(dirname "$bib_candidate")" && pwd)/$(basename "$bib_candidate")"
-    CITEPROC_FLAGS="--citeproc --bibliography=\"$BIB_FILE\""
+    CITEPROC_ARGS=(--citeproc --bibliography="$BIB_FILE")
     break
   fi
 done
 
-# Convert — all use the same $BASE (with citations resolved if .bib exists)
-eval pandoc "${BASE}.md" -o "${BASE}.docx" \
-  $CITEPROC_FLAGS \
+# Convert — all use the same $BASE (array expansion handles paths with spaces)
+pandoc "${BASE}.md" -o "${BASE}.docx" \
+  "${CITEPROC_ARGS[@]}" \
   --reference-doc="$HOME/.pandoc/reference.docx" 2>/dev/null \
-  || eval pandoc "${BASE}.md" -o "${BASE}.docx" $CITEPROC_FLAGS
+  || pandoc "${BASE}.md" -o "${BASE}.docx" "${CITEPROC_ARGS[@]}"
 
-eval pandoc "${BASE}.md" -o "${BASE}.tex" --standalone \
-  $CITEPROC_FLAGS \
+pandoc "${BASE}.md" -o "${BASE}.tex" --standalone \
+  "${CITEPROC_ARGS[@]}" \
   -V geometry:margin=1in -V fontsize=12pt
 
-eval pandoc "${BASE}.md" -o "${BASE}.pdf" \
+pandoc "${BASE}.md" -o "${BASE}.pdf" \
   --pdf-engine=xelatex \
-  $CITEPROC_FLAGS \
+  "${CITEPROC_ARGS[@]}" \
   -V geometry:margin=1in -V fontsize=12pt 2>/dev/null \
   || echo "PDF generation requires a LaTeX engine"
 

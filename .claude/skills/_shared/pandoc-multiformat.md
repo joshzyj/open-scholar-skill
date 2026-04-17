@@ -18,7 +18,7 @@ CITEPROC_FLAGS=""
 for bib_candidate in "${OUTDIR}/references.bib" "${OUTDIR}/../citations/"*.bib "${OUTPUT_ROOT:-output}/citations/"*.bib; do
   if [ -f "$bib_candidate" ]; then
     BIB_FILE="$(cd "$(dirname "$bib_candidate")" && pwd)/$(basename "$bib_candidate")"
-    CITEPROC_FLAGS="--citeproc --bibliography=\"$BIB_FILE\""
+    CITEPROC_FLAGS="--citeproc --bibliography=\"$BIB_FILE\" --metadata reference-section-title=\"References\""
     echo "Found .bib file for citation processing: $BIB_FILE"
     break
   fi
@@ -56,7 +56,7 @@ fi
 
 ## Skills That MUST Generate Multi-Format
 
-scholar-write, scholar-lit-review, scholar-hypothesis, scholar-respond (response letter)
+scholar-write, scholar-polish, scholar-lit-review, scholar-hypothesis, scholar-respond (response letter)
 
 ## Skills That MAY Generate Multi-Format
 

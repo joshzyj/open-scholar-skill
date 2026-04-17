@@ -4,6 +4,30 @@ Purpose: eliminate the failure mode where a Task agent's prose return claims one
 
 ---
 
+## Study-Type Dispatch
+
+The contract adapts to the study design. Check PROJECT STATE for the identification strategy.
+
+**For REGRESSION studies** (OLS, logit, DiD, IV, FE, matching, etc.): use the standard schema below.
+
+**For NON-REGRESSION studies** (decomposition, descriptive trends, network analysis, text-as-data, etc.):
+- `results-registry.csv` uses an adapted schema:
+  ```
+  hypothesis_id, metric_name, metric_value, metric_se, component, pct_share, source_table, source_figure, script, notes
+  ```
+  Example row: `H1, compositional_share_education, 0.064, NA, compositional, 26.1, decomposition-single-variable.csv, fig3, p5-06.R, Kitagawa symmetric`
+- `adjudication-log.csv` uses:
+  ```
+  hypothesis_id, direction, magnitude, interpretation, source
+  ```
+  Example row: `H1, positive, 26.1% compositional, Partially supported — substantial but not dominant, decomposition-single-variable.csv`
+- `ame-*.csv` and `coefficients-*.csv` are NOT required for non-regression studies.
+- The post-agent reconciliation bash block (below) skips the logit/probit AME check for non-regression studies.
+
+The REQUIREMENT to emit `results-registry.csv` and `adjudication-log.csv` applies to ALL study types. Only the schema and the AME requirement adapt.
+
+---
+
 ## Required files after Phase 5 (DATA-AVAILABLE MODE)
 
 Every Phase 5 analysis run must emit these, in addition to tables/figures/scripts:

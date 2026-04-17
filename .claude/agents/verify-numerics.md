@@ -63,6 +63,14 @@ For descriptive tables specifically:
 - Does N per variable match (important for variables with missing data)?
 - Do percentages sum to ~100% for categorical variables?
 
+### Phase 4b: Value-Level Traceability (ABSOLUTE RULE #6)
+
+For every numeric value cited in prose text (not just in formatted tables), verify it traces to a specific cell in a saved output file:
+
+1. **Group-specific claims** (e.g., "BA-holders' mean Y rose from X₁ to X₂"): check `group-period-means.csv` or equivalent supplementary CSV produced by the analysis script. If no such file exists, flag as **UNTRACEABLE (CRITICAL)**.
+2. **Derived values** (differences, percentages, ratios computed from two or more table cells): re-compute the derivation from the source cells. If arithmetic checks out, classify as **DERIVED-UNVERIFIED (WARNING → PASS)**. If incorrect, classify as CRITICAL.
+3. **Period-specific claims**: cross-check the period label in prose against `period-definitions.csv` (if it exists) to confirm the cited value comes from the correct period definition.
+
 ### Phase 5: Check for Dropped or Extra Content
 
 - Are any variables present in raw output but missing from manuscript table?

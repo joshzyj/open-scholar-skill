@@ -102,7 +102,7 @@ Use this table to route based on design type and $ARGUMENTS keywords.
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available; then
@@ -132,7 +132,7 @@ Then run a **local reference library search** for the focal phenomenon to identi
 # Load multi-backend reference search infrastructure
 # Sources all backend search functions and runs auto-detection to set $REF_SOURCES, $REF_PRIMARY, $ZOTERO_DB, etc.
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')"
 
 # Unified search — queries all detected backends (Zotero, Mendeley, BibTeX, EndNote XML)
 # Note: scholar_search now also queries the knowledge graph as Tier 0.5 if available
@@ -875,6 +875,7 @@ Confirm both file paths to user at end.
 - [ ] **Theory section** calibrated to journal word norms (ASR 1000–1500; Demo 600–1000; NHB 300–600)
 - [ ] **Theory section reads as an argument**, not a textbook review of all theories
 - [ ] **No fabricated citations** — all references from local library search or prior phases; uncertain citations flagged `[CITATION NEEDED]`
+- [ ] **Claim verification** — all prose claims attributing findings to cited sources checked against KG/PDF; no `[CLAIM-REVERSED]`, `[CLAIM-MISCHARACTERIZED]`, `[CLAIM-OVERCAUSAL]`, or `[CLAIM-UNSUPPORTED]` markers remain. Run: `bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/verify-claims.sh" "[output_file]"`
 - [ ] **Theory log saved** to `output/[slug]/theory/scholar-hypothesis-log-[slug]-[date].md`
 - [ ] **Theory draft saved** to `output/[slug]/theory/scholar-hypothesis-draft-[slug]-[date].md`
 

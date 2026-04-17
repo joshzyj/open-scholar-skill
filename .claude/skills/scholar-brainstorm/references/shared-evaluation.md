@@ -22,7 +22,7 @@ SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}"
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}"
 
 # Source all backend functions
-eval "$(cat "$SKILL_DIR/.claude/skills/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/.claude/skills/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # ── Run local keyword searches for top candidate RQs ──
 echo "=== LOCAL LIBRARY: RQ1 keywords ==="
@@ -43,7 +43,7 @@ SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}"
 [ -f "$HOME/.claude/.env" ] && . "$HOME/.claude/.env" 2>/dev/null || true
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}"
 
-eval "$(cat "$SKILL_DIR/.claude/skills/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/.claude/skills/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # ── External API searches for under-covered RQs ──
 echo "=== EXTERNAL: RQ[N] ==="

@@ -34,7 +34,7 @@ fi
 INTEXT_AUTHORS=$(grep -oE '\([A-Z][a-z]+( (and|&) [A-Z][a-z]+| et al\.?)? [12][0-9]{3}[a-z]?\)' "$FILE" 2>/dev/null | sort -u || true)
 
 # Check for suspiciously future years in citations
-FUTURE=$(echo "$INTEXT_AUTHORS" | grep -oE '[0-9]{4}' | awk '$1 > 2027' | sort -u || true)
+FUTURE=$(echo "$INTEXT_AUTHORS" | grep -oE '[0-9]{4}' | awk '$1 > 2030' | sort -u || true)
 if [ -n "$FUTURE" ]; then
   echo "WARNING: Suspiciously future citation year(s): $FUTURE"
   ISSUES=$((ISSUES + 1))

@@ -55,7 +55,7 @@ For each **unresolved claim** (not yet cited and not in cache), search all detec
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Keyword search across all detected backends
 scholar_search "KEYWORD" 15 keyword | scholar_format_citations
@@ -66,7 +66,7 @@ Run multiple searches per claim varying keywords. For author-specific queries:
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Author last name search across all detected backends
 scholar_search "LASTNAME" 20 author | scholar_format_citations

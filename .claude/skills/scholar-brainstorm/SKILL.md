@@ -235,6 +235,16 @@ Return results in this order:
 13. `RESEARCH PROGRAM OVERVIEW` — thematic map + timeline + collaboration (Step 9)
 14. *(file save confirmation)* — `Output saved to [filename]`
 
+## Save Output
+
+Write all output using the Write tool.
+
+- **File 1**: `output/[slug]/scholar-brainstorm-[slug]-[date].md` — full brainstorm report (ranked Top 10, evaluation scorecard, variable mappings)
+- **File 2**: `output/[slug]/scholar-brainstorm-[slug]-summary-[date].md` — executive summary (selected RQ, key variables, next steps)
+- **File 3**: Append to process log at `output/[slug]/logs/process-log-scholar-brainstorm-[date].md`
+- **File 4** *(DATA mode only)*: `output/[slug]/scripts/brainstorm-signal-tests.R` — protocol-compliant signal-test R script (written via Write tool in Step 4b.ii, executed in Step 4b.iii). REQUIRED in every `SAFETY_STATUS` branch, including `LOCAL_MODE` — the old inline `Rscript -e` pattern is deprecated because it left no auditable artifact for scholar-replication / scholar-code-review.
+- **File 5** *(DATA mode only)*: `output/[slug]/scripts/brainstorm-signal-tests.log` — stdout from executing File 4 (tee'd during Step 4b.iii)
+
 ## Quality Rules
 
 Before finalizing, verify:

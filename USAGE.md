@@ -1,7 +1,7 @@
 # Open Scholar Skill — User Guide
 
 A Claude Code project for social scientists writing for top-tier journals.
-29 scholar skills + 1 utility (30 total) covering the full research pipeline from idea exploration to collaboration.
+30 scholar skills + 1 utility (31 total) covering the full research pipeline from idea exploration to collaboration.
 
 ---
 
@@ -12,14 +12,14 @@ Skills and agents live in the `.claude/` directory:
 ```
 open-scholar-skill/
 ├── .claude/
-│   ├── skills/           ← 29 skills (scholar-*) + 1 utility (sync-docs)
+│   ├── skills/           ← 30 skills (scholar-*) + 1 utility (sync-docs)
 │   ├── agents/           ← 9 reviewer agents (peer-reviewer-*) + 4 verification agents (verify-*) + 6 code-review agents (review-code-*)
 │   └── settings.local.json
 ├── README.md
 └── USAGE.md
 ```
 
-All 30 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
+All 31 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
 
 ---
 
@@ -69,6 +69,7 @@ The text after the skill name is passed directly as context. The more specific t
 | `/scholar-init` | **v5.9.0** Stand up a project directory, scan raw files, populate `.claude/safety-status.json` so the PreToolUse hook knows which files Claude may Read | `nhanes-bmi ~/Downloads/nhanes.csv` or `review` |
 | `/scholar-safety` | Real-time data privacy protection | `scan data.csv before analysis` |
 | `/scholar-verify` | Verify analysis-to-manuscript consistency | `full output/drafts/full-paper-2026-03-10.md` |
+| `/scholar-polish` | Final prose-level polish (clarity, concision, flow, journal voice) | `output/drafts/draft-v2.md for ASR` |
 | `/scholar-code-review` | Multi-agent code review of analysis scripts (6 agents) | `full output/scripts/` |
 | `/scholar-openai` | External review via OpenAI Codex CLI agents | `full output/drafts/full-paper-2026-03-10.md` |
 | `/scholar-auto-improve` | Post-skill quality audit | `observe output/drafts/` |

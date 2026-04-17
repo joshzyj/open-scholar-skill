@@ -1,7 +1,7 @@
 ---
 name: scholar-lit-review
 description: "Conduct a systematic literature review that maps the current landscape of a research question. Produces a structured literature landscape map (field evolution, theoretical landscape, established/contested/null findings, mechanism inventory, methodological landscape, gap analysis), a publication-ready review draft, and a search log. Three modes: full landscape map (40-80 papers), targeted review for a paper's intro (15-30 papers), or rapid scoping review (10-20 papers). Searches local reference library (Zotero/Mendeley/BibTeX/EndNote) first, then multi-wave web search, Annual Reviews checkpoint, and citation chain expansion. Runs a verification subagent and saves two output files to disk. Use when the user wants to map the existing literature, identify research gaps, synthesize findings, or build a foundation for a paper. Works best before /scholar-hypothesis or /scholar-lit-review-hypothesis."
-tools: WebSearch, WebFetch, Read, Bash, Write
+tools: WebSearch, WebFetch, Read, Bash, Write, Agent
 argument-hint: "[topic or research question] [optional: landscape|targeted|rapid] [optional: target journal] [optional: population, time period, geographic scope]"
 user-invocable: true
 ---
@@ -195,7 +195,7 @@ Before searching Zotero, check the user-scoped knowledge graph for pre-extracted
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available; then
@@ -237,7 +237,7 @@ ROW
 # Zotero: $SCHOLAR_ZOTERO_DIR/zotero.sqlite (auto-detected or .env; copy to /tmp; .bak fallback)
 # If no backends detected, warn user and proceed with web-only search in Phase 2.
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 echo "Detected backends: $REF_SOURCES (primary: $REF_PRIMARY)"
 
 # ── 1b. Keyword search (title + abstract) ──
@@ -265,7 +265,7 @@ Each search queries all detected backends (Zotero SQLite, BibTeX .bib files, etc
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Only run if Zotero is available
 if [[ "$REF_SOURCES" == *zotero* ]]; then
@@ -330,7 +330,7 @@ fi  # end Zotero-only tag search
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Only run if Zotero is available
 if [[ "$REF_SOURCES" == *zotero* ]]; then
@@ -347,7 +347,7 @@ When results include a `PDF_PATH` column (from unified search results), extract 
 ```bash
 # Re-load reference manager (shell state lost between Bash calls)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # For Zotero results: PDF_PATH = storage/[KEY]/[filename].pdf
 # For Mendeley results: PDF_PATH = localUrl path
@@ -1019,7 +1019,7 @@ Populate counts from the search log maintained throughout Phases 1-3.
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available 2>/dev/null; then
@@ -1093,6 +1093,12 @@ Before finalizing, verify every item:
 - [ ] All cited papers were found via local reference library search, WebSearch, or API lookup — none inserted from Claude's memory alone
 - [ ] Any uncertain citations flagged with `[CITATION NEEDED]` for verification by `/scholar-citation`
 - [ ] Citations carried forward to subsequent phases (scholar-hypothesis, scholar-write) are marked as pre-verified
+- [ ] **Claim verification (MANDATORY):** All prose claims attributing findings to cited sources checked against Knowledge Graph or PDF text. No `[CLAIM-REVERSED]`, `[CLAIM-MISCHARACTERIZED]`, `[CLAIM-OVERCAUSAL]`, or `[CLAIM-UNSUPPORTED]` markers remain. Literature reviews are citation-dense — every finding characterization must be accurate.
+
+**Run claim verification gate before saving:**
+```bash
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/verify-claims.sh" "[output_file]"
+```
 
 **Causal language precision:**
 - [ ] When summarizing prior observational studies, use the language those studies used — do not upgrade correlational findings to causal claims (e.g., "Smith et al. found X is associated with Y," not "Smith et al. found X causes Y" unless they used a causal design). See scholar-write SKILL.md for the full causal language rule

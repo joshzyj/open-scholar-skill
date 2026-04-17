@@ -3,6 +3,56 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.11.0] - 2026-04-16
+
+Sync with upstream `open-scholar-skills` (private). Adds `scholar-polish`, moves shared reference files into `_shared/`, and propagates citation-integrity, verification, and auto-improve hardening. Orchestrator-bound features (results-lock, Phase 6.5/7b, `scholar-full-paper` wiring) are intentionally excluded — this release preserves the researcher-in-the-loop design of the public fork.
+
+### Added
+
+**New skill**
+- **`scholar-polish`** (`/scholar-polish`) — final prose-level polish pass for manuscripts. Edits style (clarity, concision, flow, journal voice) while preserving content; distinct from `scholar-write` (drafting) and `scholar-verify` (consistency checking).
+
+**Shared reference files (`_shared/`)**
+- **`knowledge-graph-search.md`** — moved from `scholar-knowledge/references/` to `_shared/` so non-knowledge skills (lit-review, lit-review-hypothesis, write) can source KG helpers without cross-skill coupling.
+- **`refmanager-backends.md`** — moved from `scholar-citation/references/` to `_shared/` so every skill that needs reference-library search (citation, write, lit-review, brainstorm, hypothesis, conceptual, idea, causal, knowledge) points to one authoritative copy.
+
+**Agent upgrades (`agents/`)**
+- **`verify-figures.md`** — adds Rule #6 value-level traceability and VLM visual inspection for figure content.
+- **`verify-logic.md`** — adds Rule #8 directional comparison accuracy (verifies arithmetic behind "exceeds," "is greater than," etc.).
+- **`verify-numerics.md`** — extends UNTRACEABLE / DERIVED-UNVERIFIED severity tiers from table-level to individual prose values.
+
+**Skill updates**
+- **`scholar-citation`** — mandates claim verification (not just reference verification). Step V-3.5 extracts every prose claim attributing findings to a cited source and checks it against Knowledge Graph findings (fast path) or PDF text. New claim-tier codes: `CLAIM-REVERSED`, `CLAIM-MISCHARACTERIZED`, `CLAIM-OVERCAUSAL`, `CLAIM-WRONG-POPULATION`, `CLAIM-IMPRECISE`, `CLAIM-NOT-CHECKABLE`. The absolute rule is renamed "ZERO TOLERANCE FOR CITATION FABRICATION **AND MISCHARACTERIZATION**" — attributing a real paper to a claim it doesn't make is as misleading as a fabricated citation.
+- **`scholar-verify`** — three new universal rules: Rule 6 (number traceability with UNTRACEABLE/DERIVED-UNVERIFIED tiers), Rule 7 (period-label consistency across sections), Rule 8 (directional comparison accuracy). New `--no-manuscript` flag enables pre-draft verification (Stage 1 agents cross-check raw outputs against `results-registry.csv` when no manuscript exists yet).
+- **`scholar-lit-review`** — adds `Agent` to tools; mandatory claim-verification gate (`verify-claims.sh`) before saving. Literature reviews are citation-dense; every finding characterization must survive the CLAIM-* checks.
+- **`scholar-lit-review-hypothesis`** — same claim-verification quality-checklist item; paths updated to `_shared/`.
+- **`scholar-auto-improve`** — adds `Agent` tool. Step 3b is now an **Agentic Error Analyst**: a bounded ReAct diagnostic loop (max 3 hypothesis-test cycles, max 6 tool calls) that produces a verified causal explanation before emitting any patch. Patches without a verified cause are routed to `unexplained-issues-[date].md` and excluded from the confirmation gate. Design draws on Trace2Skill (arXiv:2603.25158): agentic error analysis outperforms single-pass LLM by up to +13.3pp and correctly attributes parse failures 14% of the time vs 57% for LLM-only.
+- **`scholar-safety`** — Presidio-based anonymizer (`scripts/gates/anonymize-presidio.py`) is now the preferred path for qualitative-data anonymization (NER-based person/location/institution detection); regex fallback preserved for environments without Presidio installed.
+- **`scholar-analyze`** — adds specification curve analysis note (Simonsohn, Simmons & Nelson 2020, *Nat Hum Behav*) pointing to the A8o template in `references/component-a-specialized.md`.
+- **`scholar-causal`** — expands staggered DiD estimator list: Callaway-Sant'Anna; Sun-Abraham; de Chaisemartin-D'Haultfoeuille; Borusyak-Jaravel-Spiess. Adds absolute CITATION INTEGRITY rule.
+- **`scholar-conceptual`, `scholar-hypothesis`, `scholar-idea`** — path updates to `_shared/refmanager-backends.md` and `_shared/knowledge-graph-search.md`; absolute CITATION INTEGRITY rule added to conceptual and causal.
+- **`scholar-brainstorm`** — Save Output section added listing all 5 output files (brainstorm report, summary, process log, `signal-tests.R`, `signal-tests.log`).
+- **`sync-docs`** — Save Output section added with process-log path.
+- **`scholar-open`** — bumps dependency pins: `fixest (>= 0.12.1)`, `rocker/tidyverse:4.4.1`.
+- **`scholar-openai`** — adds `Agent` to tools.
+- **`scholar-code-review`** — Variable Construction Completeness Check + Directional Coding Audit appended after Agent 6.
+- **`_shared/pandoc-multiformat.md`** — adds `--metadata reference-section-title="References"` flag; scholar-polish added to consumer list.
+- **`_shared/script-version-check.md`** — adds Rule #0: every line of code must have an inline comment explaining what it does and why (no exceptions for "obvious" lines).
+- **`_shared/version-check.md`** — simpler gate-script re-run idiom: `MD_FILE="[saved-md-path]"; BASE="${MD_FILE%.md}"`.
+- **`_shared/data-handling-policy.md`** — §9 intermediate data files (`data/interim/`) with jq sidecar auto-registration bash snippet.
+- **`_shared/results-registry-contract.md`** — Study-Type Dispatch section distinguishing REGRESSION vs NON-REGRESSION schemas.
+
+### Changed
+
+- Skill count: **30 → 31**. `scholar-polish` added; `scholar-full-paper`, `scholar-grant`, `scholar-teach`, `scholar-book`, `scholar-presentation` remain excluded.
+- Path migration: 12 files updated from `scholar-citation/references/refmanager-backends.md` / `scholar-knowledge/references/knowledge-graph-search.md` → `_shared/` equivalents (except within `scholar-knowledge/SKILL.md` and `scholar-write/references/writing-protocol.md` which continue to point at the original locations for backward compatibility with the private upstream).
+
+### Why
+
+Private upstream hardened citation integrity, verification, and auto-improve in parallel with the public fork. This sync brings the public fork up to date with those universal quality improvements while preserving the public fork's core design constraint: no orchestrator, researcher in the loop at every stage.
+
+---
+
 ## [5.10.0] - 2026-04-13
 
 Pipeline hardening against wrong-results propagation. A real project run surfaced a failure class where a buggy coefficient (sign-flip from missing fixed effects + NA-as-0 recoding) shaped a 9,000-word manuscript before post-hoc review caught the underlying bug. Because this fork intentionally excludes `scholar-full-paper` / `scholar-grant` / `scholar-book` to keep researchers in the loop, the fixes land in `scholar-analyze`, `scholar-respond`, and shared reference files in `_shared/`.

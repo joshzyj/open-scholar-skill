@@ -62,12 +62,12 @@ The user has provided: `$ARGUMENTS`
 
 Parse to identify:
 1. **Mode**: `draft` (default) | `revise` (user provides existing text) | `polish` (final editing pass)
-2. **Section**: Introduction, Theory/Background, Data and Methods, Results, Discussion/Conclusion, Abstract, full paper, or **book-chapter** (when called from scholar-book)
+2. **Section**: Introduction, Theory/Background, Data and Methods, Results, Discussion/Conclusion, Abstract, or full paper
 3. **Topic / content**: the substantive topic and any data or findings to draw on
 4. **Target journal**: ASR, AJS, Demography, Science Advances, NHB, NCS — or infer from context
-5. **Word budget override**: If a numeric word budget is passed (e.g., from scholar-book's outline), use it instead of journal-default word limits
+5. **Word budget override**: If a numeric word budget is passed, use it instead of journal-default word limits
 
-**No-journal mode:** If no target journal is specified or inferrable (common when called from scholar-book for book chapters), skip journal-specific formatting rules, word limits, and section conventions. Use the word budget from arguments if provided. Write in general academic prose appropriate for a university press monograph.
+**No-journal mode:** If no target journal is specified or inferrable, skip journal-specific formatting rules, word limits, and section conventions. Use the word budget from arguments if provided. Write in general academic prose.
 
 If existing text is provided by the user, activate **REVISE** or **POLISH** mode. If no text is provided, activate **DRAFT** mode.
 

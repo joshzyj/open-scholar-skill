@@ -8,7 +8,7 @@ This file contains the DATA mode workflow steps. MATERIALS mode reuses Steps 1-4
 
 **If MATERIALS mode: skip this step entirely.** Note in the process log: "Step 0 skipped — MATERIALS mode (no data files)." Set `SAFETY_STATUS=N/A` and proceed to Step 1.
 
-**If DATA mode:** Before running the in-skill grep scan below, first check whether the project was initialized via `/scholar-init`. If so, inherit the sidecar decisions and skip the re-scan — this is the scholar-init → scholar-brainstorm handshake, analogous to the one scholar-full-paper uses.
+**If DATA mode:** Before running the in-skill grep scan below, first check whether the project was initialized via `/scholar-init`. If so, inherit the sidecar decisions and skip the re-scan — this is the scholar-init → scholar-brainstorm handshake.
 
 **Step 0a — scholar-init handshake (skip rescan if sidecar exists):**
 

@@ -170,6 +170,14 @@ echo "Process log saved to $LOG_FILE"
 
 ---
 
+## Save Output
+
+- **Updated files**: All synchronized documents (slides, speaker script, manuscript) are updated in place
+- **Process log**: `output/[slug]/logs/process-log-sync-docs-[date].md`
+- **Sync report**: Displayed inline (stale items found, changes applied, verification results)
+
+---
+
 ## Quality Checklist
 
 - [ ] At least 2 documents identified and confirmed by user

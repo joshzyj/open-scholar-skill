@@ -7,7 +7,7 @@ description: >
   a review report to disk. Claude reads all reports, synthesizes a consolidated review
   with severity-ranked issues, and presents a fix checklist. Read-only — diagnoses but
   does not modify any project files.
-tools: Read, Bash, Write, Glob, Grep
+tools: Read, Bash, Write, Glob, Grep, Agent
 argument-hint: "[code|stats|logic|full|custom] [manuscript-path] [scripts-dir], e.g., 'full output/drafts/full-paper-2026-03-10.md'"
 user-invocable: true
 ---

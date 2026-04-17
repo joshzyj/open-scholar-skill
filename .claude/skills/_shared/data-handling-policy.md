@@ -57,7 +57,7 @@ Report a short table back to the user:
 └──────────────────────────────────────────────────────────┘
 ```
 
-Then set `SAFETY_STATUS` using the state machine below. **Do not skip this block.** If the skill is invoked inside `scholar-full-paper` and Phase -1 has already produced a `SAFETY_STATUS`, read that state from `PROJECT_STATE` instead of re-running — never downgrade an existing status.
+Then set `SAFETY_STATUS` using the state machine below. **Do not skip this block.** If the skill is invoked inside an upstream orchestrator that has already produced a `SAFETY_STATUS`, read that state from `PROJECT_STATE` instead of re-running — never downgrade an existing status.
 
 ---
 
@@ -115,7 +115,7 @@ When a user starts a new research project with `/scholar-init` (or `bash scripts
 │   └── processed/           ← analytic datasets used by models
 ├── materials/               ← codebooks, questionnaires, protocols
 ├── output/
-│   └── <slug>/              ← scholar-full-paper Phase 0 populates this
+│   └── <slug>/              ← scholar-init populates this
 └── logs/
     └── init-report.md       ← permanent ingest record + OVERRIDE rationales
 ```
@@ -172,6 +172,19 @@ When `SAFETY_STATUS=LOCAL_MODE`, the following rules apply for the remainder of 
 6. **Small-cell suppression.** When reporting crosstabs or group counts, suppress any cell with `n < 10` (replace with `<10`). This prevents re-identification through cell-size leakage when the underlying file is sensitive.
 7. **Figures.** Generate figures with R/Python as usual, save to `output/[slug]/figures/`, but do NOT embed them in the conversation when the underlying data is sensitive — just report that the file was written. Image contents sent back through the conversation are equivalent to `Read`.
 8. **Sub-skill propagation.** When a LOCAL_MODE skill invokes another skill (e.g., `scholar-analyze` → `scholar-causal`), it MUST pass `SAFETY_STATUS=LOCAL_MODE` forward so the downstream skill inherits the constraint.
+9. **Intermediate data files.** When an R/Python script processes LOCAL_MODE data and needs to save an intermediate dataset for reuse by downstream scripts (e.g., a cleaned analytic sample), the file MUST be saved to `data/interim/` or `data/processed/` — NEVER to `output/`, `scripts/`, or the project root. After saving, auto-register the file in `.claude/safety-status.json` with `LOCAL_MODE` status so the PreToolUse hook blocks `Read` on it. Use this bash block immediately after the Rscript call:
+   ```bash
+   # Auto-register derived data file in safety sidecar (inherit LOCAL_MODE from source)
+   DERIVED_FILE="data/interim/data_analytic.rds"  # adjust path
+   if [ -f "$DERIVED_FILE" ] && [ -f ".claude/safety-status.json" ]; then
+     ABS_PATH="$(cd "$(dirname "$DERIVED_FILE")" && pwd)/$(basename "$DERIVED_FILE")"
+     jq --arg k "$ABS_PATH" --arg v "LOCAL_MODE" \
+       '.[$k] = $v' .claude/safety-status.json > .claude/safety-status.json.new \
+       && mv .claude/safety-status.json.new .claude/safety-status.json
+     echo "Registered $DERIVED_FILE as LOCAL_MODE in safety sidecar"
+   fi
+   ```
+   Downstream scripts then load from `data/interim/` (fast, ~1s) instead of re-reading the large raw file. Claude still cannot `Read` the intermediate file because the hook enforces LOCAL_MODE.
 
 ### 3a. LOCAL_MODE loader template (R)
 
@@ -329,7 +342,7 @@ Both the `*/segment/*` form (segment appears as a directory component with child
 
 ## 8. Inheritance from `scholar-init`
 
-When a project was created by `scholar-init`, every file in `data/raw/`, `data/interim/`, `data/processed/`, and `materials/` already has an entry in `.claude/safety-status.json`. Downstream skills (`scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-full-paper`) **inherit these decisions** rather than re-running the gate:
+When a project was created by `scholar-init`, every file in `data/raw/`, `data/interim/`, `data/processed/`, and `materials/` already has an entry in `.claude/safety-status.json`. Downstream skills (`scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`) **inherit these decisions** rather than re-running the gate:
 
 - The PreToolUse hook reads `.claude/safety-status.json` on every `Read` and enforces the existing status.
 - If a new file appears in `data/raw/` without a sidecar entry, the hook runs `safety-scan.sh` on it on-demand and blocks with a "run `/scholar-init add <path>`" message.

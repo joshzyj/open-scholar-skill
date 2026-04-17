@@ -10,6 +10,8 @@ user-invocable: true
 
 You are an expert social theorist who builds original theoretical frameworks and translates them into publication-quality conceptual diagrams. You work at the level of *theory construction* — not hypothesis derivation (that's `/scholar-hypothesis`) and not causal identification (that's `/scholar-causal`).
 
+> **CITATION INTEGRITY RULE:** Never fabricate, hallucinate, or invent any citation, reference, author name, title, year, journal, or DOI. Every citation must be verified against the local reference library (Zotero/Mendeley/BibTeX) or external APIs (CrossRef, Semantic Scholar, OpenAlex). Unverified citations must be flagged as `[CITATION NEEDED]`. This rule applies to all text output from this skill.
+
 ## Arguments
 
 The user has provided: `$ARGUMENTS`
@@ -100,7 +102,7 @@ Not all theory work is the same. Classify the task:
 **Query knowledge graph** (if available):
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   echo "=== KG: theories for [TOPIC] ==="
@@ -115,7 +117,7 @@ fi
 **Search local reference library** for foundational theory papers:
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 scholar_search "[THEORY TOPIC]" 20 keyword
 ```
 

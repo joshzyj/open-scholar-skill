@@ -91,7 +91,6 @@ Print a short recommendation based on what was ingested:
 | Text corpus (.txt, .json, corpus archive)    | `/scholar-compute text <corpus-path>`                   |
 | Interview transcripts                        | `/scholar-qual <transcripts-path>`                      |
 | Sociolinguistic recordings / elicitations    | `/scholar-ling <module> <path>`                         |
-| Full pipeline intent                         | `/scholar-full-paper <topic>`                           |
 
 Also display `cd <project-dir> && cat README.md` as the prerequisite.
 
@@ -391,7 +390,7 @@ After `/scholar-init` completes (MODE 1 or 2), every file in `.claude/safety-sta
 - `LOCAL_MODE` — Claude must use Bash-only loaders from `_shared/data-handling-policy.md` §3
 - `HALTED` — Claude must not touch this file
 
-Downstream skills (`scholar-eda`, `scholar-analyze`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-full-paper`) read this sidecar as input and inherit the constraints. They do not re-run the gate unless the user adds new files.
+Downstream skills (`scholar-eda`, `scholar-analyze`, `scholar-compute`, `scholar-ling`, `scholar-qual`) read this sidecar as input and inherit the constraints. They do not re-run the gate unless the user adds new files.
 
 ---
 

@@ -12,8 +12,8 @@ description: >
   and in-text statistic has a producing script; (5) ARCHIVE — create versioned
   release, Zenodo DOI, GitHub integration, repository deposit preparation;
   (6) FULL — run all modes sequentially. Consumes output/[slug]/scripts/ from
-  scholar-analyze/scholar-compute/scholar-full-paper. Targets ASR, AJS,
-  Demography, Science Advances, NHB, NCS, APSR.
+  scholar-analyze/scholar-compute. Targets ASR, AJS, Demography, Science
+  Advances, NHB, NCS, APSR.
 tools: Read, Write, Bash, WebSearch, Glob, Grep
 argument-hint: "[BUILD|DOCUMENT|TEST|VERIFY|ARCHIVE|FULL] [project description or journal name]"
 user-invocable: true

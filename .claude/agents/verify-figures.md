@@ -31,7 +31,43 @@ For each figure file:
 2. Identify what data/model the figure draws from
 3. Map to the corresponding manuscript caption and references
 
-### Phase 3: Figure-Raw Data Consistency
+### Phase 3: Visual Inspection via VLM (Multimodal)
+
+**For each figure file (.png, .pdf converted to .png)**, read the image using the Read tool. The Read tool displays images visually. Inspect each figure for:
+
+| Check | What to look for | Common issues |
+|-------|------------------|---------------|
+| **Axis readability** | Labels not truncated, font size legible, units present | Long variable names clipped; axis text overlapping ticks |
+| **Legend clarity** | All groups labeled, no overlapping entries, placed outside data area | Legend covers data points; group labels are raw variable codes |
+| **Color and contrast** | Distinguishable in grayscale; colorblind-safe palette | Red-green palette; thin lines invisible when printed |
+| **Data-ink ratio** | No chartjunk, gridlines subtle, no 3D effects | Heavy gridlines; unnecessary borders; distracting backgrounds |
+| **Panel alignment** | Multi-panel figures have consistent axes, shared legends | Different y-axis scales across panels without notation; missing panel tags (A, B, C) |
+| **Truncation / clipping** | No data points cut off at plot boundaries, CIs fully visible | Confidence intervals extend beyond axis limits; bar labels cut off |
+| **Resolution and format** | Sufficient DPI for print (≥300); vector preferred for line plots | Rasterized line plots; JPEG artifacts on text |
+
+**Procedure for each figure:**
+
+1. If the file is a PDF, check whether a PNG version exists alongside it. If not, note it but proceed with available formats.
+2. Read the image file via the Read tool (which renders images visually for inspection).
+3. Record a brief visual assessment:
+   ```
+   VLM VISUAL INSPECTION — Figure [N]:
+   - Axis labels: [PASS / ISSUE: description]
+   - Legend: [PASS / ISSUE: description]
+   - Color/contrast: [PASS / ISSUE: description]
+   - Data-ink ratio: [PASS / ISSUE: description]
+   - Panel alignment: [PASS / N/A / ISSUE: description]
+   - Truncation: [PASS / ISSUE: description]
+   - Resolution: [PASS / ISSUE: description]
+   - Overall visual quality: [GOOD / ACCEPTABLE / POOR]
+   ```
+4. Flag any visual issue as a WARNING (cosmetic) or CRITICAL (data misrepresentation visible in the plot, e.g., wrong axis scale, missing data series).
+
+Include VLM inspection results in the final report under a dedicated **VISUAL INSPECTION SUMMARY** section after the existing sections.
+
+---
+
+### Phase 4: Figure-Raw Data Consistency
 
 For each figure, verify against raw analysis outputs:
 
@@ -45,7 +81,7 @@ For each figure, verify against raw analysis outputs:
 | **Marginal effects plots** | AME values match raw AME output | Figure shows coefficients instead of AMEs |
 | **Distribution plots** | Shape consistent with reported mean/SD/skewness | Different variable or transformation plotted |
 
-### Phase 4: Figure-Caption Consistency
+### Phase 5: Figure-Caption Consistency
 
 For each figure:
 - Does the caption accurately describe what the figure shows?
@@ -54,14 +90,14 @@ For each figure:
 - Does the caption note the correct sample/model/specification?
 - Are confidence interval levels stated correctly (90% vs. 95%)?
 
-### Phase 5: Cross-Figure and Figure-Table Consistency
+### Phase 6: Cross-Figure and Figure-Table Consistency
 
 - Do figures and tables that describe the same analysis show consistent results?
 - If Figure 2 plots the coefficients from Table 3, are they identical?
 - Are the same variables named the same way in figures and tables?
 - If multiple figures share an axis, are scales consistent?
 
-### Phase 6: Figure File Integrity
+### Phase 7: Figure File Integrity
 
 - Are all referenced figures present as files?
 - Are any figure files present but unreferenced?
@@ -90,6 +126,17 @@ FIGURE INVENTORY:
 | Fig 1  | output/figures/fig1-trend.pdf | viz-code.R:45 | table1-desc.csv | YES |
 | Fig 2  | output/figures/fig2-coef.pdf | viz-code.R:120 | table2-reg.html | YES |
 | —      | output/figures/fig-extra.pdf | unknown | unknown | NO (orphaned) |
+
+VISUAL INSPECTION SUMMARY (VLM):
+
+| Figure | Axes | Legend | Color | Data-Ink | Panels | Truncation | Resolution | Overall |
+|--------|------|--------|-------|----------|--------|------------|------------|---------|
+| Fig 1  | PASS | PASS   | PASS  | PASS     | N/A    | PASS       | PASS       | GOOD    |
+| Fig 2  | ISSUE| PASS   | PASS  | PASS     | ISSUE  | PASS       | PASS       | ACCEPTABLE |
+
+VLM-DETECTED ISSUES:
+1. [VLM-FIG-001] Figure [N] — [description of visual issue found by inspecting the image]
+2. ...
 
 CRITICAL DISCREPANCIES:
 
@@ -131,3 +178,9 @@ FIGURE-TABLE CROSS-CHECK:
 - **Orphaned figure** — WARNING
 - **Confidence level mismatch** — WARNING
 - **Scale/unit inconsistency across related figures** — WARNING
+- **VLM: axis labels truncated or overlapping** — WARNING
+- **VLM: legend obscures data** — WARNING
+- **VLM: non-colorblind-safe palette (red-green)** — WARNING
+- **VLM: data points clipped at axis boundary** — CRITICAL (potential data misrepresentation)
+- **VLM: missing panel tags in multi-panel figure** — WARNING
+- **VLM: low resolution / JPEG artifacts on text** — WARNING

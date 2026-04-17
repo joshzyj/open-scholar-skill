@@ -286,6 +286,8 @@ cat .claude/agents/review-code-data-handling.md
 - Role: Verify variable recoding, categorization, missing value handling, and sample construction against codebooks and design documents
 - Focus: Miscoded categories, wrong value mappings, reversed scales, unhandled missing value codes (GSS/PSID/NHANES sentinel values), incomplete case_when, sample restriction mismatches, factor level ordering, derived variable errors (age, income, indices)
 - Spawn with: CODE REVIEW PACKAGE (codebook/data dictionary is critical input for this agent)
+- **Variable Construction Completeness Check**: For every variable referenced in analysis scripts (used in subsetting, grouping, decomposition, or modeling), verify it was actually created in a data preparation script. Cross-reference against the data blueprint's variable dictionary. Flag any variable that is referenced but never constructed (e.g., `cohort_gen` used in decomposition but never defined).
+- **Directional Coding Audit**: For every survey item that is recoded or reversed, verify: (1) the code comment correctly describes the original variable's coding, (2) the transformation produces the intended direction (higher = conservative or liberal as specified), (3) the comment does not confuse the variable's meaning with a related concept (e.g., "approve of the ruling banning X" vs. "approve of X"). Flag any item where the comment contradicts the codebook or where the recode direction appears wrong.
 
 **All selected agents MUST be launched simultaneously** (parallel Agent tool calls in a single message).
 
@@ -514,8 +516,6 @@ Before presenting results, verify:
 | **scholar-analyze** | Post-save recommendation to user | `full` | No — recommendation |
 | **scholar-compute** | Post-save recommendation to user | `full` | No — recommendation |
 | **scholar-eda** | Post-save recommendation to user | `correctness robustness` | No — recommendation |
-| **scholar-full-paper** | Phase 5.5 (after analyze/Phase 5, before Mid-Pipeline Audit and Phase 7 write) | `full` | Yes — MAJOR ISSUES blocks Phase 7 |
-| **scholar-grant** | Phase 5G.0 (before verification gate, conditional on scripts existing) | `full` | Yes — MAJOR ISSUES blocks Phase 6 (mock panel) |
 | **scholar-replication** | Verification checklist (consumes existing report; recommends running if none exists) | reads report | Checklist item |
 | **scholar-verify** | Complementary: scholar-verify checks output consistency; scholar-code-review checks code correctness | — | Independent |
 

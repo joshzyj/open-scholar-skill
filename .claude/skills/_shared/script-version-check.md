@@ -48,6 +48,7 @@ echo "SCRIPT_PATH=${SCRIPT_BASE}.${EXT}"
 
 ## Rules
 
+0. **Every line of code MUST have an inline comment explaining what it does and why.** Comments should explain purpose and logic, not just restate syntax (e.g., `# Cluster SEs at state level — units are nested within states` not `# set cluster`). This applies to all `.R`, `.py`, `.do`, `.jl` scripts.
 1. **NEVER overwrite an existing script.** Always increment the version suffix (`-v2`, `-v3`, etc.).
 2. **The first version has no suffix** — `04-main-models.R`. The second is `04-main-models-v2.R`, third is `04-main-models-v3.R`, etc.
 3. **Paired files share the same version** — if `04-main-models-v2.R` exists, the Stata parallel should be `04-main-models-v2.do`.

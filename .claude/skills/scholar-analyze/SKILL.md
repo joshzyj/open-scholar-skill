@@ -85,7 +85,7 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 Before any Component A step that loads data, follow the mandatory gate defined in `.claude/skills/_shared/data-handling-policy.md`. This is non-optional for Modes 1 and 2 (local file or pasted data). Mode 3 (online public data fetched by the skill itself, e.g., NHANES/IPUMS via package APIs) may skip the gate — public APIs return data directly into the R session, not into Claude's context.
 
-**Skip the gate only if:** the skill is invoked from `scholar-full-paper` and Phase -1 has already set `SAFETY_STATUS` in `PROJECT_STATE`. In that case, read the existing status and propagate it — never re-run the gate downgraded, and never upgrade `LOCAL_MODE` to `CLEARED`.
+**Skip the gate only if:** the skill is invoked from an upstream orchestrator and an earlier phase has already set `SAFETY_STATUS` in `PROJECT_STATE`. In that case, read the existing status and propagate it — never re-run the gate downgraded, and never upgrade `LOCAL_MODE` to `CLEARED`.
 
 **Otherwise, for every data-file argument:**
 
@@ -227,7 +227,7 @@ Before generating any figure code, produce a **Figure Plan** table and present i
 2. For each figure, specify: plot type, which variables map to which aesthetics (x, y, fill, color, facet), target dimensions (width × height in inches), journal preset if applicable, and purpose (which finding it illustrates)
 3. **Present the table to the user and wait for confirmation** before proceeding to B1
 4. The user may add, remove, reorder, or modify figures — update the plan accordingly
-5. If running inside `/scholar-full-paper` pipeline, proceed without pause (auto-confirm)
+5. If running in non-interactive mode (invoked by an upstream orchestrator), proceed without pause (auto-confirm)
 
 After confirmation, generate figures in the order specified in the plan.
 
@@ -816,6 +816,8 @@ Using the actual numerical results from Components A and B, **write complete, pu
 **Zero-inflated / Hurdle:**
 > "Given the excess zeros in [Y] ([X]% of observations), we estimated a zero-inflated negative binomial model (Table X). In the count process, [X] was associated with a [X]% [increase/decrease] in expected [Y] (IRR = [X], 95% CI = [[lo], [hi]], p = [p]). In the zero-inflation process, [Z] [increased/decreased] the probability of being a structural zero (OR = [X], 95% CI = [[lo], [hi]], p = [p])."
 
+**Specification curve analysis** — see A8o in `references/component-a-specialized.md` for the canonical template (Simonsohn, Simmons & Nelson 2020, *Nat Hum Behav*).
+
 **Beta regression:**
 > "Because [Y] is a bounded proportion, we estimated beta regression (Table X). [X] is associated with a [direction] in [Y] (b = [b], SE = [SE], p = [p]). The average marginal effect indicates a [AME] percentage-point change per one-unit increase in [X] (AME = [AME], 95% CI = [[lo], [hi]])."
 
@@ -1032,7 +1034,7 @@ echo "| $(date '+%Y-%m-%d %H:%M') | A3 | OLS with HC3 robust SEs | Default SEs, 
 - **Missing data strategy**: Listwise deletion vs. MI; justification
 - **Robustness design**: Which alternative specs and why they test the right threat
 
-This incremental-persistence pattern (same as Phase 2 search log in scholar-full-paper) protects against context compaction — decisions are on disk the moment they are made.
+This incremental-persistence pattern protects against context compaction — decisions are on disk the moment they are made.
 
 ### D3 — Script Index Update
 

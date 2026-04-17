@@ -152,7 +152,7 @@ Before searching Zotero, check the user-scoped knowledge graph for pre-extracted
 
 ```bash
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+KG_REF="$SKILL_DIR/_shared/knowledge-graph-search.md"
 if [ -f "$KG_REF" ]; then
   eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
   if kg_available; then
@@ -196,7 +196,7 @@ Load the reference manager backends and run auto-detection:
 ```bash
 # ── Load reference manager + run local library searches in ONE call ──
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Detection priority: Zotero → Mendeley → BibTeX → EndNote XML
 # Zotero: $SCHOLAR_ZOTERO_DIR/zotero.sqlite (auto-detected or set in .env; copy to /tmp; .bak fallback)
@@ -618,6 +618,7 @@ Before saving, verify **every item**. This is the critical gate that prevents th
 - [ ] No "topic sentence pivot" where the theory section abruptly switches to a different concern than what the literature identified as missing
 - [ ] All citations in theory section appeared in search log (no fabricated references)
 - [ ] Competing predictions (Step 9) derive from frameworks identified in the theoretical landscape (Step 5), not introduced for the first time
+- [ ] **Claim verification** — all prose claims attributing findings to cited sources checked against KG/PDF; no `[CLAIM-REVERSED]`, `[CLAIM-MISCHARACTERIZED]`, `[CLAIM-OVERCAUSAL]`, or `[CLAIM-UNSUPPORTED]` markers remain. Run: `bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/verify-claims.sh" "[output_file]"`
 
 **Common failures to check for:**
 1. **Kitchen sink**: Multiple frameworks listed with equal weight, hypotheses drawn from different theories without integration → Fix: select 1 primary + 1 secondary at most

@@ -82,7 +82,7 @@ Then halt the orchestrator with a clear message naming this file.
 
 ```bash
 . "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh"
-cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/scholar-full-paper/references/code-review-fix-loop.md"
+cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/code-review-fix-loop.md"
 # Apply the loop described above against the current gate's CRITICAL list.
 # Max 2 iterations; escalate on iteration 3 or on any ESCALATE-class finding.
 ```

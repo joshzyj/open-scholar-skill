@@ -248,7 +248,7 @@ Parse sub-mode from arguments:
 ```bash
 # Load reference manager backends
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
-eval "$(cat "$SKILL_DIR/scholar-citation/references/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
 
 # Also load KG functions for dedup checking
 eval "$(cat "$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null

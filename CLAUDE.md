@@ -20,7 +20,7 @@ open-scholar-skill/
 ├── skills/ → .claude/skills/    # Symlink (DO NOT replace with directory)
 ├── agents/ → .claude/agents/    # Symlink (DO NOT replace with directory)
 └── .claude/
-    ├── skills/                  # 30 skill directories, each with SKILL.md + references/
+    ├── skills/                  # 31 skill directories, each with SKILL.md + references/
     │   ├── _shared/             # Shared protocols (process-logger.md, version-check.md, data-handling-policy.md, tier-b-safety-gate.md)
     │   ├── scholar-init/        # v5.9.0 — project initializer + data safety sidecar populator (4 modes: init/review/add/status)
     │   ├── scholar-analyze/     # Components loaded on-demand via references/component-a-*.md
@@ -45,6 +45,7 @@ open-scholar-skill/
     │   ├── scholar-lit-review-hypothesis/  # Integrated lit review + hypothesis
     │   ├── scholar-open/        # Open science practices
     │   ├── scholar-openai/      # External review via OpenAI Codex CLI agents
+    │   ├── scholar-polish/      # Final prose-level polish (clarity, concision, flow, journal voice)
     │   ├── scholar-qual/        # Qualitative methods (coding, grounded theory, thematic analysis)
     │   ├── scholar-replication/ # Replication package builder + validator
     │   ├── scholar-respond/     # Peer review simulation + R&R
@@ -55,7 +56,7 @@ open-scholar-skill/
     └── agents/                  # 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 ```
 
-**Version**: v5.10.0 — 30 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
+**Version**: v5.11.0 — 31 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 
 ---
 
@@ -113,7 +114,7 @@ Manuscript skills generate 4 formats: `.md`, `.docx`, `.tex`, `.pdf` via pandoc.
 
 ## Reference Manager Integration
 
-Unified search layer: `.claude/skills/scholar-citation/references/refmanager-backends.md`
+Unified search layer: `.claude/skills/_shared/refmanager-backends.md`
 
 | Tier | Backend | Notes |
 |------|---------|-------|
