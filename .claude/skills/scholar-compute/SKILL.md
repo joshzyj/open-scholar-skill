@@ -369,6 +369,238 @@ After loading and executing the module, continue with the Quality Checklist and 
 
 ---
 
+## Internal Review Panel (MANDATORY before Save)
+
+**Purpose:** Before the compute log and publication-ready results are saved, run a 5-agent review panel on the assembled computational outputs. Each reviewer evaluates from a distinct computational-social-science lens. A synthesizer aggregates consensus flags, a reviser produces improved outputs, and the user accepts the revision before Save Output.
+
+**Relation to other skills:** This panel complements — does not replace — downstream `/scholar-code-review` (script auditing) and `/scholar-verify` (analysis-to-manuscript consistency). The panel catches issues early, at the compute-finalization step; `/scholar-code-review` and `/scholar-verify` provide deeper, specialized audits later.
+
+This step is REQUIRED for all modules. Skip only if the user explicitly passed `--skip-review` in `$ARGUMENTS`.
+
+### Phase A — Assemble the Review Package
+
+Compile the following in-memory (not yet saved):
+
+1. **Module(s) run** and **claim type** (descriptive / measurement / predictive / causal)
+2. **Method choices**: algorithm, hyperparameters, preprocessing, feature set
+3. **Corpus / sample spec**: source, N, time range, sampling strategy, exclusions, boundary decisions (for networks)
+4. **Validation outputs**: held-out test metrics, human-IRR κ, coverage %, posterior predictive checks, permutation tests
+5. **Model artifacts**: saved model files, embeddings, topic models, annotations — with file paths
+6. **Scripts + environment**: `output/[slug]/scripts/*` + renv.lock / requirements.txt / environment.yml
+7. **Results prose draft** (module output + Results section text)
+8. **Per-module verification subagent** output (PASS/FAIL)
+
+### Phase B — Spawn Five Parallel Reviewer Subagents
+
+Use the Task tool to run all 5 reviewers **in parallel** (five simultaneous tool calls). Fill in `[module]`, `[journal]`, `[claim type]`, and `[REVIEW PACKAGE]` in each prompt.
+
+---
+
+**R1 — Method-Claim Match Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a computational methodologist auditing an analysis using [module] for a paper targeting [journal] making [claim type] claims. Critique whether the method supports the claim. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Method-claim alignment**: Does the computational method support the strength of the claim? Flag any causal claim supported only by a predictive model without DML / Causal Forest / IV. Flag any inferential claim made from a topic model without human validation.
+> 2. **Uncertainty quantification**: Is uncertainty reported (CIs, credible intervals, prediction sets, bootstrap SEs)? Flag point-only claims.
+> 3. **Baseline comparison**: Is the chosen method compared against simpler baselines (dictionary / bag-of-words / logistic / random)? Is the added complexity justified by performance gain?
+> 4. **Module-specific pitfalls**:
+>    - NLP/Topic: coherence metrics, outlier %, temporal drift handled?
+>    - ML: overfitting check, train/val/test split integrity, leakage audit
+>    - Networks: boundary specification, missing-tie strategy, null model comparison
+>    - ABM: parameter space coverage, sensitivity analysis, ODD completeness
+>    - CV: dataset bias audit, demographic subgroup performance
+>    - LLM: temperature=0, prompt stability, all four Lin & Zhang (2025) epistemic risks addressed
+> 5. **Alternative methods**: Is there a stronger or simpler method that should have been tried?
+>
+> End with your single most important fix.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R2 — Validation Rigor Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a measurement and validation expert auditing a computational analysis for [journal]. Critique validation strategy. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Inter-rater reliability**: For annotation-dependent work (human labels, LLM annotation, CV classification), is κ or Krippendorff's α reported, and does it meet κ ≥ 0.70? Is the benchmark sample size ≥ 200?
+> 2. **Held-out evaluation**: Are metrics reported on a held-out test set (never touched during model selection)? For time series, is the split temporal (no future-into-past leakage)?
+> 3. **Coverage / calibration**: If conformal prediction / Bayesian / PP-checks, is empirical coverage within ±2% of nominal? Is conditional coverage checked for protected subgroups?
+> 4. **Human-model agreement**: For LLM-assisted or model-assisted measurement, is a random sample of N ≥ 100 human-validated against model outputs with error analysis?
+> 5. **Validation-to-claim strength**: Does the validation strength match the strength of the scientific claim? Flag cases where the claim exceeds the validation evidence.
+>
+> End with a verdict: Is the analysis adequately validated for its primary claim?
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R3 — Corpus / Sample Validity Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a corpus linguist / survey sampling specialist auditing the data foundation of a computational analysis for [journal]. Critique corpus or sample construction. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Sampling frame**: Is the corpus/sample population clearly defined? Is the sampling strategy (census, random, convenience, snowball, API-constrained) documented and its biases disclosed?
+> 2. **Exclusions and filters**: Are exclusions (bot detection, dedup, language filtering, date range, minimum-length) documented with counts at each filter stage?
+> 3. **Boundary specification** (networks / corpora): Are node/edge definitions or document boundaries justified? Is the missing-tie or truncation strategy documented?
+> 4. **Representativeness**: Does the sample generalize to the claim's target population? Flag convenience samples presented as population-representative.
+> 5. **Temporal scope**: Are time boundaries justified? Is there coverage bias across time (e.g., API rate limit differences, platform policy changes)?
+>
+> End with the single most important disclosure needed in Methods.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R4 — Computational Reproducibility Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a replication editor auditing computational reproducibility for [journal]. Critique whether a third party could re-execute this analysis. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Seeds everywhere**: Is every stochastic step (train/test split, weight init, MCMC, bootstrap, clustering init, topic model init) seeded and reported?
+> 2. **Environment lock**: Is `renv.lock` / `requirements.txt` / `environment.yml` / `pyproject.toml` present and pinned? Is the Python/R version + CUDA version documented for GPU work?
+> 3. **Model version pinning**: For HuggingFace / OpenAI / Anthropic / local models, is the exact model ID + revision SHA + date archived? (e.g., `bert-base-uncased@<sha>`, `gpt-4@2024-08-06`.)
+> 4. **Data pathways**: Is the data source documented with URL / DOI / DUA pathway? For API-fetched data, is the fetch date and query logged? Is a frozen snapshot archived?
+> 5. **Compute specification**: Is hardware (GPU type, RAM, compute minutes/cost) documented? Are long-running steps (training, embedding, annotation) cached and the cache key documented?
+>
+> End with the single most blocking reproducibility gap.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R5 — Reporting Standards Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a former associate editor at [journal] auditing a computational analysis for compliance with field-specific reporting standards. Critique reporting completeness. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Module-appropriate standard**:
+>    - **ABM**: ODD protocol (Overview / Design concepts / Details) completely filled?
+>    - **ML**: Model Card (intended use, training data, metrics, limitations) present?
+>    - **NLP**: Data Statement (Bender & Friedman 2018) for corpus demographics / provenance?
+>    - **LLM annotation**: Prompts archived verbatim; temperature, model, date documented; all four Lin & Zhang (2025) epistemic risks assessed (construct validity, measurement validity, sampling, bias)?
+>    - **Networks**: Reported node count, edge count, density, components, as well as sampling-induced bias?
+>    - **CV**: FairFace / subgroup performance audit?
+> 2. **Journal-specific requirements**: Does the report meet [journal]'s computational supplementary requirements? (NHB/NCS: Reporting Summary, Code availability, Data availability; PNAS: SI code + data; Science Advances: methods-supp with full code.)
+> 3. **Ethics reporting**: Are consent, IRB approval, terms-of-service compliance, and dual-use risks disclosed where applicable?
+> 4. **Human-subjects transparency** (for LLM / CV / NLP on user content): Are content origin, consent, and de-identification documented?
+> 5. **Environmental / cost reporting**: For large LLM / training runs, are compute cost / energy estimates reported (increasingly required at NHB/NCS)?
+>
+> End with the single most important reporting gap for [journal].
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+### Phase C — Synthesize Into Compute Review Scorecard
+
+After all 5 reviewers return, produce a **Compute Review Scorecard**:
+
+```
+===== INTERNAL COMPUTE REVIEW PANEL — [Topic] — [Module] — [Journal] =====
+
+Panel: R1 (Method-Claim) | R2 (Validation) | R3 (Corpus/Sample) | R4 (Reproducibility) | R5 (Reporting)
+
+| Dimension | R1 | R2 | R3 | R4 | R5 | Consensus |
+|-----------|----|----|----|----|----|-----------|
+| Method-claim alignment | [S/A/W] | — | — | — | — | [S/A/W] |
+| Uncertainty quantification | [S/A/W] | — | — | — | — | [S/A/W] |
+| Baseline comparison | [S/A/W] | — | — | — | — | [S/A/W] |
+| IRR / human validation | — | [S/A/W] | — | — | — | [S/A/W] |
+| Held-out evaluation | — | [S/A/W] | — | — | — | [S/A/W] |
+| Coverage / calibration | — | [S/A/W] | — | — | — | [S/A/W] |
+| Sampling frame | — | — | [S/A/W] | — | — | [S/A/W] |
+| Exclusions / filters | — | — | [S/A/W] | — | — | [S/A/W] |
+| Boundary specification | — | — | [S/A/W] | — | — | [S/A/W] |
+| Seeds + environment | — | — | — | [S/A/W] | — | [S/A/W] |
+| Model version pinning | — | — | — | [S/A/W] | — | [S/A/W] |
+| Data pathway documentation | — | — | — | [S/A/W] | — | [S/A/W] |
+| ODD / Model Card / Data Statement | — | — | — | — | [S/A/W] | [S/A/W] |
+| Epistemic risks (LLM) | — | — | — | — | [S/A/W] | [S/A/W] |
+| Ethics / TOS / consent | — | — | — | — | [S/A/W] | [S/A/W] |
+| **Weak items count** | [N] | [N] | [N] | [N] | [N] | **[total]** |
+
+★★ Cross-agent agreement (flagged by 2+ reviewers — highest priority):
+1. [Issue] — flagged by [R#, R#] — [summary]
+...
+
+Top fix from each reviewer:
+- R1: [fix] | R2: [verdict + fix] | R3: [fix] | R4: [fix] | R5: [fix]
+
+OVERALL VERDICT: [Ready to save / Revise before save / Rerun module]
+```
+
+Log this phase:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-compute"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t ${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| IRP-C | $(date +%H:%M:%S) | Review Scorecard | 5-agent panel synthesized | scorecard in-memory | ✓ |" >> "$LOG_FILE"
+```
+
+### Phase D — Reviser Subagent (sequential, after Phase C)
+
+Spawn a **reviser subagent**:
+
+> "You are an expert computational social scientist revising a compute package for [journal]. You have feedback from a 5-agent review panel covering method-claim match, validation rigor, corpus/sample validity, reproducibility, and reporting standards. Produce a revised package addressing all valid concerns.
+>
+> **Instructions**:
+> 1. Address every ★★ item (cross-agent agreement) first
+> 2. Address every item rated **Weak**; note any skipped items with reason
+> 3. Do not change anything rated **Strong** by 2+ reviewers
+> 4. If R1 flagged method-claim mismatch, R2 flagged validation below threshold (κ < 0.70), or R4 flagged blocking reproducibility gaps, produce a **Rerun Required** block at the top — do NOT proceed to Save Output; the user must rerun the affected module
+> 5. Apply edits to: Results prose, Methods description, Model Card / ODD / Data Statement, script headers, reporting tables. Mark each revision `[REV: reason]`
+> 6. After the revised package, append a **Revision Notes** block listing ★★ items addressed, other changes, and reviewer comments not acted on with reason
+>
+> **Original REVIEW PACKAGE**: [paste]
+> **Compute Review Scorecard**: [paste]
+> **R1 feedback**: [paste] | **R2**: [paste] | **R3**: [paste] | **R4**: [paste] | **R5**: [paste]"
+
+### Phase E — Accept the Revision
+
+1. Present Scorecard + Revision Notes + summary of revised package to the user
+2. Ask: **"Accept revised compute package? (`yes` / `accept with edits` / `keep original` / `rerun`)"**
+   - `yes`: Use revised package for Save Output
+   - `accept with edits`: Apply user's specific edits, then proceed
+   - `keep original`: Append Scorecard + Revision Notes as an appendix to the saved log
+   - `rerun`: Do NOT save; return to the flagged module for re-execution
+3. Log the decision:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-compute"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t ${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| IRP-E | $(date +%H:%M:%S) | Accept Revision | [user decision] | — | ✓ |" >> "$LOG_FILE"
+```
+
+**HARD STOP**: Do NOT proceed to Save Output until the user accepts. If `rerun`, loop back to the flagged module.
+
+### Pre-Save Review Checklist
+
+Confirm all of the following before moving to Save Output:
+
+- [ ] 5 reviewer subagents (method-claim match / validation / corpus-sample / reproducibility / reporting standards) spawned in parallel via the Task tool
+- [ ] Review Scorecard produced with per-dimension consensus ratings + ★★ cross-agent flags
+- [ ] Reviser subagent produced an improved compute package addressing all ★★ and Weak items (or noted reasons for skipping)
+- [ ] User decision recorded (yes / accept with edits / keep original / rerun) and logged at Phase E
+
+---
+
 ## Save Output
 
 Use the Write tool to save **two separate files** after completing all modules.

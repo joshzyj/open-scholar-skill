@@ -24,24 +24,24 @@ Parse to determine:
 
 ## Dispatch Table
 
-Route to the relevant steps based on arguments. Run all applicable steps; always end with **Save Output**.
+Route to the relevant steps based on arguments. Run all applicable steps; always run **Step 11 (Internal Review Panel)** before ending with **Save Output** — except for narrow single-step requests (`power`, `methods-section`, `pap` alone), where Step 11 is optional.
 
 | Keyword(s) in arguments | Steps to run |
 |------------------------|-------------|
-| `quant`, `quantitative`, `regression`, `survey data`, `panel`, `observational` | Steps 0 → 1 → Causal Gate → 3 → 4 → 5 → 6 → 7 |
-| `causal`, `DiD`, `FE`, `RD`, `IV`, `matching`, `natural experiment`, `DAG` | Steps 0 → 1 → **Causal Gate** (invoke /scholar-causal) → 3 → 5 → 6 → 7 |
-| `qual`, `qualitative`, `interview`, `ethnography`, `case study` | Steps 0 → 1 → 4 (qual path) → 7 (qual template) |
-| `mixed`, `mixed-methods`, `multi-method` | All steps; flag integration point in Step 7 |
-| `experiment`, `RCT`, `vignette`, `conjoint`, `list experiment` | Steps 0 → 1 → 2 (experimental) → 3 (power) → 5 → 7 |
-| `cluster RCT`, `cluster randomized`, `group randomized` | Steps 0 → 1 → 2d (cluster RCT) → 3e (cluster power) → 5 → 7 |
-| `audit`, `correspondence`, `audit study`, `resume audit`, `field experiment discrimination` | Steps 0 → 1 → 2e (audit design) → 3f (audit power) → 5 → 7 |
-| `stepped-wedge`, `stepped wedge`, `sequential rollout` | Steps 0 → 1 → 2f (stepped-wedge) → 3g (SW power) → 5 → 7 |
-| `SMART`, `adaptive intervention`, `DTR`, `dynamic treatment regime` | Steps 0 → 1 → 2g (SMART) → 3h (SMART power) → 5 → 7 |
-| `Bayesian`, `Bayesian design`, `prior elicitation`, `assurance` | Steps 0 → 1 → **Step 10** (Bayesian Design) → 7 |
-| `power`, `sample size`, `MDES`, `minimum detectable` | Step 2 (power only) |
-| `methods section`, `write methods`, `data section` | Step 7 (write directly) |
-| `pap`, `pre-analysis plan`, `preregistration`, `OSF` | Step 6 (PAP only) |
-| `computational`, `NLP`, `text`, `ML`, `machine learning`, `network`, `ABM`, `simulation`, `corpus`, `annotation`, `topic model`, `classifier` | Steps 0 → 1 → **Step 9** (Computational Design) → 7 (NCS/SA template) |
+| `quant`, `quantitative`, `regression`, `survey data`, `panel`, `observational` | Steps 0 → 1 → Causal Gate → 3 → 4 → 5 → 6 → 7 → **11** |
+| `causal`, `DiD`, `FE`, `RD`, `IV`, `matching`, `natural experiment`, `DAG` | Steps 0 → 1 → **Causal Gate** (invoke /scholar-causal) → 3 → 5 → 6 → 7 → **11** |
+| `qual`, `qualitative`, `interview`, `ethnography`, `case study` | Steps 0 → 1 → 4 (qual path) → 7 (qual template) → **11** |
+| `mixed`, `mixed-methods`, `multi-method` | All steps; flag integration point in Step 7; run **11** |
+| `experiment`, `RCT`, `vignette`, `conjoint`, `list experiment` | Steps 0 → 1 → 2 (experimental) → 3 (power) → 5 → 7 → **11** |
+| `cluster RCT`, `cluster randomized`, `group randomized` | Steps 0 → 1 → 2d (cluster RCT) → 3e (cluster power) → 5 → 7 → **11** |
+| `audit`, `correspondence`, `audit study`, `resume audit`, `field experiment discrimination` | Steps 0 → 1 → 2e (audit design) → 3f (audit power) → 5 → 7 → **11** |
+| `stepped-wedge`, `stepped wedge`, `sequential rollout` | Steps 0 → 1 → 2f (stepped-wedge) → 3g (SW power) → 5 → 7 → **11** |
+| `SMART`, `adaptive intervention`, `DTR`, `dynamic treatment regime` | Steps 0 → 1 → 2g (SMART) → 3h (SMART power) → 5 → 7 → **11** |
+| `Bayesian`, `Bayesian design`, `prior elicitation`, `assurance` | Steps 0 → 1 → **Step 10** (Bayesian Design) → 7 → **11** |
+| `power`, `sample size`, `MDES`, `minimum detectable` | Step 2 (power only); Step 11 optional |
+| `methods section`, `write methods`, `data section` | Step 7 (write directly); Step 11 optional |
+| `pap`, `pre-analysis plan`, `preregistration`, `OSF` | Step 6 (PAP only); Step 11 optional |
+| `computational`, `NLP`, `text`, `ML`, `machine learning`, `network`, `ABM`, `simulation`, `corpus`, `annotation`, `topic model`, `classifier` | Steps 0 → 1 → **Step 9** (Computational Design) → 7 (NCS/SA template) → **11** |
 
 ---
 
@@ -1824,9 +1824,238 @@ bayes_n_normal <- function(delta, prior_sd, sigma, target_assurance = 0.80) {
 
 ---
 
+## Step 11: Internal Review Panel (MANDATORY before Save)
+
+**Purpose:** Before the design blueprint is saved to disk, run a 5-agent internal review panel on the assembled design (Steps 1–10 outputs plus the Methods section draft from Step 8). Each reviewer evaluates from a distinct methodological lens. A synthesizer aggregates consensus flags, a reviser produces an improved blueprint, and the user accepts the revision before Save Output.
+
+This step is REQUIRED for all design modes. Skip only if arguments specify `power`, `methods-section`, or `pap` alone (narrow single-step requests).
+
+### Phase A — Assemble the Review Package
+
+Compile the following materials into a single **REVIEW PACKAGE** (in-memory, not saved yet):
+
+1. **Design Overview**: claim type, design, dataset, journal target (from Step 1)
+2. **Power Analysis**: assumptions, MDES / required N, citation grounding effect size (Step 3)
+3. **Variable Dictionary**: full Y/X/M/W table with operationalizations (Step 4)
+4. **Analytic Strategy**: estimator, SE type, model sequence, AME plan (Step 5)
+5. **Robustness Plan**: list of pre-specified checks (Step 6)
+6. **PAP** (if drafted): registered hypotheses + decision rules (Step 7)
+7. **Methods Section Draft**: full prose from Step 8
+8. **Specialized Design Details**: cluster RCT / audit / stepped-wedge / SMART / Bayesian / computational (Steps 2d–2g, 9, 10)
+
+### Phase B — Spawn Five Parallel Reviewer Subagents
+
+Use the Task tool to run all 5 reviewers **in parallel** (five simultaneous tool calls). Fill in `[journal]` and `[REVIEW PACKAGE]` in each prompt.
+
+---
+
+**R1 — Methodological Rigor Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a rigorous methodologist reviewing a research design blueprint targeting [journal]. Critique whether the chosen design supports the claim strength. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Claim-design match**: Does the design support the strength of claim (causal vs. descriptive vs. predictive)? Flag any causal claim made with a design that cannot identify causal effects.
+> 2. **Identification strategy**: For causal designs, are identifying assumptions (parallel trends, exclusion restriction, SUTVA, ignorability, monotonicity, etc.) stated explicitly? Are they defensible for the empirical setting?
+> 3. **Threats to validity**: What internal and external validity threats are NOT addressed? (Selection, measurement error, attrition, spillovers, Hawthorne effects, interference, compound treatments.)
+> 4. **Design-specific pitfalls**: If DiD — is parallel trends testable? If IV — is the instrument plausibly exogenous and relevant? If RD — is the running variable manipulable? If matching — is common support documented?
+> 5. **Alternative designs**: Is there a stronger design the author should consider? (e.g., within-subject design, instrumental variable, cluster-randomized variant.)
+>
+> End with your single most important suggestion for strengthening the design.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R2 — Power & Sample Size Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a statistician specializing in study design and sample size reviewing a research design blueprint targeting [journal]. Critique the power analysis and whether N is adequate. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Effect size assumption**: Is the assumed effect size grounded in prior literature (with citation) or justified as a minimum clinically/substantively meaningful effect? Flag any uncited 'Cohen's d = 0.5' defaults.
+> 2. **Power calculation correctness**: Does the power calculation match the planned estimator? (e.g., cluster RCT power must account for ICC and DEFF; interaction tests need 4× the sample of main effects; multilevel designs need level-2 N.)
+> 3. **MDES reporting**: For secondary data with fixed N, is the Minimum Detectable Effect Size computed and compared to literature effect sizes to assess whether the study is informative?
+> 4. **Multiple testing**: If multiple hypotheses or outcomes, is correction (Bonferroni, Holm, FDR, pre-registered primary outcome) planned?
+> 5. **Assurance vs. power**: If Bayesian, is assurance computed? If frequentist, is the 80% power level justified for the stakes of the decision?
+>
+> End with a verdict: Is the study adequately powered for its primary claim?
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R3 — Measurement & Variable Specification Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a measurement and survey methodologist reviewing a research design blueprint targeting [journal]. Critique variable construction, operationalization, and data handling. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Construct validity**: Does each operationalization (coding rule, scale, index) validly measure the intended construct? Flag any proxy that conflates multiple constructs.
+> 2. **Post-treatment bias**: Are any 'controls' actually post-treatment (measured after exposure, on the causal pathway)? List each control and classify as pre-treatment / contemporaneous / post-treatment.
+> 3. **Missingness strategy**: Is missing data handled appropriately (MI, FIML, complete-case with justification)? Is MNAR considered for sensitive outcomes?
+> 4. **Measurement reliability**: For scales/indices, are α / ω / test-retest or IRR planned? For qualitative coding, is κ ≥ 0.70 target set?
+> 5. **Categorization decisions**: Are categorical collapses, top/bottom coding, and reference categories pre-specified and justified? Flag arbitrary cutpoints.
+>
+> End with your single most important suggestion for improving measurement.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R4 — Journal Fit & Reporting Standards Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a former associate editor at [journal] reviewing a research design blueprint. Evaluate whether the design and methods draft meet [journal]'s specific expectations. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Reporting standards**: Does the plan meet [journal]'s reporting requirements? (ASR/AJS: AME preferred over ORs for binary outcomes. Demography: decomposition/standardization when appropriate. Nature journals: Reporting Summary, data/code availability, CRediT.)
+> 2. **Methods section structure**: Is the Methods draft the right length and structure for [journal]? (Demography: extended sample construction. NHB/NCS: concise Methods with detailed Supplementary Information. ASR/AJS: methods after theory, hypotheses stated numerically.)
+> 3. **Preregistration expectations**: Does [journal]'s norm require/recommend preregistration for this design type? (RCTs and survey experiments: required at many outlets. Observational: increasingly encouraged.)
+> 4. **Open science requirements**: Are data availability, code sharing, and materials sharing planned? Flag any proprietary data constraints that must be disclosed upfront.
+> 5. **Format red flags**: Are there choices (missing CONSORT, no AME, no robustness appendix, no limitations statement) that would trigger methodological desk review or revision at [journal]?
+>
+> End with your single most important suggestion for improving journal fit.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R5 — Feasibility & Replicability Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a pragmatic senior researcher reviewing a research design blueprint targeting [journal]. Critique whether the design is actually executable and replicable — independent of theoretical ambition. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Data access feasibility**: Is the proposed data actually obtainable? (Restricted-access datasets with multi-month IRB / DUA processes; proprietary data; API rate limits; archival access.) Flag any data dependency not yet secured.
+> 2. **Sample recruitment realism**: If primary collection, is the target N achievable within stated resources? Is the sampling frame defined (not 'convenience sample from social media')?
+> 3. **Computational feasibility**: For computational designs, is the compute budget realistic? (LLM API costs; GPU time for fine-tuning; storage for large corpora.)
+> 4. **Replication readiness**: Are seeds, package versions (renv.lock / requirements.txt / environment.yml), and a public repository planned? Is the preregistration specific enough that a replicator could reproduce the analytic decisions?
+> 5. **Ethical and IRB risk**: Are IRB, consent, deception (for audit studies), vulnerable populations, and data-handling concerns flagged? Is the design likely to pass IRB in a reasonable timeframe?
+>
+> End with a verdict: Is this design feasible as specified, or does it need scope reduction?
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+### Phase C — Synthesize Into Design Review Scorecard
+
+After all 5 reviewers return, produce a **Design Review Scorecard**:
+
+```
+===== INTERNAL DESIGN REVIEW PANEL — [Topic] — [Journal] =====
+
+Panel: R1 (Rigor) | R2 (Power) | R3 (Measurement) | R4 (Journal Fit) | R5 (Feasibility)
+
+| Dimension | R1 | R2 | R3 | R4 | R5 | Consensus |
+|-----------|----|----|----|----|----|-----------|
+| Claim-design match | [S/A/W] | — | — | — | — | [S/A/W] |
+| Identification strategy | [S/A/W] | — | — | — | — | [S/A/W] |
+| Threats to validity | [S/A/W] | — | — | — | — | [S/A/W] |
+| Effect size grounding | — | [S/A/W] | — | — | — | [S/A/W] |
+| Power calculation | — | [S/A/W] | — | — | — | [S/A/W] |
+| MDES / multiple testing | — | [S/A/W] | — | — | — | [S/A/W] |
+| Construct validity | — | — | [S/A/W] | — | — | [S/A/W] |
+| Post-treatment bias | — | — | [S/A/W] | — | — | [S/A/W] |
+| Missingness / reliability | — | — | [S/A/W] | — | — | [S/A/W] |
+| Reporting standards | — | — | — | [S/A/W] | — | [S/A/W] |
+| Methods section fit | — | — | — | [S/A/W] | — | [S/A/W] |
+| Open science / preregistration | — | — | — | [S/A/W] | — | [S/A/W] |
+| Data feasibility | — | — | — | — | [S/A/W] | [S/A/W] |
+| Replication readiness | — | — | — | — | [S/A/W] | [S/A/W] |
+| IRB / ethics risk | — | — | — | — | [S/A/W] | [S/A/W] |
+| **Weak items count** | [N] | [N] | [N] | [N] | [N] | **[total]** |
+
+★★ Cross-agent agreement (raised by 2+ reviewers — highest priority):
+1. [Issue] — flagged by [R1, R3] — [summary]
+2. [Issue] — flagged by [R2, R4] — [summary]
+...
+
+Top suggestion from each reviewer:
+- R1: [suggestion]
+- R2: [verdict on power adequacy + top fix]
+- R3: [suggestion]
+- R4: [suggestion]
+- R5: [feasibility verdict + top fix]
+
+OVERALL VERDICT: [Ready to save / Revise before save / Fundamental redesign needed]
+```
+
+Log this phase:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-design"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t ${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| 11B | $(date +%H:%M:%S) | Review Scorecard | 5-agent panel synthesized | scorecard in-memory | ✓ |" >> "$LOG_FILE"
+```
+
+---
+
+### Phase D — Reviser Subagent (sequential, after Phase C)
+
+Spawn a **reviser subagent** to produce the improved blueprint:
+
+> "You are an expert research methodologist revising a design blueprint for [journal]. You have feedback from a 5-agent review panel covering methodological rigor, power, measurement, journal fit, and feasibility. Produce a revised blueprint that addresses all valid concerns while preserving the author's research question and scientific contribution.
+>
+> **Instructions**:
+> 1. Address every ★★ item (cross-agent agreement) first — these are highest priority
+> 2. Address every item rated **Weak** from any reviewer, unless doing so would alter the core research question — note any skipped items with a brief reason
+> 3. Do not change anything rated **Strong** by 2+ reviewers — preserve those elements
+> 4. If R1 or R5 flagged fundamental problems (e.g., design cannot identify the claim; data not obtainable), produce a **Design Change Recommendation** block at the top summarizing what must change before proceeding
+> 5. Revise the Methods section draft from Step 8 so it reflects the updated design
+> 6. Mark each substantive revision inline: `[REV: reason]` (use in the Methods draft and variable dictionary)
+> 7. After the revised blueprint, append a **Revision Notes** block:
+>    - ★★ items addressed (bulleted)
+>    - Other changes made (bulleted)
+>    - Reviewer comments not acted on and why
+>    - Any open questions requiring user decision
+>
+> **Original REVIEW PACKAGE**: [paste package]
+> **Design Review Scorecard**: [paste scorecard from Phase C]
+> **R1 feedback**: [paste R1 output]
+> **R2 feedback**: [paste R2 output]
+> **R3 feedback**: [paste R3 output]
+> **R4 feedback**: [paste R4 output]
+> **R5 feedback**: [paste R5 output]"
+
+---
+
+### Phase E — Accept the Revision
+
+After the reviser returns:
+
+1. Present the **Design Review Scorecard**, **Revision Notes**, and a summary of the revised blueprint to the user
+2. Ask: **"Accept revised design blueprint? (`yes` / `accept with edits` / `keep original` / `redesign`)"**
+   - `yes`: Use the revised blueprint as the final version for Save Output
+   - `accept with edits`: Apply user's specific edits, then proceed to Save Output
+   - `keep original`: Use the pre-review blueprint and append the Review Scorecard + Revision Notes as an appendix in the saved file
+   - `redesign`: Return to Step 1 with the reviser's Design Change Recommendation as input — do NOT save
+3. Log the user decision
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-design"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t ${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| 11E | $(date +%H:%M:%S) | Accept Revision | [user decision: yes/edits/keep/redesign] | — | ✓ |" >> "$LOG_FILE"
+```
+
+**HARD STOP**: Do NOT proceed to Save Output until the user has accepted a version (yes / accept with edits / keep original). If `redesign`, loop back to Step 1.
+
+---
+
 ## Save Output
 
-After completing all relevant steps, save a design blueprint using the Write tool.
+After completing all relevant steps — including the user-accepted output from **Step 11 (Internal Review Panel)** — save the design blueprint using the Write tool. Use the **accepted revised blueprint** from Step 11 Phase E as the source of truth (or the pre-review version if the user chose `keep original`, with the Review Scorecard + Revision Notes appended as an appendix).
 
 ### Version Collision Avoidance (MANDATORY)
 
@@ -1896,6 +2125,15 @@ bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
 - IRR: [κ = X / α = X on N = Y items]
 - Reproducibility: [seed, renv.lock / requirements.txt, repo URL]
 
+## Internal Review Panel Summary (Step 11)
+- Panel outcome: [Ready to save / Revised / Kept original / Redesign triggered]
+- Weak items flagged (total across 5 reviewers): [N]
+- Cross-agent ★★ issues addressed: [N]
+- User decision: [yes / accept with edits / keep original / redesign]
+- Review Scorecard and Revision Notes: [embedded below OR appended as appendix if kept original]
+
+[If user chose `keep original`, paste the full Design Review Scorecard and Revision Notes here as an appendix.]
+
 ## File Inventory
 output/[slug]/design/          ← design blueprint (this file)
 output/[slug]/design/table-model-spec.html  ← model specification table
@@ -1963,6 +2201,11 @@ echo "Process log saved to $LOG_FILE"
 - [ ] If stepped-wedge: design matrix documented; Hussey-Hughes model specified; period effects included; minimum K ≥ 6 clusters, S ≥ 3 steps
 - [ ] If SMART: embedded DTRs enumerated; response criterion pre-specified; primary DTR comparison identified; Q-learning or IPW estimator chosen
 - [ ] If Bayesian: all priors listed with justification; convergence diagnostics passed (R-hat < 1.01, ESS > 400); posterior predictive checks shown; prior sensitivity analysis performed; design analysis / assurance computed for sample size
+- [ ] **Internal Review Panel (Step 11)**: 5 reviewer subagents (rigor / power / measurement / journal fit / feasibility) spawned in parallel
+- [ ] **Review Scorecard** produced with per-dimension consensus ratings and ★★ cross-agent agreement flags
+- [ ] **Reviser subagent** produced revised blueprint addressing all ★★ items and Weak ratings (or noted reasons for skipping)
+- [ ] **User decision recorded**: yes / accept with edits / keep original / redesign (logged in process log at Step 11E)
+- [ ] Saved blueprint reflects the user-accepted version; if `keep original`, Review Scorecard + Revision Notes appended as appendix
 
 See [references/quant-methods.md](references/quant-methods.md) for detailed quantitative methods, causal identification code, and reporting standards.
 See [references/qual-methods.md](references/qual-methods.md) for qualitative and mixed-methods approaches, credibility criteria, and reporting templates.

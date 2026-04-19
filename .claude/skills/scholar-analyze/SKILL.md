@@ -1102,6 +1102,229 @@ See [coding-decisions-log.md](coding-decisions-log.md) for the full decision rat
 
 ---
 
+## Internal Review Panel (MANDATORY before Save)
+
+**Purpose:** Before the analysis log and publication-ready results are saved to disk, run a 5-agent review panel on the assembled analysis outputs. Each reviewer evaluates from a distinct analytic lens. A synthesizer aggregates consensus flags, a reviser produces improved outputs, and the user accepts the revision before Save Output.
+
+**Relation to other skills:** This panel complements — does not replace — downstream `/scholar-code-review` (script auditing) and `/scholar-verify` (analysis-to-manuscript consistency). The panel catches issues early, at the analysis-finalization step; `/scholar-code-review` and `/scholar-verify` provide deeper, specialized audits later.
+
+This step is REQUIRED. Skip only if the user explicitly passed `--skip-review` in `$ARGUMENTS`.
+
+### Phase A — Assemble the Review Package
+
+Compile the following in-memory (not yet saved):
+
+1. **Analytic decisions**: estimator choice, SE type, variable coding, sample restrictions, missing-data strategy
+2. **Raw model output paths**: `output/[slug]/tables/*.html`, `output/[slug]/models/*.rds`, `output/[slug]/figures/*.pdf`
+3. **results-registry.csv** and **adjudication-log.csv** (contents + schema)
+4. **Table/figure inventory**: every Table N and Figure N with filename and hypothesis mapping
+5. **Scripts inventory**: `output/[slug]/scripts/*.R` with headers
+6. **Results prose draft** (Component C output)
+7. **A9 / B9 verification subagent outputs** (pass/fail summary)
+
+### Phase B — Spawn Five Parallel Reviewer Subagents
+
+Use the Task tool to run all 5 reviewers **in parallel** (five simultaneous tool calls). Fill in `[journal]`, `[design type]`, and `[REVIEW PACKAGE]` in each prompt.
+
+---
+
+**R1 — Estimator & Statistical Correctness Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a statistician auditing an analysis for a paper targeting [journal] using a [design type] design. Critique the estimator and statistical choices. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Estimator-outcome match**: Is the estimator appropriate for the outcome type (OLS for continuous; logit/probit for binary; ordered logit/multinomial for categorical; Poisson/NB for counts; Cox/AFT for survival)? Flag mismatches.
+> 2. **Standard errors**: Does the SE type match the data structure (clustered SEs for multi-level / panel; HAC for time series; bootstrap for small N)? Is the clustering level correct and pre-specified?
+> 3. **AME reporting**: For every logit/probit/ordered outcome, is AME reported (not just ORs/log-odds) and sourced from `marginaleffects::avg_slopes()` — not hand-computed?
+> 4. **Variable coding**: Are categorical variables coded with sensible reference categories? Are continuous variables scaled/centered when interactions are involved? Are post-treatment controls excluded?
+> 5. **Effect size + significance**: Are effect sizes reported alongside p-values? Are confidence intervals provided? Is multiple-testing correction applied if ≥ 5 hypotheses?
+>
+> End with your single most important fix.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R2 — Table & Figure Quality Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a journal production editor auditing tables and figures for a paper targeting [journal]. Critique artifact quality and publication-readiness. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Table completeness**: Does every table have: column headers, N, R² / pseudo-R², SE type stated in notes, reference categories noted, significance stars defined, variable labels (not raw names)?
+> 2. **Figure quality**: Are figures 300 DPI, colorblind-safe (no red-green), legend/axis labels in plain language, error bars with CI level stated, caption self-contained?
+> 3. **Export formats**: Are tables exported in all required formats (HTML + TeX + docx + CSV for regression; CSV for `ame-[model].csv`, `coefficients-[model].csv`, `results-registry.csv`)?
+> 4. **Journal norms**: Does artifact format match [journal]? (ASR/AJS: star notation, 2 decimals. Demography: standardized betas possible. Nature: self-contained figure captions, extended data figures allowed.)
+> 5. **Table 1 descriptives**: Is Table 1 stratified by main exposure/treatment when appropriate? Are N, means/%, SDs reported? Is missingness disclosed?
+>
+> End with the single most impactful fix.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R3 — Robustness Coverage Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a methodologist reviewing the robustness plan for a paper targeting [journal] with a [design type] design. Critique whether robustness checks adequately address the validity threats. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Threat-to-check mapping**: For each validity threat (confounding, selection, measurement error, model dependence, spillovers), is there a corresponding robustness check? Name any unaddressed threat.
+> 2. **Omitted variable sensitivity**: Is Oster's delta or an E-value computed for the primary causal/associational claim?
+> 3. **Alternative specifications**: Are at least 3 alternative model specifications run (different controls, subsample, functional form)? Are results qualitatively consistent?
+> 4. **Sample restrictions**: Are sample definitions ablated (listwise vs MI; restricted vs full)? Does the main finding survive?
+> 5. **Placebo / negative controls**: For causal designs, is a placebo test or negative control reported where feasible?
+>
+> End with the single most important missing robustness check.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R4 — Results-Prose Alignment Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a careful editor auditing alignment between results artifacts and the Results prose for a paper targeting [journal]. Critique one-to-one alignment between hypotheses, artifacts, and prose. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Hypothesis coverage**: Is every hypothesis in `results-registry.csv` addressed in the Results prose? Flag any orphaned hypothesis.
+> 2. **Adjudication fidelity**: Does the prose use the exact `prose_verb` from `adjudication-log.csv` for each hypothesis? Flag any synonym substitution (e.g., prose says 'supports' when log says 'partially supports').
+> 3. **Numeric fidelity**: Pick 5 numeric claims at random from the prose. For each, does the value match the source table/CSV (check rounding, sign, units)?
+> 4. **Causal language calibration**: If design is observational, is causal language ('causes', 'leads to', 'reduces') absent? If quasi-experimental, is it bounded by identifying assumptions?
+> 5. **Null findings honesty**: Are null or negative findings reported transparently — not buried, omitted, or spun as 'marginal'?
+>
+> End with a list of specific lines/claims that need fixing.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+**R5 — Reproducibility Reviewer**
+
+Spawn a `general-purpose` agent:
+
+> "You are a replication editor auditing reproducibility of an analysis targeting [journal]. Critique whether a third party could re-execute this analysis. Evaluate each item as **Strong / Adequate / Weak** and give 3–5 specific, actionable comments:
+>
+> 1. **Seeds**: Is `set.seed()` called in every script that uses randomness (bootstrap, MI, cross-validation, jitter)? Are seeds documented in the log?
+> 2. **Environment**: Is `renv.lock` / `requirements.txt` / `environment.yml` present? Are package versions pinned? Is R/Python version documented?
+> 3. **Script headers**: Does every script in `output/[slug]/scripts/` have purpose, input, output, date, seed, author?
+> 4. **Paper-element correspondence**: Is there a table mapping every Table N / Figure N to the exact script that produces it? Are file paths relative (not absolute)?
+> 5. **Data availability statement**: Is the data source documented (public URL, DOI, restricted-access DUA)? Is the access pathway clear for a replicator?
+>
+> End with the single most blocking reproducibility gap.
+>
+> REVIEW PACKAGE: [paste package]"
+
+---
+
+### Phase C — Synthesize Into Analysis Review Scorecard
+
+After all 5 reviewers return, produce an **Analysis Review Scorecard**:
+
+```
+===== INTERNAL ANALYSIS REVIEW PANEL — [Topic] — [Journal] =====
+
+Panel: R1 (Estimator) | R2 (Tables/Figures) | R3 (Robustness) | R4 (Prose Alignment) | R5 (Reproducibility)
+
+| Dimension | R1 | R2 | R3 | R4 | R5 | Consensus |
+|-----------|----|----|----|----|----|-----------|
+| Estimator-outcome match | [S/A/W] | — | — | — | — | [S/A/W] |
+| Standard errors | [S/A/W] | — | — | — | — | [S/A/W] |
+| AME reporting | [S/A/W] | — | — | — | — | [S/A/W] |
+| Table completeness | — | [S/A/W] | — | — | — | [S/A/W] |
+| Figure quality | — | [S/A/W] | — | — | — | [S/A/W] |
+| Export formats | — | [S/A/W] | — | — | — | [S/A/W] |
+| Threat-to-check mapping | — | — | [S/A/W] | — | — | [S/A/W] |
+| Oster delta / E-value | — | — | [S/A/W] | — | — | [S/A/W] |
+| Alternative specs | — | — | [S/A/W] | — | — | [S/A/W] |
+| Hypothesis coverage | — | — | — | [S/A/W] | — | [S/A/W] |
+| Adjudication fidelity | — | — | — | [S/A/W] | — | [S/A/W] |
+| Numeric fidelity | — | — | — | [S/A/W] | — | [S/A/W] |
+| Causal language calibration | — | — | — | [S/A/W] | — | [S/A/W] |
+| Seeds + environment | — | — | — | — | [S/A/W] | [S/A/W] |
+| Script headers + correspondence | — | — | — | — | [S/A/W] | [S/A/W] |
+| **Weak items count** | [N] | [N] | [N] | [N] | [N] | **[total]** |
+
+★★ Cross-agent agreement (flagged by 2+ reviewers — highest priority):
+1. [Issue] — flagged by [R#, R#] — [summary]
+...
+
+Top fix from each reviewer:
+- R1: [fix]
+- R2: [fix]
+- R3: [fix]
+- R4: [fix]
+- R5: [fix]
+
+OVERALL VERDICT: [Ready to save / Revise before save / Rerun analysis]
+```
+
+Log this phase:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-analyze"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t ${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| IRP-C | $(date +%H:%M:%S) | Review Scorecard | 5-agent panel synthesized | scorecard in-memory | ✓ |" >> "$LOG_FILE"
+```
+
+### Phase D — Reviser Subagent (sequential, after Phase C)
+
+Spawn a **reviser subagent**:
+
+> "You are an expert social science analyst revising an analysis package for [journal]. You have feedback from a 5-agent review panel covering estimator correctness, table/figure quality, robustness coverage, results-prose alignment, and reproducibility. Produce a revised package that addresses all valid concerns.
+>
+> **Instructions**:
+> 1. Address every ★★ item (cross-agent agreement) first
+> 2. Address every item rated **Weak**; note any skipped items with reason
+> 3. Do not change anything rated **Strong** by 2+ reviewers
+> 4. If R1 flagged a wrong estimator or R5 flagged unreproducible code, produce a **Rerun Required** block at the top — do NOT proceed to Save Output; the user must rerun the affected scripts
+> 5. Apply edits to: the Results prose draft, table/figure notes, adjudication-log adjustments, and script header fixes. Mark each substantive revision `[REV: reason]`
+> 6. After the revised package, append a **Revision Notes** block listing ★★ items addressed, other changes, and reviewer comments not acted on with reason
+>
+> **Original REVIEW PACKAGE**: [paste]
+> **Analysis Review Scorecard**: [paste]
+> **R1 feedback**: [paste] | **R2**: [paste] | **R3**: [paste] | **R4**: [paste] | **R5**: [paste]"
+
+### Phase E — Accept the Revision
+
+1. Present Scorecard + Revision Notes + summary of revised package to the user
+2. Ask: **"Accept revised analysis package? (`yes` / `accept with edits` / `keep original` / `rerun`)"**
+   - `yes`: Use revised package for Save Output
+   - `accept with edits`: Apply user's specific edits, then proceed
+   - `keep original`: Append Scorecard + Revision Notes as an appendix to the saved log
+   - `rerun`: Do NOT save; return to the failing component (A/B/C/D) for re-execution
+3. Log the decision:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SKILL_NAME="scholar-analyze"
+LOG_DATE=$(date +%Y-%m-%d)
+LOG_FILE="${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}.md"
+if [ ! -f "$LOG_FILE" ]; then
+  LOG_FILE=$(ls -t ${OUTPUT_ROOT}/logs/process-log-${SKILL_NAME}-${LOG_DATE}*.md 2>/dev/null | head -1)
+fi
+echo "| IRP-E | $(date +%H:%M:%S) | Accept Revision | [user decision] | — | ✓ |" >> "$LOG_FILE"
+```
+
+**HARD STOP**: Do NOT proceed to Save Output until the user accepts. If `rerun`, loop back to the flagged component.
+
+### Pre-Save Review Checklist
+
+Confirm all of the following before moving to Save Output:
+
+- [ ] 5 reviewer subagents (estimator / tables-figures / robustness / prose-alignment / reproducibility) spawned in parallel via the Task tool
+- [ ] Review Scorecard produced with per-dimension consensus ratings + ★★ cross-agent flags
+- [ ] Reviser subagent produced an improved analysis package addressing all ★★ and Weak items (or noted reasons for skipping)
+- [ ] User decision recorded (yes / accept with edits / keep original / rerun) and logged at Phase E
+
+---
+
 ## Save Output
 
 Use the Write tool to save **two separate files** after completing all components.
