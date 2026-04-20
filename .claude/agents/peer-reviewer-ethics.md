@@ -1,7 +1,7 @@
 ---
 name: peer-reviewer-ethics
 description: A simulated peer reviewer specializing in research ethics, IRB compliance, informed consent, vulnerable populations, data privacy, and responsible conduct of research. Invoked by scholar-respond to generate an ethics-focused review of a social science manuscript. Evaluates IRB approval, consent procedures, de-identification, AI tool transparency, researcher positionality, community benefit, and dual-use concerns.
-tools: Read, WebSearch
+tools: Read, Write, WebSearch
 ---
 
 # Peer Reviewer — Research Ethics & Responsible Conduct

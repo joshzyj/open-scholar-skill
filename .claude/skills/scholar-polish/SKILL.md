@@ -301,6 +301,60 @@ These are the 18 most common flat writing patterns in academic prose that lack a
 - **Preserve appropriate hedging**: If the original already hedges ("X may shape Y", "X appears to drive Y"), downgrade severity to LOW and consider leaving as-is. The hedge does real work here.
 - **Do not over-flatten**: "predicts" is acceptable shorthand in regression contexts even for non-causal designs. The goal is to remove *unhedged causal claims*, not to eliminate all directional language.
 
+### T19 — Enumerated Methods-Section Tell
+**Pattern**: The §4 Analytic Strategy (or equivalent Methods section) reproduces the `spec-registry.csv` or Phase 3.5 Design Pre-Mortem as flat bulleted lists in manuscript prose. Six typical surface signatures:
+
+- **P1**: a bulleted list of `- M1 (label): formula`, `- M2 (label): formula`, ... items — the model ladder rendered as an enumeration.
+- **P2**: a bulleted list of `- R1: description`, `- R2: description`, ... items — the robustness battery rendered as an enumeration.
+- **P3**: inline equations or `α + β·X` syntax inside a bullet line.
+- **P4**: a subsection header matching (case-insensitive) `^##+\s+.*(language\s+discipline|inferential\s+approach|associational\s+framing|ethical\s+commitment|analytic\s+protocol|language\s+principles)`.
+- **P5**: three or more `^##+` subsection headers within a single §4-equivalent section (typical AI pattern: §4.1 / §4.2 / §4.3).
+- **P6**: a standalone paragraph or subsection whose entire content matches the shape `Throughout (the|this) paper we use (associational|causal) .* language`.
+
+**Why generic**: This pattern is the dominant prose-quality tell observed in scholar-full-paper output, ahead of T1–T18. It happens because (a) `scholar-verify` Stage 2 grep-matches spec IDs and flat bullets are grep-friendly, (b) the spec-registry and pre-mortem use enumeration as machinery, and scholar-write mirrors that structure, (c) LLMs default to enumeration. None of these are acceptable reasons to emit enumerated methods in a JMF / Demography / ASR / AJS / Social Forces submission. Seasoned reviewers read this pattern as machine output and lose confidence in the paper.
+
+**Non-causal-design aside**: T19 is domain-independent — a correctly identified causal paper with a DiD design should still not render its specifications as a bulleted `- M1, - M2, - M3` list.
+
+**Fix**: Translate each registry row into a clause within running prose. Model IDs (`M3`) and robustness IDs (`R5`) survive as parenthetical tags so scholar-verify Stage 2 can still trace numbers. Collapse the three-way §4.1 / §4.2 / §4.3 split into ≤2 subsections or zero subsections with paragraph-break structure. Fold "language discipline" compliance signals into one or two sentences at the opening or closing of §4, never as a named subsection. See `scholar-write/references/methods-prose-examples.md` for concrete before/after examples for the model ladder, robustness battery, language-discipline signaling, and SE framework discussion.
+
+**Scoring**: WARN per surface signature (P1–P6), each counted once per section. Report fires block advancement to Phase 7b only if a P1 + P4 combination or three or more distinct signatures coexist in the same section — isolated signatures may reflect conscious author choice (e.g., a Demography-style enumerated Methods appendix).
+
+**Automated scan (add alongside T13 lexical scan)**:
+
+```bash
+# T19: Enumerated Methods-Section Tell
+echo "=== T19: Enumerated Methods-Section Tell ==="
+
+# P1: bulleted model ladder (lines starting with bullet then M<digit>, tolerating markdown bold/italic)
+echo "--- P1: bulleted M-ladder items ---"
+grep -nE '^\s*[-*•]\s+[*_]{0,2}M[0-9]+[a-z]?[*_]{0,2}\s*[:(]' "$MANUSCRIPT" || echo "(none)"
+
+# P2: bulleted robustness items (tolerating markdown bold/italic)
+echo "--- P2: bulleted R-battery items ---"
+grep -nE '^\s*[-*•]\s+[*_]{0,2}R[0-9]+[a-z]?[*_]{0,2}\s*[:(]' "$MANUSCRIPT" || echo "(none)"
+
+# P3: inline equations in bullets (greek letters or · inside a bullet)
+echo "--- P3: inline equations in bullets ---"
+grep -nE '^\s*[-*•].*(α|β|γ|δ|ε|·|=\s*α|=\s*β)' "$MANUSCRIPT" || echo "(none)"
+
+# P4: compliance-signaling subsection headers (case-insensitive — catches "Language discipline" and variants)
+echo "--- P4: compliance-signaling subsection headers ---"
+grep -niE '^##+\s+.*(language\s+discipline|inferential\s+approach|associational\s+framing|ethical\s+commitment|analytic\s+protocol|language\s+principles)' "$MANUSCRIPT" || echo "(none)"
+
+# P5: 3+ subsections under a Methods-like section (scoped to Methods/Analytic/Strategy/Specification headers only,
+# because §2 Background / §5 Results etc. legitimately use 3+ subsections in ASR/AJS/Demography/JMF)
+echo "--- P5: over-subsectioned Methods section ---"
+awk '
+  /^## [0-9].*(Method|Methods|Analy[st]ic|Identification|Strategy|Specification)/ {in_sec=1; sec=$0; n=0; line=NR; next}
+  /^## [0-9]/ {in_sec=0}
+  in_sec && /^### / {n++; if (n==3) print "line " line ": " sec " has 3+ subsections through line " NR}
+' "$MANUSCRIPT"
+
+# P6: standalone language-discipline paragraph
+echo "--- P6: language-discipline boilerplate paragraph ---"
+grep -nE 'Throughout (the|this) paper we use (associational|causal).*language' "$MANUSCRIPT" || echo "(none)"
+```
+
 ---
 
 ## Automated Lexical Scan (for T13)

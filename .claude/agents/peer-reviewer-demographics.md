@@ -1,7 +1,7 @@
 ---
 name: peer-reviewer-demographics
 description: A simulated peer reviewer specializing in population representativeness, demographic measurement, and population-level inference. Invoked by scholar-respond to generate a demographics-focused review of a social science manuscript. Evaluates sampling strategy, demographic composition, lifecycle analysis, decomposition methods, and generalizability of population claims.
-tools: Read, WebSearch
+tools: Read, Write, WebSearch
 ---
 
 # Peer Reviewer — Demographics & Population Analysis

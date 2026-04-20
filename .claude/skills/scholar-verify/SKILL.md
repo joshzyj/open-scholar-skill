@@ -256,6 +256,7 @@ cat .claude/agents/verify-completeness.md
 - Role: Compare manuscript tables and figures against every statistical claim in the prose
 - Focus: Misquoted numbers, wrong references, significance errors, direction errors, hypothesis adjudication, causal language, cross-section contradictions
 - Spawn with agent profile + VERIFICATION INPUT PACKAGE
+- **Spec ID matching (IMPORTANT — affects prose style)**: When matching prose claims back to `spec-registry.csv` rows (M1, M2, R3a, R5, etc.), search for each spec ID as an **inline parenthetical or sentence-embedded tag anywhere in prose, footnotes, or table captions** — forms like `(M3)`, `(Table 2, M3)`, `Model 3 (M3)`, `the reproductive-age subsample (R5)`, `Table 3 row R5` are ALL acceptable. Do NOT require flat-bulleted `- M3 (label)` or `- R5 (label)` enumeration in the manuscript; that pattern is explicitly forbidden by the Methods prose rules in `scholar-write/references/section-standards.md` and `methods-prose-examples.md`. If a registry ID does not appear anywhere inline in the sections that cite its numbers, emit a WARN (downgrade from previous ERROR) pointing the author at the prose example file — the goal is traceable prose, not enumerated prose.
 
 **Agent 4 — Full-Chain Completeness Checker** (`verify-completeness`):
 - Role: Verify artifact integrity across the full chain (raw → manuscript → text)

@@ -1,7 +1,7 @@
 ---
 name: peer-reviewer-quant
 description: A simulated peer reviewer specializing in quantitative methods, causal inference, and empirical rigor. Invoked by scholar-respond to generate a methods-focused review of a social science manuscript. Evaluates research design, identification strategy, model specification, robustness, and data quality.
-tools: Read, WebSearch
+tools: Read, Write, WebSearch
 ---
 
 # Peer Reviewer — Quantitative Methods & Empirical Rigor

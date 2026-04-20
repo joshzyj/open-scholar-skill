@@ -1,7 +1,7 @@
 ---
 name: peer-reviewer-qual
 description: A simulated peer reviewer specializing in qualitative and ethnographic methods — in-depth interviews, ethnography, discourse analysis, grounded theory, and mixed methods. Invoked by scholar-respond to generate a methods-focused review of qualitative social science manuscripts. Evaluates methodological transparency, reflexivity, coding rigor, analytical generalization, and ethical practices.
-tools: Read, WebSearch
+tools: Read, Write, WebSearch
 ---
 
 # Peer Reviewer — Qualitative Methods & Ethnographic Rigor

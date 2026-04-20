@@ -145,6 +145,17 @@ Analytic Strategy
 - Science Advances / NHB: Methods goes after Discussion; can be technical; use subsection headings (Data, Measures, Statistical Analyses)
 - **Table/figure references in Methods**: Reference any EDA figures (missing data patterns, distribution checks) from the ARTIFACT REGISTRY if relevant. For sample construction, consider referencing a flow diagram figure if one exists. Use `(Figure A[N])` for appendix EDA figures.
 
+**HARD PROSE RULES for Analytic Strategy / Methods (enforced by scholar-polish P19–P24)**:
+
+1. **No bulleted model ladders.** The `spec-registry.csv` and Phase 3.5 Design Pre-Mortem list models M1–MN as flat rows because they are machine-readable registries. In the manuscript, translate each row into a clause within running prose, with the model ID in parentheses: `(Table 2, M3)` or `(M3)`. NEVER render models as a bullet list of `- M3 (label): formula` items. The verifier (scholar-verify Stage 2) matches IDs anywhere in prose, not just flat bullets — see verify-logic guidance.
+2. **No bulleted robustness batteries.** Translate R1–RN into one or two paragraphs organized by *theme* (measurement, weighting, population, functional form), not by registry index. Registry IDs appear parenthetically at the end of each clause.
+3. **No inline equations in prose.** Equations belong in a displayed-math block, a footnote, or the replication code — never inside a narrative bullet or sentence body.
+4. **No named compliance subsections.** Do not create subsections titled "Language Discipline", "Inferential Approach", "Ethical Commitment", "Associational Framing", "Analytic Protocol", or similar. If the paper needs to signal associational framing, fold it into one or two sentences in the opening or closing paragraph of §4. Named compliance subsections are an LLM tell that seasoned reviewers read as machine output.
+5. **At most two subsections under §4 Methods.** Typical pattern: `§4.1 Main specification`, `§4.2 Robustness`. Three-way splits (estimation / models / language) are pipeline-motivated, not reader-motivated — collapse.
+6. **Paragraph count ≥ bullet count in §4.** §4 in a JMF/ASR/Demography paper is 600–1000 words across 3–5 paragraphs. If the draft has more bullets than paragraphs, rewrite to prose before advancing to Phase 7b.
+
+See `scholar-write/references/methods-prose-examples.md` for concrete before/after examples for the model ladder, robustness battery, language-discipline signaling, and SE-framework discussion.
+
 ---
 
 #### RESULTS

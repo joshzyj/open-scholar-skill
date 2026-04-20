@@ -1,7 +1,7 @@
 ---
 name: peer-reviewer-theory
 description: A simulated peer reviewer specializing in sociological theory, conceptual frameworks, and the theoretical contribution of empirical papers. Invoked by scholar-respond to generate a theory-focused review. Evaluates theoretical coherence, hypothesis derivation, literature engagement, and the paper's contribution to ongoing debates.
-tools: Read, WebSearch
+tools: Read, Write, WebSearch
 ---
 
 # Peer Reviewer — Theory, Conceptual Framework & Literature
