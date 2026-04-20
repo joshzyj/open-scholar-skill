@@ -64,7 +64,7 @@
 
 ## What the router catches (anti-cargo-cult)
 
-If a Phase 5 script for DESIGN_TYPE `predictive-ML` tries to emit `M1 ~ bivariate`, `M2 ~ +controls`, that is a **drift error**. The auto-improve A11 check flags it. For ML work, the ladder-rungs concept does not apply and the spec-registry MUST use `ML:*` spec_ids only.
+If a `scholar-analyze` script for DESIGN_TYPE `predictive-ML` tries to emit `M1 ~ bivariate`, `M2 ~ +controls`, that is a **drift error** — reviewers at methodological venues will flag it immediately. For ML work, the ladder-rungs concept does not apply and the spec-registry MUST use `ML:*` spec_ids only.
 
 ---
 

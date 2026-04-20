@@ -30,7 +30,7 @@
 ## How callers use this table
 
 ```bash
-# Phase 5 consumes this file like so:
+# scholar-analyze consumes this file like so (same logic for standalone or orchestrator-driven runs):
 DESIGN_TYPE=$(grep "^Design Type:" "${PROJ}/logs/project-state.md" | tail -1 | sed 's/^Design Type:[[:space:]]*//')
 [ -z "$DESIGN_TYPE" ] && { DESIGN_TYPE=observational-descriptive; echo "WARN: Design Type not set, defaulting to observational-descriptive"; }
 
@@ -53,14 +53,14 @@ echo "=== Loading ladder: $LADDER_FILE (sub-type: ${DT_SUB:-none}) ==="
 cat "$LADDER_FILE"
 ```
 
-Every Phase 5 analysis script (`${PROJ}/scripts/04-main-models.R`, etc.) MUST emit a header comment naming the ladder file it was built from:
+Every analysis script produced by `scholar-analyze` (`${PROJ}/scripts/04-main-models.R`, etc.) MUST emit a header comment naming the ladder file it was built from:
 
 ```r
 # Ladder: ladder-decomposition.md (sub-type: Oaxaca)
 # Design Type: decomposition:Oaxaca (from ${PROJ}/logs/project-state.md)
 ```
 
-The drift-gate A11 in `scholar-auto-improve/references/diagnostic-patterns.md` checks this header against the declared `Design Type`.
+This header enables downstream consistency checks (e.g., `/scholar-code-review`, `/scholar-verify`) to validate that the script's specification set matches the declared `Design Type`.
 
 ---
 
