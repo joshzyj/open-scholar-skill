@@ -410,6 +410,8 @@ This ensures:
 
 > **Empirical calibration**: These ranges are calibrated from 53+ published papers. For per-paper word counts, see `assets/article-knowledge-base.md` → "Empirical Section Word Counts by Journal."
 
+> **Reference list Markdown format**: In the `## References` section, emit each reference as a **plain paragraph separated by a blank line** — NOT as a Markdown list. Do not prefix entries with `- `, `* `, `+ `, or digits (except for Nature/Science/NCS numbered styles). When pandoc converts a `- ` Markdown list to `.docx`, Word renders every entry with a `•` bullet glyph — wrong for every sociology/demography journal. The author-date convention is paragraph-separated entries. Full format rules (ASA/APA/Chicago/Nature) are in `scholar-citation/SKILL.md` under "Reference list Markdown format (ALL author-date styles)." When `--citeproc` with a `.bib` file is available, pandoc emits this format automatically.
+
 ### Author Contributions (CRediT)
 
 **Required by**: Science Advances, NHB, NCS. **Optional but recommended**: ASR, AJS, Demography.

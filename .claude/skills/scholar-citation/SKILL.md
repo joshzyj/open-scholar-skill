@@ -140,6 +140,31 @@ CROSSREF_EMAIL="${SCHOLAR_CROSSREF_EMAIL:-user@example.com}"
 
 ## Citation Style Reference
 
+### Reference list Markdown format (ALL author-date styles)
+
+When emitting the `## References` section in a Markdown draft, each reference is a **plain paragraph**, not a list item. Do NOT prefix entries with `-`, `*`, or `+` (these render as bulleted lists with `•` glyphs in Word/PDF — wrong for every sociology/demography journal). Do NOT number entries for author-date styles (ASA/APA/Chicago/APSA). Only Nature/Science/NCS styles use numbered entries (`1. `, `2. `), and those must be explicit enumerated-list syntax not auto-numbered.
+
+**Correct (ASA example):**
+```markdown
+## References
+
+Beaujouan, Éva, and Caroline Berghammer. 2019. "The Gap between Lifetime Fertility Intentions and Completed Fertility in Europe and the United States: A Cohort Approach." Population Research and Policy Review 38:507–35.
+
+Becker, Gary S. 1960. "An Economic Analysis of Fertility." Pp. 209–31 in Demographic and Economic Change in Developed Countries. Princeton, NJ: Princeton University Press.
+```
+
+**Wrong (renders as bulleted list in .docx/.pdf):**
+```markdown
+## References
+
+- Beaujouan, É., & Berghammer, C. (2019). The gap between...
+- Becker, G. S. (1960). An economic analysis of fertility...
+```
+
+One reference per paragraph, blank line between entries. Pandoc's `--citeproc` with a `.bib` file produces this format automatically; the rule here governs hand-authored cases.
+
+---
+
 ### ASA Author-Date (default for sociology/demography)
 
 **In-text:**
