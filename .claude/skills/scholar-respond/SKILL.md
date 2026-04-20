@@ -1155,6 +1155,34 @@ Contains the full revision plan with word budgets, diffs, and consistency check 
 
 Confirm all saved file paths to the user.
 
+### Convert Response Letter to Submission Formats (MANDATORY for Modes 2, 4, 5)
+
+Journals require the response letter as `.docx` or `.pdf`, not `.md`. After writing File 2 (the submission-ready letter) via the Write tool, convert it with pandoc. Shell variables do NOT persist across Bash tool calls, so derive `BASE` from the **exact** path used in the preceding Write call — do not attempt to re-derive from `SLUG` / `OUTPUT_ROOT` (those are not set in this Bash block).
+
+```bash
+set -euo pipefail
+# CRITICAL: Replace [saved-md-path] with the EXACT path you used in the Write tool call
+# for File 2 (the submission-ready letter). This is the SAVE_PATH version-check.sh printed.
+MD_FILE="[saved-md-path]"
+if [ ! -f "$MD_FILE" ]; then
+  echo "FAIL: response-letter .md not found at $MD_FILE — re-check the File 2 save path." >&2
+  exit 1
+fi
+BASE="${MD_FILE%.md}"
+echo "Converting: ${BASE}.md -> .docx, .pdf"
+pandoc "${BASE}.md" -o "${BASE}.docx" \
+  --reference-doc="$HOME/.pandoc/reference.docx" 2>/dev/null \
+  || pandoc "${BASE}.md" -o "${BASE}.docx"
+pandoc "${BASE}.md" -o "${BASE}.pdf" --pdf-engine=xelatex 2>/dev/null \
+  || pandoc "${BASE}.md" -o "${BASE}.pdf"
+ls -la "${BASE}".docx "${BASE}".pdf 2>/dev/null
+```
+
+Notes:
+- Mode 3 (revised manuscript) is exported via the scholar-write pandoc block — scholar-respond does NOT re-convert the manuscript.
+- If `xelatex` is missing, pandoc falls back to the default PDF engine; the letter is short so this is acceptable.
+- Verify both files exist and spot-check the `.docx` opens cleanly before submission.
+
 ### Knowledge Graph Write-Back (post-save)
 
 ```bash

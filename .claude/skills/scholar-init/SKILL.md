@@ -371,14 +371,38 @@ Then print a list of NEEDS_REVIEW files (if any) and recommend `/scholar-init re
 
 ---
 
-## Output locations
+## Save Output
+
+scholar-init does NOT produce a manuscript document; it produces an initialized project directory plus two audit artifacts. Confirm the following files to the user after every run, and do NOT re-run pandoc conversion (this is not a writing skill).
+
+**Written by this skill on every run (Modes 1, 2, 3):**
 
 ```
 <cwd>/
-├── .claude/safety-status.json    ← read + written by this skill
-├── logs/init-report.md           ← appended by this skill
-└── (the rest created by scripts/init-project.sh in MODE 1)
+├── .claude/safety-status.json    ← JSON sidecar — read + written by this skill (atomic via jq + rename)
+└── logs/init-report.md           ← markdown audit trail — appended, never overwritten
 ```
+
+**Written only in MODE 1 (by `scripts/init-project.sh`):**
+
+```
+<cwd>/
+├── data/raw/                     ← user data copied here after scan
+├── data/processed/               ← empty, for downstream pipelines
+├── scripts/                      ← empty skeleton
+├── output/                       ← pipeline outputs land here
+├── drafts/                       ← manuscript drafts land here
+└── .env                          ← project-level config (SLUG, OUTPUT_ROOT, …)
+```
+
+**At end of run, print a summary to the user:**
+- Path of the `.claude/safety-status.json` file
+- Path of the `logs/init-report.md` file
+- For Mode 1: the newly created project root
+- For Mode 2: counts of entries resolved by status (`CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`) and any still in `NEEDS_REVIEW:*`
+- For Mode 3: list of files newly added with their resolved status
+
+Never rename or delete these files as part of "cleanup" — the audit trail is the record of IRB-relevant decisions.
 
 ---
 

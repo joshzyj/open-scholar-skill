@@ -73,6 +73,18 @@ echo "| [step#] | $(date +%H:%M:%S) | [Step Name] | [1-line action summary] | [o
 
 **IMPORTANT:** Shell variables do NOT persist across Bash tool calls. Every step MUST re-derive LOG_FILE before appending.
 
+## ABSOLUTE RULE — NEVER Fabricate Citations
+
+> **ZERO TOLERANCE FOR CITATION FABRICATION.** Any reference cited in ethics protocols, IRB templates, consent language, or AI-disclosure statements produced by this skill MUST be verified against Tier 0 (knowledge graph), Tier 1 (local library: Zotero/Mendeley/BibTeX/EndNote), or Tier 2 (CrossRef / Semantic Scholar / OpenAlex). Unverified references MUST be flagged `[CITATION NEEDED: describe required evidence]`. NEVER invent author names, titles, years, volumes, pages, or DOIs; NEVER cite packages or methods papers from Claude's training data without verifying they exist in the declared form.
+
+Load the full verification protocol on first use:
+
+```bash
+cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/citation-verification-protocol.md"
+```
+
+---
+
 ## Dispatch Table
 
 Route based on keywords in `$ARGUMENTS`. Run all matching modes; always end with **Save Output**.

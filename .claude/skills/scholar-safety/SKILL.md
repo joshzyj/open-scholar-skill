@@ -445,6 +445,8 @@ Ask or infer:
 
 Produce the following document using the Write tool.
 
+> **Template content below** — the `## 1. Data Inventory` through `## 6. AI Use Log` headings inside the fenced code block are section headings for the *generated protocol document*, not subsections of this SKILL.md. Substitute project-specific values; do not emit the literal bracketed placeholders.
+
 **Output format:**
 
 ```markdown
@@ -523,6 +525,8 @@ Save to: `output/[slug]/protocols/scholar-safety-protocol-[slug]-[YYYY-MM-DD].md
 
 *Show what has been logged for this project — which files were scanned, what risk levels were found, what permissions were granted.*
 
+### Step 4.1 — Read and format the safety log
+
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 if [ -f "${OUTPUT_ROOT}/logs/scholar-safety-log.md" ]; then
@@ -532,7 +536,7 @@ else
 fi
 ```
 
-Format the log as a readable summary table.
+Format the log as a readable summary table before returning it to the user. If the log is empty or missing, tell the user how to populate it (`/scholar-safety scan <file>`) rather than returning a silent empty result.
 
 ---
 

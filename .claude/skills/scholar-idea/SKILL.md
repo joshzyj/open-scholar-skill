@@ -630,16 +630,16 @@ Return results in this order:
 ## Quality Rules
 
 Before finalizing, verify:
-- Literature scan followed tiered protocol: local library (Tier 1) searched FIRST for all angles, then external APIs (Tier 2), then WebSearch (Tier 3) only for gaps — do not skip to WebSearch without checking local library
-- Novelty claims cite specific papers identified in Step 3, not generic statements like "this is understudied"
-- Data inventory identifies at least one publicly accessible dataset for each `PROCEED` RQ
-- Questions are specific enough to operationalize with the identified data
-- Mechanisms and confounders are explicit
-- Claims do not exceed plausible design strength of the recommended dataset
-- The recommended RQ has a clear gap, a named dataset, and a concrete next-step path
-- **Multi-agent panel ran**: all 5 evaluator agents (Theorist, Methodologist, Domain Expert, Journal Editor, Devil's Advocate) were spawned in parallel via Task tool
-- **Consensus scorecard produced**: cross-agent agreement (★★) items identified; agent rank comparison table completed
-- **RQs refined**: all ★★ suggestions and Devil's Advocate mitigations applied; original vs. refined versions shown side-by-side
-- **No FATAL FLAW RQ recommended**: any RQ rated FATAL FLAW by the Devil's Advocate was not selected as the recommended question
-- **Panel consensus cited in recommendation**: Step 9 justification references specific agent ratings and cross-agent agreement, not just the literature scan
-- Output has been saved to a `.md` file in the current working directory using the Write tool
+- [ ] Literature scan followed tiered protocol: local library (Tier 1) searched FIRST for all angles, then external APIs (Tier 2), then WebSearch (Tier 3) only for gaps — do not skip to WebSearch without checking local library
+- [ ] Novelty claims cite specific papers identified in Step 3, not generic statements like "this is understudied"
+- [ ] Data inventory identifies at least one publicly accessible dataset for each `PROCEED` RQ
+- [ ] Questions are specific enough to operationalize with the identified data
+- [ ] Mechanisms and confounders are explicit
+- [ ] Claims do not exceed plausible design strength of the recommended dataset
+- [ ] The recommended RQ has a clear gap, a named dataset, and a concrete next-step path
+- [ ] **Multi-agent panel ran**: all 5 evaluator agents (Theorist, Methodologist, Domain Expert, Journal Editor, Devil's Advocate) were spawned in parallel via Task tool
+- [ ] **Consensus scorecard produced**: cross-agent agreement (★★) items identified; agent rank comparison table completed
+- [ ] **RQs refined**: all ★★ suggestions and Devil's Advocate mitigations applied; original vs. refined versions shown side-by-side
+- [ ] **No FATAL FLAW RQ recommended**: any RQ rated FATAL FLAW by the Devil's Advocate was not selected as the recommended question
+- [ ] **Panel consensus cited in recommendation**: Step 9 justification references specific agent ratings and cross-agent agreement, not just the literature scan
+- [ ] Output has been saved to a `.md` file in the current working directory using the Write tool
