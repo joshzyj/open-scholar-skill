@@ -565,6 +565,40 @@ Write tool → file_path: "scholar-causal-[topic-slug]-[YYYY-MM-DD].md"
 
 After saving, confirm the file path to the user so they can locate the saved analysis.
 
+**Emit `identification-strategy.json` (MANDATORY when a DAG-based design is selected):**
+
+`scholar-analyze` binds to this skill through a structured JSON sidecar. When the downstream ladder (`scholar-analyze/references/ladder-observational-causal.md`) sees `Design Type: observational-causal-with-DAG`, it hard-errors if this file is missing. Write it AFTER the prose `.md` has been saved.
+
+```bash
+. "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh" 2>/dev/null || PROJ="${OUTPUT_ROOT:-output}/${PROJ_SLUG:-.}"
+mkdir -p "${PROJ}/design"
+
+# Fill the values below from the DAG, adjustment set, and method selection you already produced above.
+# adjustment_set, mediators_excluded, colliders_excluded are JSON arrays (use [] when empty).
+cat > "${PROJ}/design/identification-strategy.json" << 'JSONEOF'
+{
+  "design_type": "observational-causal-with-DAG",
+  "identification_strategy": "<OLS + backdoor adjustment | FE | DiD | RD | IV | matching | synthetic control>",
+  "treatment_variable": "<X>",
+  "outcome_variable": "<Y>",
+  "adjustment_set": ["<C1>", "<C2>", "<C3>"],
+  "mediators_excluded": ["<M1>"],
+  "colliders_excluded": ["<K1>"],
+  "assumptions": ["no unmeasured confounding", "positivity", "SUTVA"],
+  "robustness_battery": ["oster_delta", "e_value", "bounds_manski"],
+  "source_md": "<filename of the prose scholar-causal-*.md just saved>",
+  "emitted_at": "<YYYY-MM-DD HH:MM>"
+}
+JSONEOF
+
+# Sanity-check it parses
+python3 -c "import json,sys; json.load(open('${PROJ}/design/identification-strategy.json'))" \
+  && echo "identification-strategy.json: OK" \
+  || { echo "ERROR: identification-strategy.json is not valid JSON — fix before proceeding to /scholar-analyze."; exit 1; }
+```
+
+**Important:** If the identification strategy is NOT `observational-causal-with-DAG` (e.g., this session produced a DiD, RD, or IV design), still emit the JSON but set `design_type` to match: `quasi-experimental:DiD`, `quasi-experimental:RD`, or `quasi-experimental:IV`. The `adjustment_set` for those designs is whichever covariates enter the main regression (may be empty for a pure event-study). The ladder `ladder-quasi-experimental.md` reads the same file.
+
 **Close Process Log:**
 
 Run the following to finalize the process log:

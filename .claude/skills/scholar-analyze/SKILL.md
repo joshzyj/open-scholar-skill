@@ -112,6 +112,40 @@ Any sub-skill invoked from Component A (e.g., `/scholar-causal`, `/scholar-compu
 ---
 
 
+## Design-Type Router (MANDATORY before model ladder)
+
+The M1→M4 ladder is a publication convention for observational-descriptive sociology — not a universal inferential scaffold. Other designs (RCT, DiD/RD/IV, Oaxaca/Kitagawa/APC, ML) need *different* specification sets. Before assembling any regression ladder, read the Design Type and route to the correct template:
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills/scholar-analyze/references"
+
+# 1) Consult the router table
+cat "$SKILL_DIR/design-router.md"
+
+# 2) Read Design Type from project-state.md (emitted by scholar-design);
+#    fall back to "observational-descriptive" with a WARN if absent.
+. "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh" 2>/dev/null || PROJ="${OUTPUT_ROOT:-output}/${PROJ_SLUG:-.}"
+DESIGN_TYPE=$(grep -E "^Design Type:" "${PROJ}/logs/project-state.md" 2>/dev/null | tail -1 | sed 's/^Design Type:[[:space:]]*//')
+DESIGN_TYPE="${DESIGN_TYPE:-observational-descriptive}"
+echo "Design Type → ${DESIGN_TYPE}"
+
+# 3) Load the matching ladder file named by the router table
+case "$DESIGN_TYPE" in
+  observational-descriptive)       LADDER="ladder-observational-descriptive.md" ;;
+  observational-causal-with-DAG)   LADDER="ladder-observational-causal.md" ;;
+  RCT)                             LADDER="ladder-rct.md" ;;
+  quasi-experimental:*)            LADDER="ladder-quasi-experimental.md" ;;
+  decomposition:*)                 LADDER="ladder-decomposition.md" ;;
+  predictive-ML)                   LADDER="ladder-predictive-ml.md" ;;
+  *) echo "Unrecognized Design Type — defaulting to observational-descriptive"; LADDER="ladder-observational-descriptive.md" ;;
+esac
+cat "$SKILL_DIR/$LADDER"
+```
+
+The selected ladder defines the specification set, robustness battery, and adjudication hint. Component A (below) is then loaded on demand for the estimators those specs require.
+
+---
+
 ## Component A: On-Demand Loading
 
 Component A (Data Analytics) is split into loadable reference files. Load only the sections relevant to the analysis task:

@@ -2142,6 +2142,72 @@ output/[slug]/design/table-model-spec.html  ← model specification table
 
 Confirm saved file path to user after Write completes.
 
+**Emit Design Type to PROJECT STATE (MANDATORY):**
+
+`scholar-analyze` branches its model-specification strategy on the `Design Type` line in `project-state.md` (see `scholar-analyze/references/design-router.md`). At end-of-workflow, infer the type from the keyword dispatch above and the finalized blueprint, then write it to the shared project state.
+
+```bash
+# Derive PROJ (respect standard project-layout conventions)
+. "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/derive-proj.sh" 2>/dev/null || PROJ="${OUTPUT_ROOT:-output}/${PROJ_SLUG:-.}"
+STATE_FILE="${PROJ}/logs/project-state.md"
+
+# Infer DESIGN_TYPE from the arguments / dispatched steps.
+# Precedence (most specific wins):
+#   RCT keywords         → RCT
+#   DiD/RD/IV/synth      → quasi-experimental:<sub>
+#   Oaxaca/Kitagawa/
+#     KHB/APC/decomp     → decomposition:<sub>
+#   ML/NLP/network/ABM   → predictive-ML
+#   DAG/causal/matching/
+#     FE (causal intent) → observational-causal-with-DAG
+#   else                 → observational-descriptive
+ARGS_LC=$(echo "$ARGUMENTS" | tr '[:upper:]' '[:lower:]')
+DESIGN_TYPE=""
+DESIGN_REASON=""
+case "$ARGS_LC" in
+  *rct*|*randomized*controlled*|*field\ experiment*|*vignette*|*conjoint*|*list\ experiment*)
+    DESIGN_TYPE="RCT"; DESIGN_REASON="keyword: RCT/experiment" ;;
+  *stepped-wedge*|*stepped\ wedge*|*smart*|*cluster\ rct*|*audit*|*correspondence*)
+    DESIGN_TYPE="RCT"; DESIGN_REASON="keyword: specialized experimental" ;;
+  *did*|*difference-in-differences*|*diff-in-diff*)
+    DESIGN_TYPE="quasi-experimental:DiD"; DESIGN_REASON="keyword: DiD" ;;
+  *regression\ discontinuity*|*rdd*|*\ rd\ *)
+    DESIGN_TYPE="quasi-experimental:RD"; DESIGN_REASON="keyword: RD" ;;
+  *instrumental*|*\ iv\ *|*2sls*)
+    DESIGN_TYPE="quasi-experimental:IV"; DESIGN_REASON="keyword: IV" ;;
+  *synthetic\ control*|*synth*)
+    DESIGN_TYPE="quasi-experimental:synth"; DESIGN_REASON="keyword: synth" ;;
+  *oaxaca*|*blinder*)
+    DESIGN_TYPE="decomposition:Oaxaca"; DESIGN_REASON="keyword: Oaxaca" ;;
+  *kitagawa*)
+    DESIGN_TYPE="decomposition:Kitagawa"; DESIGN_REASON="keyword: Kitagawa" ;;
+  *khb*|*karlson*)
+    DESIGN_TYPE="decomposition:KHB"; DESIGN_REASON="keyword: KHB" ;;
+  *apc*|*age-period-cohort*|*hapc*)
+    DESIGN_TYPE="decomposition:APC"; DESIGN_REASON="keyword: APC" ;;
+  *decomposition*|*decompose*)
+    DESIGN_TYPE="decomposition:Oaxaca"; DESIGN_REASON="keyword: decomposition (default sub=Oaxaca)" ;;
+  *nlp*|*machine\ learning*|*\ ml\ *|*classifier*|*topic\ model*|*bert*|*transformer*|*network\ analysis*|*ergm*|*abm*|*agent-based*|*simulation*)
+    DESIGN_TYPE="predictive-ML"; DESIGN_REASON="keyword: computational/ML" ;;
+  *causal*|*dag*|*matching*|*fe\ causal*|*propensity*)
+    DESIGN_TYPE="observational-causal-with-DAG"; DESIGN_REASON="keyword: causal/DAG" ;;
+  *)
+    DESIGN_TYPE="observational-descriptive"; DESIGN_REASON="fallback (no specific keyword matched)" ;;
+esac
+
+# Write to project-state.md (append; later entries override earlier ones by virtue of `tail -1` readers)
+mkdir -p "$(dirname "$STATE_FILE")"
+cat >> "$STATE_FILE" << STATEEOF
+
+<!-- Emitted by scholar-design Save Output ($(date +%Y-%m-%d\ %H:%M)) -->
+Design Type: ${DESIGN_TYPE}
+Design Type Inference: ${DESIGN_REASON}
+STATEEOF
+echo "Design Type set to '${DESIGN_TYPE}' (${DESIGN_REASON}) in $STATE_FILE"
+```
+
+If the inferred DESIGN_TYPE is wrong, instruct the user: "Edit `${STATE_FILE}` and replace the `Design Type:` line before running `/scholar-analyze`. Valid values: observational-descriptive | observational-causal-with-DAG | RCT | quasi-experimental:<DiD|RD|IV|synth> | decomposition:<Oaxaca|Kitagawa|KHB|APC> | predictive-ML."
+
 **Close Process Log:**
 
 Run the following to finalize the process log:
