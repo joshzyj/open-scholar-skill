@@ -2,7 +2,7 @@
 
 This file is loaded by scholar-write whenever §4 Analytic Strategy, §5 Results robustness paragraphs, or any methods-like section is being drafted. It shows the target prose style concretely.
 
-**Operating principle**: The `spec-registry.csv` and Phase 3.5 Design Pre-Mortem list models and robustness checks as flat enumerations because machine-readable enumeration is their job. The **manuscript** translates those registries into flowing prose. Never mirror the registry structure into the manuscript.
+**Operating principle**: A specification registry or a design pre-mortem table lists models and robustness checks as flat enumerations because machine-readable enumeration is those artifacts' job. The **manuscript** translates those registries into flowing prose. Never mirror the registry structure into the manuscript.
 
 ---
 
@@ -136,4 +136,4 @@ M3,education × year focal,OLS,WTSSALL,year,CHLDIDEL,full
 R5,reproductive-age restriction,OLS,WTSSALL,year,CHLDIDEL,18-44
 ```
 
-This is grep-friendly machinery for `scholar-verify` Stage 2 and for the results-lock manifest. It is *not* a drafting template. Reproducing its flat structure in §4 of a manuscript is the single largest prose-quality defect observed in scholar-write output. Translate each row into a clause; preserve the spec_id as a parenthetical so the verifier can still trace.
+This is grep-friendly machinery for downstream verification (e.g., `scholar-verify` Stage 2). It is *not* a drafting template. Reproducing its flat structure in §4 of a manuscript is the single largest prose-quality defect observed in AI-drafted output. Translate each row into a clause; preserve the spec_id as a parenthetical so the verifier can still trace.
