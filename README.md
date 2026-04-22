@@ -87,7 +87,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (30 skills + 1 utility = 31 total)
+## Skills Overview (31 skills + 1 utility = 32 total)
 
 ### Core Pipeline Skills
 
@@ -124,6 +124,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-ling` | `/scholar-ling` | 9 modular modules: variationist, quantitative, qualitative, attitudes/matched guise, corpus, computational socioling, experimental, Biber MDA, TTS-MGT |
 | `scholar-collaborate` | `/scholar-collaborate` | Multi-author collaboration: CRediT roles, task management, mentoring, conflict resolution |
 | `scholar-conceptual` | `/scholar-conceptual` | Theory building (8 strategies: typology, process, mechanism, scope, multi-level, abductive, synthetic, concept clarification) + publication-quality conceptual diagrams (TikZ/Mermaid) |
+| `scholar-monitor` | `/scholar-monitor` | Current-awareness literature feed: delta-based fetching from top journals (Crossref/ISSN) and arXiv categories; summarizes new papers; pushes digests to phone via ntfy.sh or Telegram; auto-ingests into `scholar-knowledge`. Designed for `/loop` scheduling. Per-source cadence filter guarantees idempotency: `/loop 1h` with a weekly source produces one digest/week. 9 modes: default/targeted fetch, `all`, `preview` (dry-run), `init`, `list`, `status`, `add`, `remove`, `configure delivery`, `digest`. State at `~/.claude/scholar-monitor/` (configurable via `SCHOLAR_MONITOR_DIR`) |
 
 ### Ethics and Safety Skills
 
@@ -185,7 +186,7 @@ bash setup.sh
 1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
 2. Auto-detect your Zotero library (or prompt for path)
 3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 31 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — installed per-entry alongside any existing personal skills
+4. Install all 32 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — installed per-entry alongside any existing personal skills
 5. Register the PreToolUse data-safety hook in `~/.claude/settings.json` (idempotent; preserves existing settings)
 6. Check for `jq` and `python3` (required by the data-safety hook)
 7. Write a `.env` file with your configuration

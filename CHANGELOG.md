@@ -3,6 +3,64 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.12.0] - 2026-04-22
+
+Sync with upstream `open-scholar-skills` (private). Adds `scholar-monitor`, a current-awareness literature feed designed for recurring `/loop` scheduling with push delivery to the researcher's phone. Fits the researcher-in-the-loop philosophy of this fork: it surfaces new publications and enriches the knowledge graph without automating downstream writing.
+
+### Added
+
+**New skill: `scholar-monitor`**
+
+- **`.claude/skills/scholar-monitor/SKILL.md`** — routing stub with 9 modes: default / targeted fetch, `all`, `preview` (dry-run), `init`, `list`, `status`, `add`, `remove`, `configure delivery`, `digest`. Fully idempotent under `/loop`: each invocation computes a delta against `state.json` (last-seen DOIs/arXiv IDs per source) plus the knowledge graph, fetches only publications newer than the cursor, summarizes them, pushes to configured channels, and atomically advances state.
+- **`.claude/skills/scholar-monitor/assets/fetch.py`** — stdlib-only Python fetcher with four backends:
+  - **Crossref** by ISSN (polite-pool honored via `--email`)
+  - **arXiv** Atom API with 3s inter-call sleep (respects arXiv rate limits)
+  - **OpenAlex** by ISSN with inverted-index abstract reconstruction
+  - **RSS/Atom** generic parser for sources without dedicated APIs
+
+  Version-strips trailing `v\d+` from `arxiv_id` so dedup is version-agnostic (a v2 paper won't re-deliver if v1 was already seen). Emits a normalized paper record as JSONL: `{source_id, category, doi, arxiv_id, title, authors, year, published_date, journal, abstract, url}`. 1s courtesy sleep after Crossref/OpenAlex calls to avoid rate-limit pressure under `/loop`.
+
+- **`.claude/skills/scholar-monitor/assets/deliver.py`** — delivery dispatcher for:
+  - **ntfy.sh** — POST-based push with ASCII-safe Title header (replaces `—`/`–`/`…`/curly quotes with ASCII equivalents; body stays UTF-8), 3.5 KB body cap to stay under ntfy's 4 KB limit.
+  - **SMTP email** — stdlib `smtplib` with starttls; password read from env var, never from config.
+  - Telegram routes through the `mcp__plugin_telegram_telegram__reply` MCP tool (not via deliver.py); file attachment supported when the Telegram MCP plugin is available.
+
+- **`.claude/skills/scholar-monitor/assets/default-sources.json`** — 22 starter sources: 14 sociology journals (ASR, AJS, Social Forces, Demography, PDR, Gender & Society, SoE, JMF, Ethnic & Racial Studies, Du Bois Review, SSR, SMR, Social Problems, ARS), 5 interdisciplinary (NHB, Science Advances, NCS, APSR, PNAS), and 3 arXiv categories (cs.CL with LLM filter, cs.CY, econ.GN). Three enabled by default (ASR, arxiv-llm, NHB) to keep the first-run digest manageable.
+
+- **`.claude/skills/scholar-monitor/references/fetcher-protocols.md`** — call patterns per backend, normalized paper schema, quirks per source (Crossref ingestion lag for SAGE publishers, arXiv cross-listing, OpenAlex inverted-index lossiness), and instructions for adding new backends (e.g., Semantic Scholar, bioRxiv).
+
+- **`.claude/skills/scholar-monitor/references/registry-guide.md`** — `sources.json` schema, ISSN lookup for 28 sociology/linguistics/interdisciplinary journals, arXiv category list (cs.CL/AI/LG/CY/SI, stat.ML/AP, econ.GN/EM), cadence rules-of-thumb, archive-rotation policy.
+
+- **`.claude/skills/scholar-monitor/references/delivery-protocol.md`** — Telegram / ntfy / email / file channel specs, long-message chunking, `config.json` schema, security notes (chmod 0600, SMTP password in env var only, ntfy topic treated as shared secret).
+
+**User-scoped state (mirrors `SCHOLAR_KNOWLEDGE_DIR` pattern):**
+
+- `~/.claude/scholar-monitor/sources.json` — user-editable source registry (populated from `default-sources.json` on first run).
+- `~/.claude/scholar-monitor/state.json` — machine-maintained per-source cursors (`last_run`, `last_seen_date`, 200-deep `last_seen_ids`, `total_seen`, `last_error`).
+- `~/.claude/scholar-monitor/config.json` (`chmod 0600`) — delivery channel configuration.
+- `~/.claude/scholar-monitor/archive.ndjson` — append-only full digest history (enables `digest` mode without network re-fetching).
+- `~/.claude/scholar-monitor/tmp/run-<timestamp>-<pid>/` — stable per-run scratch space for cross-Bash-call state handoff. Keeps last 5 run-dirs for postmortem.
+
+**Knowledge-graph integration:** each new paper is appended to `~/.claude/scholar-knowledge/papers.ndjson` (via the `_shared/knowledge-graph-search.md` helpers) with `source: "scholar-monitor"`, `extraction_tier: "abstract_only"`, and monitor-specific fields (`monitor_source_id`, `monitor_category`, `monitor_url`). Future `/scholar-lit-review` runs pick up these papers at Tier 0 before external APIs.
+
+**`/loop` compatibility:** `/loop 24h /scholar-monitor arxiv-llm`, `/loop 7d /scholar-monitor`, `/loop 1h /scholar-monitor`. The `cadence_days` filter (per source) guarantees idempotency — invocations more frequent than cadence return empty without contacting APIs. Per-source failures don't advance that source's cursor; the next tick retries cleanly.
+
+### Changed
+
+- Skill count: **31 → 32**. `scholar-monitor` added; `scholar-full-paper`, `scholar-grant`, `scholar-teach`, `scholar-book`, `scholar-presentation` remain excluded (orchestrator-bound or feature-heavy, preserved in the private fork).
+- `README.md` — Skills Overview count 30+1 → 31+1; `scholar-monitor` row in Extended Skills table; `4. Install all 31 skills` → `32 skills` in setup notes.
+- `USAGE.md` — opening skill count 30+1 → 31+1; `scholar-monitor` row in Skill Reference table; new Section 21 "Literature Monitoring" covering all 9 modes, the 22-source starter registry, `/loop` recipes, 4-row delivery-channel comparison, and positioning vs. `scholar-lit-review`.
+- `CLAUDE.md` — version bumped v5.11.0 → v5.12.0; skill count 31 → 32.
+- `.claude-plugin/plugin.json` — version bumped; description "31 skills" → "32 skills".
+
+### Adapted (private → public)
+
+Scholar-monitor's original Phase 0a/0b referenced `scripts/gates/derive-scholar-dir.sh` and `scripts/gates/init-log.sh` from the private fork. Replaced both with the public fork's existing idioms: `${SCHOLAR_SKILL_DIR:-.}` parameter-expansion fallback with `.env` sourcing, and inline log-init matching the pattern used by other public skills (e.g., `scholar-lit-review` lines 38–56). No private-only orchestrator references (`scholar-full-paper`, Phase 3.5, results-lock, Phase 11.5) were present in the source — the skill is intrinsically orthogonal to the paper pipeline.
+
+### Why
+
+The public fork's researcher-in-the-loop design treats the human as the primary agent making editorial decisions. `scholar-monitor` serves that model: it surfaces what's new, lets the researcher decide what matters, and quietly enriches the knowledge graph in the background. It doesn't write, it doesn't analyze, it doesn't decide — it watches the feed and tells you when something new arrives. Best companion to `scholar-lit-review` (retrospective) and `scholar-knowledge` (accumulation).
+
 ## [5.11.0] - 2026-04-16
 
 Sync with upstream `open-scholar-skills` (private). Adds `scholar-polish`, moves shared reference files into `_shared/`, and propagates citation-integrity, verification, and auto-improve hardening. Orchestrator-bound features (results-lock, Phase 6.5/7b, `scholar-full-paper` wiring) are intentionally excluded — this release preserves the researcher-in-the-loop design of the public fork.

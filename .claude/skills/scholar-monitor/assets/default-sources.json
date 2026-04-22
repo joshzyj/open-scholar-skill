@@ -1,0 +1,230 @@
+{
+  "version": "1.0",
+  "defaults": {
+    "crossref_email": "",
+    "max_per_tick": 20,
+    "first_run_lookback_days": 14
+  },
+  "sources": [
+    {
+      "id": "asr",
+      "enabled": true,
+      "type": "crossref",
+      "issn": "0003-1224",
+      "category": "Sociology — Top General",
+      "cadence_days": 7,
+      "max_per_tick": 10,
+      "note": "American Sociological Review"
+    },
+    {
+      "id": "ajs",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0002-9602",
+      "category": "Sociology — Top General",
+      "cadence_days": 7,
+      "max_per_tick": 10,
+      "note": "American Journal of Sociology"
+    },
+    {
+      "id": "social-forces",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0037-7732",
+      "category": "Sociology — Top General",
+      "cadence_days": 7,
+      "max_per_tick": 10,
+      "note": "Social Forces"
+    },
+    {
+      "id": "social-problems",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0037-7791",
+      "category": "Sociology — Top General",
+      "cadence_days": 7,
+      "max_per_tick": 10,
+      "note": "Social Problems"
+    },
+    {
+      "id": "annual-review-soc",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0360-0572",
+      "category": "Sociology — Reviews",
+      "cadence_days": 30,
+      "max_per_tick": 20,
+      "note": "Annual Review of Sociology"
+    },
+    {
+      "id": "demography",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0070-3370",
+      "category": "Demography / Population",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Demography"
+    },
+    {
+      "id": "pdr",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0098-7921",
+      "category": "Demography / Population",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Population and Development Review"
+    },
+    {
+      "id": "gender-society",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0891-2432",
+      "category": "Sociology — Subfield",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Gender & Society"
+    },
+    {
+      "id": "sociology-of-education",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0038-0407",
+      "category": "Sociology — Subfield",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Sociology of Education"
+    },
+    {
+      "id": "jmf",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0022-2445",
+      "category": "Sociology — Subfield",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Journal of Marriage and Family"
+    },
+    {
+      "id": "ethnic-racial-studies",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0141-9870",
+      "category": "Sociology — Subfield",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Ethnic and Racial Studies"
+    },
+    {
+      "id": "du-bois-review",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "1742-058X",
+      "category": "Sociology — Subfield",
+      "cadence_days": 30,
+      "max_per_tick": 10,
+      "note": "Du Bois Review"
+    },
+    {
+      "id": "ssr",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0049-089X",
+      "category": "Sociology — Subfield",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Social Science Research"
+    },
+    {
+      "id": "smr",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0049-1241",
+      "category": "Methods",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Sociological Methods & Research"
+    },
+    {
+      "id": "nhb",
+      "enabled": true,
+      "type": "crossref",
+      "issn": "2397-3374",
+      "category": "Interdisciplinary — Behaviour",
+      "cadence_days": 7,
+      "max_per_tick": 10,
+      "note": "Nature Human Behaviour"
+    },
+    {
+      "id": "science-advances",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "2375-2548",
+      "category": "Interdisciplinary — Behaviour",
+      "cadence_days": 7,
+      "max_per_tick": 10,
+      "note": "Science Advances"
+    },
+    {
+      "id": "ncs",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "2662-8457",
+      "category": "Interdisciplinary — Computational",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "Nature Computational Science"
+    },
+    {
+      "id": "apsr",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0003-0554",
+      "category": "Political Science",
+      "cadence_days": 14,
+      "max_per_tick": 10,
+      "note": "American Political Science Review"
+    },
+    {
+      "id": "pnas",
+      "enabled": false,
+      "type": "crossref",
+      "issn": "0027-8424",
+      "category": "Interdisciplinary — Behaviour",
+      "cadence_days": 3,
+      "max_per_tick": 10,
+      "note": "PNAS (firehose — short cadence, small batch)"
+    },
+    {
+      "id": "arxiv-llm",
+      "enabled": true,
+      "type": "arxiv",
+      "query": "cat:cs.CL AND (abs:\"large language model\" OR abs:\"LLM\" OR abs:\"language model\")",
+      "category": "Preprints — LLM / NLP",
+      "cadence_days": 1,
+      "max_per_tick": 20,
+      "note": "arXiv cs.CL filtered to LLM-adjacent work"
+    },
+    {
+      "id": "arxiv-css",
+      "enabled": false,
+      "type": "arxiv",
+      "query": "cat:cs.CY",
+      "category": "Preprints — Computational Social Science",
+      "cadence_days": 2,
+      "max_per_tick": 15,
+      "note": "arXiv cs.CY (Computers and Society)"
+    },
+    {
+      "id": "arxiv-econ-gn",
+      "enabled": false,
+      "type": "arxiv",
+      "query": "cat:econ.GN",
+      "category": "Preprints — Economics",
+      "cadence_days": 3,
+      "max_per_tick": 15,
+      "note": "arXiv econ.GN (General Economics)"
+    }
+  ]
+}

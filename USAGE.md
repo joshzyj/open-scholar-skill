@@ -1,7 +1,7 @@
 # Open Scholar Skill — User Guide
 
 A Claude Code project for social scientists writing for top-tier journals.
-30 scholar skills + 1 utility (31 total) covering the full research pipeline from idea exploration to collaboration.
+31 scholar skills + 1 utility (32 total) covering the full research pipeline from idea exploration to collaboration.
 
 ---
 
@@ -12,14 +12,14 @@ Skills and agents live in the `.claude/` directory:
 ```
 open-scholar-skill/
 ├── .claude/
-│   ├── skills/           ← 30 skills (scholar-*) + 1 utility (sync-docs)
+│   ├── skills/           ← 31 skills (scholar-*) + 1 utility (sync-docs)
 │   ├── agents/           ← 9 reviewer agents (peer-reviewer-*) + 4 verification agents (verify-*) + 6 code-review agents (review-code-*)
 │   └── settings.local.json
 ├── README.md
 └── USAGE.md
 ```
 
-All 31 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
+All 32 skills are available in any Claude Code session via `/skill-name` when working in this project directory.
 
 ---
 
@@ -58,6 +58,7 @@ The text after the skill name is passed directly as context. The more specific t
 | `/scholar-write` | Drafting sections | `introduction on segregation and health for ASR` |
 | `/scholar-citation` | Citations and references | `insert ASA citations and build reference list` |
 | `/scholar-knowledge` | 8-mode knowledge graph: ingest / search / relate / status / export / compile (Obsidian wiki) / ask (Q&A) / re-extract | `compile` to build wiki, then `ask what are the main theories of segregation?` |
+| `/scholar-monitor` | Current-awareness feed: delta-based fetching from top journals (Crossref/ISSN) + arXiv, auto-ingests into knowledge graph, pushes digests to phone via ntfy.sh. Designed for `/loop` scheduling. | `arxiv-llm` or `preview` or `/loop 24h /scholar-monitor` |
 | `/scholar-journal` | Submission prep | `prepare manuscript for Demography` |
 | `/scholar-open` | Preregistration / data sharing | `preregistration for FE panel study` |
 | `/scholar-replication` | Build & test replication package | `full for Demography` |
@@ -972,6 +973,67 @@ Synchronizes content across presentation slides, speaker script, and manuscript/
 4. Compiles updated documents to PDF
 
 Use after editing one document (e.g., updating a figure in slides) to propagate changes to the script and manuscript. Particularly useful for job talks and conference presentations where slides, speaking notes, and the underlying paper must stay in sync.
+
+### 21. Literature Monitoring — `/scholar-monitor`
+
+```
+/scholar-monitor init                      # bootstrap ~/.claude/scholar-monitor/ with 22 starter sources
+/scholar-monitor list                      # show configured sources + last-seen state + next-due dates
+/scholar-monitor preview                   # dry-run — show what would fetch, no network calls, no state change
+/scholar-monitor arxiv-llm                 # targeted fetch: one specific source, overrides cadence
+/scholar-monitor all                       # force-fetch every enabled source, ignore cadence
+/scholar-monitor                           # default: fetch all enabled sources where cadence has elapsed
+/scholar-monitor configure delivery        # prompts for ntfy topic / Telegram chat_id / SMTP creds
+/scholar-monitor add                       # add a new journal (by ISSN) or arXiv query interactively
+/scholar-monitor remove arxiv-llm          # remove a source by id
+/scholar-monitor status                    # dashboard: enabled sources, archive size, delivery channels, overdue sources
+/scholar-monitor digest last-7             # regenerate markdown digest from archive (no re-fetch)
+```
+
+**What it does:**
+
+A forward-looking *current-awareness* feed — the companion to `/scholar-lit-review`'s retrospective landscape map. Each invocation:
+
+1. Fetches new publications from every source where `cadence_days` has elapsed (or a specific source you name).
+2. Dedupes against the 200 most-recent DOIs/arXiv IDs per source plus the full knowledge graph.
+3. Summarizes each paper (2–3 sentences from title + abstract) and groups by category.
+4. Writes the digest to `output/monitor/feed-YYYY-MM-DD.md`.
+5. Pushes a notification to your phone via ntfy.sh or Telegram (optional), or emails via SMTP (optional).
+6. Auto-ingests new papers into `scholar-knowledge` (`~/.claude/scholar-knowledge/papers.ndjson`) with `source: "scholar-monitor"` and `extraction_tier: "abstract_only"` — future `/scholar-lit-review` runs pick these up at Tier 0.
+7. Updates state atomically so the next tick starts from the new watermark.
+
+**Starter registry (22 sources, 3 enabled by default):**
+
+- **Sociology top-tier:** ASR (on), AJS, Social Forces, Social Problems, Annual Review of Sociology
+- **Demography:** Demography, Population and Development Review
+- **Subfield:** Gender & Society, Sociology of Education, JMF, Ethnic & Racial Studies, Du Bois Review, Social Science Research, Sociological Methods & Research
+- **Interdisciplinary:** Nature Human Behaviour (on), Science Advances, Nature Computational Science, APSR, PNAS
+- **Preprints:** arXiv cs.CL + LLM filter (on), arXiv cs.CY, arXiv econ.GN
+
+Flip `enabled: true` on any source in `~/.claude/scholar-monitor/sources.json`, or use `/scholar-monitor add` to register a new one. See `references/registry-guide.md` for the full ISSN lookup table and arXiv category list.
+
+**`/loop` integration:**
+
+```
+/loop 24h /scholar-monitor arxiv-llm       # daily LLM preprint digest
+/loop 7d /scholar-monitor                  # weekly sweep across all due sources
+/loop 1h /scholar-monitor                  # harmless — cadence filter drops redundant ticks
+```
+
+Every run is idempotent. The `cadence_days` filter means `/loop 1h` with a weekly source produces one real digest per week, not 168. Per-source failures (network errors) don't advance that source's cursor — the next tick retries cleanly.
+
+**Delivery channels (stackable):**
+
+| Channel | Setup | Use case |
+|---|---|---|
+| **file** (always on) | nothing | audit trail at `output/monitor/feed-YYYY-MM-DD.md` |
+| **ntfy.sh** | `openssl rand -hex 8` → paste to app + `configure delivery` | zero-auth phone push, works headless under `/loop` |
+| **Telegram** | requires Telegram MCP plugin + allowlist setup | two-way push, file attachment supported |
+| **SMTP email** | Gmail App Password + `configure delivery` | universal but most setup; creds in env var, never in config.json |
+
+Config lives at `~/.claude/scholar-monitor/config.json` (`chmod 0600`). State at `~/.claude/scholar-monitor/state.json`. Append-only archive at `~/.claude/scholar-monitor/archive.ndjson` (rotate manually when > 50 MB — see `references/registry-guide.md`).
+
+**Use alongside, not instead of, `/scholar-lit-review`.** Scholar-lit-review builds a systematic landscape map for a paper you're writing. Scholar-monitor accumulates a background stream of new work that — over time — enriches the knowledge graph that *future* lit reviews query at Tier 0.
 
 ---
 
