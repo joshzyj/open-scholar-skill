@@ -232,6 +232,157 @@ This one prompt builds the entire knowledge base automatically from your PDFs.
 
 > **Note:** `scholar-write` works without any articles — it will draft sections using its built-in knowledge of journal conventions. The article library makes the output better by calibrating to your voice and your target journal's norms.
 
+## Setting Up `scholar-monitor` (phone digests via ntfy or Telegram)
+
+`scholar-monitor` watches your chosen journals + arXiv categories and pushes digests of new papers to your phone. This section walks through setup end to end: bootstrap → pick sources → test fetch → wire up phone push → schedule under `/loop`.
+
+Everything persists under `~/.claude/scholar-monitor/` — user-scoped, shared across all projects, independent of any single repo.
+
+### Step 1: Bootstrap the state directory
+
+```
+/scholar-monitor init
+```
+
+This creates `~/.claude/scholar-monitor/` with:
+- `sources.json` — 22 starter sources (ASR, AJS, Demography, arXiv cs.CL, etc.), three enabled by default (ASR, arxiv-llm, NHB) so first-run digests stay small
+- `state.json` — empty cursor file (per-source last-seen watermarks)
+- `config.json` — delivery channel settings (`chmod 0600`)
+- `archive.ndjson` — append-only digest history
+
+You're done with setup; the skill will fetch into the file channel immediately. Phone push requires a few more steps below.
+
+### Step 2: Pick the journals and preprint queries you care about
+
+```
+/scholar-monitor list
+```
+
+Shows all 22 sources with their enabled/disabled state, cadence (how often to check), and next-due date. To enable more journals or change cadence, edit `~/.claude/scholar-monitor/sources.json` directly — it's a plain JSON registry. See `references/registry-guide.md` in this repo for the ISSN lookup table (covers 28 sociology/demography/interdisciplinary journals) and the arXiv category list.
+
+To add a custom journal or arXiv query without editing JSON by hand:
+
+```
+/scholar-monitor add
+```
+
+which prompts you for backend type, identifier (ISSN for journals, arXiv query string for preprints), category label, and cadence.
+
+### Step 3: Test the fetch pipeline (no phone push yet)
+
+```
+/scholar-monitor preview          # dry-run: show what would fetch, no network, no state change
+/scholar-monitor arxiv-llm         # real fetch from one source, writes output/monitor/feed-YYYY-MM-DD.md
+```
+
+Open the feed file. If it has paper entries with titles, authors, dates, and 2–3-sentence summaries, the fetcher works. Now wire up a push channel.
+
+### Step 4a: Phone push via **ntfy.sh** (recommended — zero auth, 5 minutes)
+
+ntfy is a free push service with no accounts. You pick a secret topic string, subscribe to it on your phone, and `scholar-monitor` POSTs notifications to that topic.
+
+**On your phone:**
+
+1. Install the **ntfy** app (iOS App Store / Google Play — published by Philipp Heckel).
+2. Open the app → tap **+** → paste a random topic string (see next step) → **Subscribe**.
+
+**On your computer:**
+
+```bash
+# Generate an unguessable topic. Anyone who knows this string can push to your
+# phone, so save it somewhere like a password manager, and treat it as a secret.
+openssl rand -hex 8
+# → e.g., b4ab8afe7e06d2ef
+```
+
+Subscribe to that same string on your phone (the **+** step above), then:
+
+```
+/scholar-monitor configure delivery
+```
+
+When prompted, paste the topic string. You can skip the Telegram and email prompts. That's it — next time `/scholar-monitor` fetches papers, you'll get a push notification within seconds of the run.
+
+**Test push:**
+
+```
+/scholar-monitor arxiv-llm
+```
+
+Your phone should buzz with a notification titled "scholar-monitor — N new papers." If it doesn't, check: (1) the ntfy app has the exact topic string subscribed, (2) iOS/Android notification permissions are enabled for the ntfy app, (3) the topic in `~/.claude/scholar-monitor/config.json` matches exactly.
+
+**ntfy free tier limits:** 250 messages/day per IP — more than enough for a daily digest. For higher volume or custom domains, see [ntfy.sh self-hosting](https://docs.ntfy.sh/install/).
+
+### Step 4b: Phone push via **Telegram** (alternative — more setup, two-way support)
+
+Telegram delivery is more work to set up but gives you a two-way chat channel (you can reply to digests and, if you use other Claude Code Telegram plugins, interact with Claude remotely).
+
+**Prerequisites:**
+
+1. A Telegram account + the Telegram mobile app installed.
+2. The Claude Code Telegram MCP plugin installed in your Claude Code environment (this is separate from scholar-monitor).
+
+**Setup:**
+
+1. **Create a bot.** In Telegram, message `@BotFather`, run `/newbot`, name your bot, and save the token (`123456:ABC-DEF...`).
+2. **Configure the plugin.** In a Claude Code session, run the configuration command for your Telegram plugin (typically `/telegram:configure`) and paste the bot token when prompted.
+3. **Find your chat ID.** Message your bot once from your phone. The plugin's allowlist management command (typically `/telegram:access`) will show the pending pairing with your `chat_id`. Approve it.
+4. **Wire it into scholar-monitor.**
+   ```
+   /scholar-monitor configure delivery
+   ```
+   When prompted, paste the `chat_id` from step 3.
+
+**Test:**
+
+```
+/scholar-monitor arxiv-llm
+```
+
+You'll receive a Telegram message from your bot with the digest summary in the message body and the full `feed-YYYY-MM-DD.md` attached as a document.
+
+**Heads-up:** the Telegram MCP plugin is a moving part — if it disconnects mid-session, scholar-monitor logs the failure and continues (the file channel and knowledge-graph ingest still run). For headless `/loop` scheduling that doesn't depend on a running MCP plugin, ntfy is more reliable.
+
+### Step 4c (optional): Email via SMTP
+
+Heaviest setup of the three. Requires SMTP credentials (Gmail App Password recommended; see [Google's guide](https://support.google.com/accounts/answer/185833)).
+
+```
+/scholar-monitor configure delivery
+```
+
+When prompted, provide SMTP host (`smtp.gmail.com`), port (`587`), from/to addresses, and the env-var name holding the password (default `SMTP_PASS`). Then in your shell or `.env`:
+
+```bash
+export SMTP_PASS="your-16-char-app-password"
+```
+
+The password lives only in the env var, never in `config.json`.
+
+### Step 5: Schedule with `/loop`
+
+Once a push channel is working, automate:
+
+```
+/loop 24h /scholar-monitor arxiv-llm     # daily arXiv LLM digest
+/loop 7d  /scholar-monitor                # weekly sweep of every enabled source
+/loop 1h  /scholar-monitor                # harmless — per-source cadence_days drops redundant ticks
+```
+
+The `cadence_days` filter in each source ensures idempotency: running `/loop 1h` with a source on a weekly cadence produces **one** digest per week, not 168. Per-source failures (network errors) don't advance that source's cursor, so the next tick retries cleanly.
+
+### Verifying the setup
+
+```
+/scholar-monitor status
+```
+
+Prints a dashboard: enabled source count, archive size, which delivery channels are configured, and any overdue sources. A healthy setup shows at least one channel beyond `file`, zero errors, and sources with next-due dates in the near future.
+
+If something's off, `~/.claude/scholar-monitor/logs/deliver-YYYY-MM-DD.log` captures per-channel delivery attempts — that's where ntfy HTTP errors or SMTP auth failures land.
+
+
+
 ## Usage Examples
 
 ```
