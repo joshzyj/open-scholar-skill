@@ -28,7 +28,9 @@ Open-scholar-skill is designed to **assist** researchers, not replace them. If y
 
 This open-source release intentionally **does not include** `scholar-full-paper` (an end-to-end orchestrator that chains all skills into a single command), `scholar-grant`, `scholar-teach`, `scholar-book`, or `scholar-presentation`. The first four were removed to discourage fully automated paper generation without meaningful researcher involvement. `scholar-presentation` was removed due to copyright concerns with consulting-firm slide aesthetics.
 
-However, the 31 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
+It **does** include `scholar-auto-research`, a stable, deterministic pipeline that chains the modular skills from idea or data to a verified manuscript — but **this is not autonomous research, and we do not endorse using it as such.** It differs from the orchestrators above in three ways that are designed to keep you in control: (1) a mandatory **human-in-the-loop mode** that stops for your explicit approval between phases (`set-mode human-in-loop`); (2) deterministic, auditable gates at every phase — results locks, citation-metadata verification, four-agent manuscript verification, and a journal-calibrated quality review — that surface what to inspect rather than hide it; and (3) a hard rule that the specialist skills (`scholar-write`, `scholar-citation`, `scholar-respond`, …) do the substantive scholarly work, so no helper script silently becomes the author of your argument, literature synthesis, or citations. **You remain the author of the research question, the argument, and every interpretation.** Run it in autonomous mode only when you will independently verify every output it produces — the same standard as point 2 in [Ethical Use](#ethical-use-of-ai-in-academic-research) above. When in doubt, run the skills individually and stay in the loop at every step.
+
+The 32 modular skills provided here are the same building blocks. You are encouraged to build your own workflow by chaining skills in the order that fits your research process. A typical pipeline looks like:
 
 ```
 /scholar-init (set up project + data safety)
@@ -87,7 +89,13 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (31 skills + 1 utility = 32 total)
+## Skills Overview (32 skills + 1 utility = 33 total)
+
+### Research Pipeline (Orchestrator)
+
+| Skill | Invoke | Purpose |
+|-------|--------|---------|
+| `scholar-auto-research` | `/scholar-auto-research` | Stable, deterministic 21-phase pipeline from idea or data to a verified manuscript, citations, replication package, and md/docx/tex/pdf outputs. **Not autonomous research** — ships a mandatory human-in-the-loop mode that pauses for your approval between phases, and gates every phase with deterministic checks (results lock, citation-metadata verification, four-agent manuscript verification, journal-calibrated quality review). Specialist skills do the substantive work; helper scripts only package and verify. Self-contained: bundles its own gate scripts under the skill directory. |
 
 ### Core Pipeline Skills
 

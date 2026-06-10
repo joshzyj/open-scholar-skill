@@ -1,0 +1,189 @@
+{
+  "$schema_version": "1.0.0",
+  "description": "Known weighted-survey datasets. Used by survey-weights-check.sh (G1). When data/data-status.json.dataset_id matches dataset_id below AND design-blueprint.json.measurement_strategy.weights_policy ∈ {apply_published_weights, apply_constructed_weights}, the analysis script must invoke svyglm/svydesign/lm-with-weights/feols-with-weights. Adding a dataset is a JSON edit — no code change required.",
+  "datasets": [
+    {
+      "dataset_id": "cfps",
+      "long_name": "China Family Panel Studies",
+      "weight_var_examples": ["rswt_natcs20", "rswt_natpn20", "fswt_nat20"],
+      "stratum_var": "subsample",
+      "psu_var": "primary_sampling_unit",
+      "example_svydesign": "svydesign(ids = ~psu, strata = ~stratum, weights = ~rswt_natcs20, data = df, nest = TRUE)",
+      "notes": "Wave-specific weight variable name; use respondent-level cross-section weight for cross-section, household-level for HH analysis."
+    },
+    {
+      "dataset_id": "gss",
+      "long_name": "General Social Survey",
+      "weight_var_examples": ["wtssall", "wtss", "wtcombnr"],
+      "stratum_var": "vstrat",
+      "psu_var": "vpsu",
+      "example_svydesign": "svydesign(ids = ~vpsu, strata = ~vstrat, weights = ~wtssall, data = df, nest = TRUE)",
+      "notes": "wtssall recommended for cross-year analyses; wtss for single-year. Stratum/PSU available 2002+; pre-2002 requires srs approximation."
+    },
+    {
+      "dataset_id": "acs",
+      "long_name": "American Community Survey",
+      "weight_var_examples": ["pwgtp", "wgtp"],
+      "stratum_var": null,
+      "psu_var": null,
+      "replicate_weight_pattern": "pwgtp[1-80]",
+      "example_svydesign": "svrepdesign(weights = ~pwgtp, repweights = paste0('pwgtp', 1:80), type = 'JK1', scale = 4/80, rscales = rep(1, 80), data = df)",
+      "notes": "Use replicate-weight design (Jackknife 1); 80 replicate weights pwgtp1..pwgtp80."
+    },
+    {
+      "dataset_id": "cps",
+      "long_name": "Current Population Survey (CPS-MORG / ASEC)",
+      "weight_var_examples": ["earnwt", "marsupwt", "asecwt", "wtfinl"],
+      "stratum_var": "gestfips",
+      "psu_var": "hrhhid",
+      "example_svydesign": "svydesign(ids = ~hrhhid, strata = ~gestfips, weights = ~earnwt, data = df, nest = TRUE)",
+      "notes": "Different weight per rotation (earnwt for MORG earnings, asecwt for ASEC supplement, marsupwt for March supplement)."
+    },
+    {
+      "dataset_id": "ess",
+      "long_name": "European Social Survey",
+      "weight_var_examples": ["pspwght", "pweight", "anweight"],
+      "stratum_var": "stratum",
+      "psu_var": "psu",
+      "example_svydesign": "svydesign(ids = ~psu, strata = ~stratum, weights = ~anweight, data = df, nest = TRUE)",
+      "notes": "anweight is the analysis weight (post-stratification × design × population size). Use for cross-country comparisons."
+    },
+    {
+      "dataset_id": "wvs",
+      "long_name": "World Values Survey",
+      "weight_var_examples": ["w_weight", "s017", "pwght"],
+      "stratum_var": null,
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, weights = ~w_weight, data = df)",
+      "notes": "Country-level post-stratification weights; PSU/stratum often absent in public files."
+    },
+    {
+      "dataset_id": "evs",
+      "long_name": "European Values Study",
+      "weight_var_examples": ["weight_g", "weight_d"],
+      "stratum_var": null,
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, weights = ~weight_g, data = df)",
+      "notes": "weight_g is the global weight (post-stratification); weight_d is design weight."
+    },
+    {
+      "dataset_id": "pisa",
+      "long_name": "OECD Programme for International Student Assessment",
+      "weight_var_examples": ["w_fstuwt"],
+      "stratum_var": "stratum",
+      "psu_var": "schoolid",
+      "replicate_weight_pattern": "w_fstr[1-80]",
+      "example_svydesign": "svrepdesign(weights = ~w_fstuwt, repweights = paste0('w_fstr', 1:80), type = 'Fay', rho = 0.5, data = df)",
+      "notes": "Use Fay BRR replicates (rho=0.5) per PISA technical manual."
+    },
+    {
+      "dataset_id": "timss",
+      "long_name": "Trends in International Mathematics and Science Study",
+      "weight_var_examples": ["totwgt", "houwgt", "tchwgt"],
+      "stratum_var": "jkzone",
+      "psu_var": "jkrep",
+      "example_svydesign": "svrepdesign(weights = ~totwgt, repweights = paste0('jkrep', 1:75), type = 'JK1', data = df)",
+      "notes": "Use jackknife replicate weights for variance estimation."
+    },
+    {
+      "dataset_id": "dhs",
+      "long_name": "Demographic and Health Surveys",
+      "weight_var_examples": ["v005", "hv005", "mv005"],
+      "stratum_var": "v022",
+      "psu_var": "v021",
+      "example_svydesign": "svydesign(ids = ~v021, strata = ~v022, weights = ~I(v005/1000000), data = df, nest = TRUE)",
+      "notes": "Weights stored ×1,000,000; divide by 1e6 before use. v005=women's, hv005=households, mv005=men's."
+    },
+    {
+      "dataset_id": "nhanes",
+      "long_name": "National Health and Nutrition Examination Survey",
+      "weight_var_examples": ["wtmec2yr", "wtint2yr"],
+      "stratum_var": "sdmvstra",
+      "psu_var": "sdmvpsu",
+      "example_svydesign": "svydesign(ids = ~sdmvpsu, strata = ~sdmvstra, weights = ~wtmec2yr, data = df, nest = TRUE)",
+      "notes": "wtmec for MEC-examined sample; wtint for interviewed sample. Multiply weights when combining cycles (2-yr → 4-yr → etc.)."
+    },
+    {
+      "dataset_id": "nsch",
+      "long_name": "National Survey of Children's Health",
+      "weight_var_examples": ["fwc"],
+      "stratum_var": "stratum",
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, strata = ~stratum, weights = ~fwc, data = df)",
+      "notes": "fwc is the child-level final weight. Stratum used for variance estimation."
+    },
+    {
+      "dataset_id": "brfss",
+      "long_name": "Behavioral Risk Factor Surveillance System",
+      "weight_var_examples": ["x_llcpwt", "x_strwt", "x_rawrake"],
+      "stratum_var": "x_ststr",
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, strata = ~x_ststr, weights = ~x_llcpwt, data = df)",
+      "notes": "x_llcpwt is the final iterative-raking weight."
+    },
+    {
+      "dataset_id": "hrs",
+      "long_name": "Health and Retirement Study",
+      "weight_var_examples": ["pwgtr", "hwgthh", "rwgtr"],
+      "stratum_var": "stratum",
+      "psu_var": "secu",
+      "example_svydesign": "svydesign(ids = ~secu, strata = ~stratum, weights = ~pwgtr, data = df, nest = TRUE)",
+      "notes": "pwgtr = person-level respondent weight; hwgthh = household-level. Wave-specific."
+    },
+    {
+      "dataset_id": "meps",
+      "long_name": "Medical Expenditure Panel Survey",
+      "weight_var_examples": ["perwt", "fmwt"],
+      "stratum_var": "varstr",
+      "psu_var": "varpsu",
+      "example_svydesign": "svydesign(ids = ~varpsu, strata = ~varstr, weights = ~perwt, data = df, nest = TRUE)",
+      "notes": "perwt = person-level final weight."
+    },
+    {
+      "dataset_id": "addhealth",
+      "long_name": "National Longitudinal Study of Adolescent to Adult Health",
+      "weight_var_examples": ["gswgt1", "gswgt2", "gswgt3", "gswgt4", "gswgt5"],
+      "stratum_var": "region",
+      "psu_var": "psuscid",
+      "example_svydesign": "svydesign(ids = ~psuscid, strata = ~region, weights = ~gswgt5, data = df, nest = TRUE)",
+      "notes": "Wave-specific grand-sample weights; gswgt5 for Wave V cross-section."
+    },
+    {
+      "dataset_id": "eurobarometer",
+      "long_name": "Eurobarometer",
+      "weight_var_examples": ["w1", "w3", "wnation"],
+      "stratum_var": null,
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, weights = ~w1, data = df)",
+      "notes": "w1 = country-level post-stratification weight; wnation = combined cross-EU weight."
+    },
+    {
+      "dataset_id": "afrobarometer",
+      "long_name": "Afrobarometer",
+      "weight_var_examples": ["withinwt", "combinwt"],
+      "stratum_var": null,
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, weights = ~withinwt, data = df)",
+      "notes": "withinwt = country-level; combinwt = cross-country."
+    },
+    {
+      "dataset_id": "ipums-usa",
+      "long_name": "IPUMS USA / IPUMS-International extracts",
+      "weight_var_examples": ["perwt", "hhwt"],
+      "stratum_var": "strata",
+      "psu_var": "cluster",
+      "replicate_weight_pattern": "repwtp[1-80]",
+      "example_svydesign": "svrepdesign(weights = ~perwt, repweights = paste0('repwtp', 1:80), type = 'JK1', scale = 4/80, rscales = rep(1, 80), data = df)",
+      "notes": "Use replicate weights when extracting from ACS samples; otherwise strata/cluster pair."
+    },
+    {
+      "dataset_id": "share",
+      "long_name": "Survey of Health, Ageing and Retirement in Europe",
+      "weight_var_examples": ["cciw_w8", "ciw_w8"],
+      "stratum_var": null,
+      "psu_var": null,
+      "example_svydesign": "svydesign(ids = ~1, weights = ~cciw_w8, data = df)",
+      "notes": "Wave-specific cross-sectional individual weight (cciw_wN) and longitudinal weight (ciw_wN)."
+    }
+  ]
+}

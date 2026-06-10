@@ -1,0 +1,1017 @@
+{
+  "schema_version": "1.1.0",
+  "default_terminal_phase": "20",
+  "phases": [
+    {
+      "id": "0",
+      "name": "Safety",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "user_request"
+      ],
+      "required_outputs": [
+        "safety/safety-status.json"
+      ],
+      "gate": "auto-research-verify.sh 0",
+      "next": "1",
+      "hash_dependencies": [],
+      "pass_schema": [
+        "safety_status",
+        "files_scanned",
+        "no_data_declared",
+        "high_risk_unresolved",
+        "status_by_file"
+      ],
+      "non_overridable_failures": [
+        "missing_safety_status",
+        "high_risk_unresolved"
+      ]
+    },
+    {
+      "id": "1",
+      "name": "Research Question",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "safety/safety-status.json"
+      ],
+      "required_outputs": [
+        "idea/candidate-rqs.json",
+        "idea/rq-evaluation-panel.json",
+        "idea/journal-fit.json",
+        "idea/rq-selection-rationale.md",
+        "idea/research-question.json",
+        "idea/research-question.md"
+      ],
+      "gate": "auto-research-verify.sh 1",
+      "next": "2",
+      "hash_dependencies": [
+        "0"
+      ],
+      "pass_schema": [
+        "verdict",
+        "engine",
+        "input_mode",
+        "selected_rq_id",
+        "selected_rq",
+        "x",
+        "y",
+        "directional_relation",
+        "mechanism",
+        "confounders",
+        "scope",
+        "target_journal",
+        "paper_type",
+        "method_orientation",
+        "recommended_dataset",
+        "claim_strength",
+        "selection_evidence",
+        "ready_for_phase_2"
+      ]
+    },
+    {
+      "id": "2",
+      "name": "Literature and Theory",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "idea/research-question.json",
+        "idea/journal-fit.json"
+      ],
+      "required_outputs": [
+        "literature/lit-theory.md",
+        "literature/literature-coverage-matrix.json",
+        "literature/references.bib",
+        "literature/lit-theory-manifest.json"
+      ],
+      "gate": "auto-research-verify.sh 2",
+      "next": "3",
+      "hash_dependencies": [
+        "1"
+      ],
+      "pass_schema": [
+        "verdict",
+        "engine_handoff",
+        "coverage_matrix",
+        "source_role_matrix",
+        "mechanism_chain",
+        "hypotheses",
+        "must_cite_coverage",
+        "journal_calibration",
+        "ready_for_phase_3"
+      ]
+    },
+    {
+      "id": "3",
+      "name": "Design",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "idea/research-question.json",
+        "idea/journal-fit.json",
+        "literature/lit-theory.md",
+        "literature/lit-theory-manifest.json",
+        "literature/literature-coverage-matrix.json"
+      ],
+      "required_outputs": [
+        "design/design-blueprint.md",
+        "design/model-specs.json",
+        "design/identification-strategy.json",
+        "design/design-manifest.json",
+        "design/design-evaluation.json",
+        "design/design-evaluation.md",
+        "design/design-revision-log.json",
+        "design/design-revision-log.md"
+      ],
+      "gate": "auto-research-verify.sh 3",
+      "next": "4",
+      "hash_dependencies": [
+        "1",
+        "2"
+      ],
+      "pass_schema": [
+        "design_type",
+        "claim_strength",
+        "estimand",
+        "identification_strategy",
+        "assumptions",
+        "measures",
+        "outcome_mechanism_alignment",
+        "journal_method_bar",
+        "hypothesis_model_coverage",
+        "power_or_feasibility_assessment",
+        "causal_gate",
+        "threats",
+        "robustness_plan",
+        "claim_continuity",
+        "mechanism_result_matrix",
+        "robustness_claim_matrix",
+        "limitation_scope_matrix",
+        "model_specs",
+        "design_manifest",
+        "design_evaluation",
+        "design_revision_log"
+      ]
+    },
+    {
+      "id": "4",
+      "name": "Data and Measurement",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "safety/safety-status.json",
+        "design/design-blueprint.md",
+        "design/design-manifest.json",
+        "design/identification-strategy.json",
+        "design/model-specs.json"
+      ],
+      "required_outputs": [
+        "data/variable-dictionary.csv",
+        "data/data-status.json",
+        "data/measurement-plan.md",
+        "data/data-measurement-manifest.json"
+      ],
+      "gate": "auto-research-verify.sh 4",
+      "next": "5",
+      "hash_dependencies": [
+        "3"
+      ],
+      "pass_schema": [
+        "data_status",
+        "access_status",
+        "irb_status",
+        "scholar_data_engine",
+        "dataset_fit",
+        "data_provenance",
+        "safety_provenance",
+        "variable_dictionary",
+        "design_measure_coverage",
+        "model_variable_coverage",
+        "display_semantics",
+        "codebook_validation",
+        "dataset_design_review",
+        "outcome_family_screen",
+        "post_treatment_flags",
+        "measurement_validity",
+        "missing_data_plan",
+        "data_security",
+        "sharing_constraints",
+        "data_measurement_manifest"
+      ]
+    },
+    {
+      "id": "5",
+      "name": "Analysis Plan",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "design/design-manifest.json",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/data-status.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json",
+        "data/measurement-plan.md"
+      ],
+      "required_outputs": [
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "analysis/analysis-plan-manifest.json"
+      ],
+      "gate": "auto-research-verify.sh 5",
+      "next": "6",
+      "hash_dependencies": [
+        "3",
+        "4"
+      ],
+      "pass_schema": [
+        "analysis_planning_engine",
+        "planned_models",
+        "hypothesis_spec_coverage",
+        "spec_registry",
+        "variable_coverage",
+        "robustness_coverage",
+        "missing_data_alignment",
+        "dataset_design_plan",
+        "outcome_model_ladder",
+        "missingness_sensitivity_plan",
+        "scripts_inventory",
+        "script_dag",
+        "test_inventory",
+        "source_hashes",
+        "output_hashes",
+        "no_execution_yet",
+        "analysis_plan_manifest"
+      ]
+    },
+    {
+      "id": "6",
+      "name": "Pre-Execution Review",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "required_outputs": [
+        "review/pre-execution-review.json",
+        "review/pre-execution-review.md",
+        "review/pre-execution-fix-log.json",
+        "review/pre-execution-fix-log.md",
+        "review/pre-execution-rereview.json"
+      ],
+      "gate": "auto-research-verify.sh 6",
+      "next": "7",
+      "hash_dependencies": [
+        "5"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "review_engine",
+        "source_hashes",
+        "inventory_hash",
+        "multiagent_reviewers",
+        "reviewed_scripts",
+        "reviewed_specs",
+        "reviewed_tests",
+        "reviewed_script_dag",
+        "reviewed_spec_coverage",
+        "reviewed_robustness_coverage",
+        "reviewed_missing_data_alignment",
+        "reviewed_no_execution_boundary",
+        "blocking_findings",
+        "unresolved_critical_count",
+        "fix_log",
+        "rereview",
+        "ready_for_phase_7"
+      ]
+    },
+    {
+      "id": "7",
+      "name": "Analysis Premortem",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/measurement-plan.md",
+        "data/variable-dictionary.csv",
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "review/pre-execution-review.json",
+        "review/pre-execution-fix-log.json",
+        "review/pre-execution-rereview.json"
+      ],
+      "required_outputs": [
+        "review/analysis-premortem.json",
+        "review/analysis-premortem.md",
+        "review/analysis-premortem-fix-log.json"
+      ],
+      "gate": "auto-research-verify.sh 7",
+      "next": "8",
+      "hash_dependencies": [
+        "5",
+        "6"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "premortem_engine",
+        "iteration",
+        "source_hashes",
+        "reviewer_provenance",
+        "reviewers",
+        "traffic_light_summary",
+        "null_falsification_table",
+        "reporting_depth_checklist",
+        "reviewed_scripts",
+        "reviewed_specs",
+        "reviewed_tests",
+        "risk_register",
+        "blocking_items_resolved",
+        "accepted_limitations",
+        "decision_rules",
+        "phase8_handoff",
+        "go_no_go",
+        "ready_for_phase_8"
+      ]
+    },
+    {
+      "id": "8",
+      "name": "Execute Analysis",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "review/analysis-premortem.json",
+        "review/analysis-premortem-fix-log.json"
+      ],
+      "required_outputs": [
+        "analysis/execution-report.json",
+        "tables/results-registry.csv",
+        "figures/figure-registry.csv"
+      ],
+      "gate": "auto-research-verify.sh 8",
+      "next": "9",
+      "hash_dependencies": [
+        "5",
+        "6",
+        "7"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "execution_engine",
+        "run_context",
+        "source_hashes",
+        "phase7_source_hash_check",
+        "phase7_go",
+        "command_trace",
+        "executed_scripts",
+        "exit_codes",
+        "tests_run",
+        "halt_checks",
+        "expected_outputs",
+        "results_registry",
+        "figure_registry",
+        "analysis_stack",
+        "artifact_manifest",
+        "ready_for_phase_9"
+      ]
+    },
+    {
+      "id": "9",
+      "name": "Post-Execution Review",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "analysis/spec-registry.csv",
+        "review/analysis-premortem.json",
+        "analysis/execution-report.json",
+        "tables/results-registry.csv",
+        "figures/figure-registry.csv"
+      ],
+      "required_outputs": [
+        "review/post-execution-review.json",
+        "review/post-execution-review.md",
+        "review/post-execution-fix-log.json"
+      ],
+      "gate": "auto-research-verify.sh 9",
+      "next": "10",
+      "hash_dependencies": [
+        "8"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "decision",
+        "review_engine",
+        "source_hashes",
+        "phase7_constraint_carryforward",
+        "raw_output_verification",
+        "reviewer_provenance",
+        "reviewers",
+        "reviewed_specs",
+        "reviewed_figures",
+        "sample_integrity",
+        "result_interpretation",
+        "robustness_assessment",
+        "robustness_matrix",
+        "unexpected_results",
+        "claim_constraints",
+        "critical_count",
+        "fix_status",
+        "route_back_phase",
+        "ready_for_phase_10"
+      ]
+    },
+    {
+      "id": "10",
+      "name": "Runtime Sanity",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "analysis/spec-registry.csv",
+        "analysis/execution-report.json",
+        "tables/results-registry.csv",
+        "figures/figure-registry.csv",
+        "review/post-execution-review.json",
+        "review/post-execution-fix-log.json"
+      ],
+      "required_outputs": [
+        "verify/runtime-sanity.json",
+        "verify/runtime-sanity.md"
+      ],
+      "gate": "auto-research-verify.sh 10",
+      "next": "11",
+      "hash_dependencies": [
+        "8",
+        "9"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "decision",
+        "runtime_engine",
+        "source_hashes",
+        "phase9_status",
+        "phase9_constraint_carryforward",
+        "plausibility",
+        "clean_room",
+        "invariants",
+        "pap_drift",
+        "artifact_inventory",
+        "lock_candidate_reconciliation",
+        "critical_count",
+        "unresolved_blocking_count",
+        "route_back_phase",
+        "ready_for_phase_11"
+      ]
+    },
+    {
+      "id": "11",
+      "name": "Results Lock",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "verify/runtime-sanity.json",
+        "verify/runtime-sanity.md",
+        "analysis/execution-report.json",
+        "tables/results-registry.csv",
+        "figures/figure-registry.csv",
+        "review/post-execution-review.json"
+      ],
+      "required_outputs": [
+        "results-locked/LATEST.txt",
+        "results-locked/manifest.json",
+        "verify/stage1-verify.json"
+      ],
+      "gate": "auto-research-verify.sh 11",
+      "next": "12",
+      "hash_dependencies": [
+        "8",
+        "9",
+        "10"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "lock_engine",
+        "lock_id",
+        "source_hashes",
+        "manifest_sha256",
+        "latest_matches",
+        "locked_artifacts",
+        "stage1_verdict",
+        "input_manifest_sha256",
+        "checked_count",
+        "scanner_provenance",
+        "ready_for_phase_12"
+      ]
+    },
+    {
+      "id": "12",
+      "name": "Manuscript Blueprint",
+      "route": "default",
+      "trigger": "post_results_lock",
+      "required_inputs": [
+        "results-locked/manifest.json",
+        "results-locked/LATEST.txt",
+        "verify/stage1-verify.json",
+        "idea/research-question.json",
+        "idea/journal-fit.json",
+        "literature/lit-theory.md",
+        "design/design-blueprint.md",
+        "design/identification-strategy.json",
+        "analysis/analysis-plan.md",
+        "review/post-execution-review.json",
+        "tables/results-registry.csv",
+        "figures/figure-registry.csv"
+      ],
+      "required_outputs": [
+        "manuscript/manuscript-blueprint.json",
+        "manuscript/manuscript-blueprint.md"
+      ],
+      "gate": "auto-research-verify.sh 12",
+      "next": "13",
+      "hash_dependencies": [
+        "1",
+        "2",
+        "3",
+        "5",
+        "9",
+        "11"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "blueprint_engine",
+        "lock_id",
+        "lock_manifest_sha256",
+        "source_hashes",
+        "paper_type",
+        "target_journal",
+        "paper_claim",
+        "claim_strength",
+        "publication_readiness",
+        "contribution_stack",
+        "result_hierarchy",
+        "hypothesis_resolution",
+        "mechanism_integration_plan",
+        "journal_structure",
+        "display_architecture",
+        "section_obligations",
+        "appendix_policy",
+        "required_disclosures",
+        "forbidden_moves",
+        "table_figure_narrative_map",
+        "abstract_alignment",
+        "discussion_alignment",
+        "null_result_framing",
+        "route_back_phase",
+        "ready_for_phase_13"
+      ]
+    },
+    {
+      "id": "13",
+      "name": "Draft Manuscript",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "manuscript/manuscript-blueprint.json",
+        "results-locked/manifest.json",
+        "results-locked/LATEST.txt",
+        "verify/stage1-verify.json",
+        "literature/references.bib",
+        "literature/lit-theory.md",
+        "idea/research-question.json",
+        "idea/journal-fit.json",
+        "design/design-blueprint.md",
+        "data/variable-dictionary.csv",
+        "analysis/analysis-plan.md",
+        "review/post-execution-review.json"
+      ],
+      "required_outputs": [
+        "manuscript/manuscript-draft.md",
+        "manuscript/draft-manifest.json",
+        "manuscript/drafting-plan.json",
+        "manuscript/draft-self-critique.json",
+        "manuscript/polish-report.json",
+        "manuscript/journal-spec.json"
+      ],
+      "gate": "auto-research-verify.sh 13",
+      "next": "14",
+      "hash_dependencies": [
+        "1",
+        "2",
+        "3",
+        "5",
+        "9",
+        "11",
+        "12"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "drafting_engine",
+        "polish_report",
+        "blueprint",
+        "drafting_plan",
+        "self_critique",
+        "journal_spec",
+        "lock_id",
+        "selected_manuscript_hash",
+        "lock_manifest_sha256",
+        "source_hashes",
+        "section_word_budget",
+        "section_word_counts",
+        "section_prose_word_counts",
+        "numeric_reporting_policy",
+        "budget_compliance",
+        "reader_facing_language",
+        "draft_quality_gate",
+        "locked_result_coverage",
+        "display_evidence",
+        "locked_result_claims",
+        "citation_plan",
+        "claim_discipline",
+        "blueprint_execution",
+        "content_alignment",
+        "ready_for_phase_14"
+      ]
+    },
+    {
+      "id": "14",
+      "name": "Verify Manuscript",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "manuscript/manuscript-blueprint.json",
+        "manuscript/manuscript-draft.md",
+        "manuscript/draft-manifest.json",
+        "results-locked/manifest.json",
+        "results-locked/LATEST.txt"
+      ],
+      "required_outputs": [
+        "verify/manuscript-verification.json",
+        "verify/manuscript-verification.md"
+      ],
+      "gate": "auto-research-verify.sh 14",
+      "next": "15",
+      "hash_dependencies": [
+        "11",
+        "13"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "verification_engine",
+        "lock_id",
+        "lock_manifest_sha256",
+        "source_hashes",
+        "blueprint_hashes",
+        "agent_reports",
+        "agents",
+        "input_artifacts_read",
+        "scanned",
+        "critical_count",
+        "selected_manuscript_hash",
+        "stage_1_outputs_to_manuscript",
+        "blueprint_to_manuscript",
+        "stage_2_manuscript_to_prose",
+        "lock_coverage",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "ready_for_phase_15"
+      ]
+    },
+    {
+      "id": "15",
+      "name": "Citation and Claim Support",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "manuscript/manuscript-draft.md",
+        "manuscript/draft-manifest.json",
+        "literature/references.bib",
+        "verify/manuscript-verification.json"
+      ],
+      "required_outputs": [
+        "citation/citation-audit.json",
+        "citation/claim-source-map.json",
+        "citation/references.bib"
+      ],
+      "gate": "auto-research-verify.sh 15",
+      "next": "16",
+      "hash_dependencies": [
+        "2",
+        "13",
+        "14"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "citation_engine",
+        "source_hashes",
+        "selected_manuscript_hash",
+        "citation_inventory",
+        "bibliography_provenance",
+        "verified_references",
+        "claim_specificity",
+        "unresolved_citation_count",
+        "fabricated_reference_count",
+        "unsupported_claims",
+        "contradicted_claims",
+        "locator_missing",
+        "retraction_check",
+        "claim_source_map",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "ready_for_phase_16"
+      ]
+    },
+    {
+      "id": "16",
+      "name": "Ethics and Open Science",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "safety/safety-status.json",
+        "data/data-status.json",
+        "manuscript/manuscript-draft.md",
+        "manuscript/draft-manifest.json",
+        "citation/citation-audit.json"
+      ],
+      "required_outputs": [
+        "ethics/ethics-open-science.json",
+        "ethics/ethics-open-science.md"
+      ],
+      "gate": "auto-research-verify.sh 16",
+      "next": "17",
+      "hash_dependencies": [
+        "0",
+        "4",
+        "13",
+        "15"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "source_phase",
+        "ethics_engine",
+        "open_science_engine",
+        "source_hashes",
+        "selected_manuscript_hash",
+        "critical_flags",
+        "ai_disclosure",
+        "privacy_review",
+        "irb_status",
+        "consent_status",
+        "coi_status",
+        "data_availability",
+        "open_science",
+        "authorship_credit",
+        "integrity_review",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "ready_for_phase_17"
+      ]
+    },
+    {
+      "id": "17",
+      "name": "Replication Package",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "results-locked/manifest.json",
+        "results-locked/LATEST.txt",
+        "verify/stage1-verify.json",
+        "analysis/execution-report.json",
+        "ethics/ethics-open-science.json",
+        "data/data-status.json"
+      ],
+      "required_outputs": [
+        "replication-package/README.md",
+        "replication-package/replication-report.json",
+        "replication-package/MANIFEST.json",
+        "replication-package/TEST-REPORT.md",
+        "replication-package/VERIFICATION-REPORT.md"
+      ],
+      "gate": "auto-research-verify.sh 17",
+      "next": "18",
+      "hash_dependencies": [
+        "4",
+        "8",
+        "11",
+        "16"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "source_phase",
+        "replication_engine",
+        "source_hashes",
+        "replication_mode",
+        "clean_room_verdict",
+        "reproduction_match",
+        "restricted_data_rationale",
+        "package_inventory",
+        "locked_artifact_coverage",
+        "script_coverage",
+        "data_handling",
+        "path_safety",
+        "environment",
+        "test_report",
+        "verification_report",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "ready_for_phase_18"
+      ]
+    },
+    {
+      "id": "18",
+      "name": "Manuscript Quality Gate",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "manuscript/manuscript-draft.md",
+        "manuscript/draft-manifest.json",
+        "manuscript/polish-report.json",
+        "verify/manuscript-verification.json",
+        "citation/citation-audit.json",
+        "citation/claim-source-map.json",
+        "ethics/ethics-open-science.json",
+        "replication-package/replication-report.json"
+      ],
+      "required_outputs": [
+        "quality/manuscript-quality.json",
+        "quality/manuscript-quality.md"
+      ],
+      "gate": "auto-research-verify.sh 18",
+      "next": "19",
+      "hash_dependencies": [
+        "13",
+        "14",
+        "15",
+        "16",
+        "17"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "source_phase",
+        "quality_engine",
+        "selected_manuscript_hash",
+        "source_hashes",
+        "reviewer_reports",
+        "reviewer_independence",
+        "adversarial_review_coverage",
+        "method_specialist_review",
+        "polish_audit",
+        "dimension_scores",
+        "threshold_policy",
+        "severity_confidence_matrix",
+        "decision",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "ready_for_phase_19"
+      ]
+    },
+    {
+      "id": "19",
+      "name": "Final Assembly",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "manuscript/manuscript-draft.md",
+        "manuscript/draft-manifest.json",
+        "quality/manuscript-quality.json",
+        "quality/manuscript-quality.md",
+        "citation/references.bib",
+        "citation/citation-audit.json",
+        "citation/claim-source-map.json",
+        "ethics/ethics-open-science.json",
+        "replication-package/replication-report.json"
+      ],
+      "required_outputs": [
+        "final/manuscript-final.md",
+        "final/manuscript-final.docx",
+        "final/manuscript-final.tex",
+        "final/manuscript-final.pdf",
+        "final/final-manifest.json",
+        "final/LATEST.txt"
+      ],
+      "gate": "auto-research-verify.sh 19",
+      "next": "20",
+      "hash_dependencies": [
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "source_phase",
+        "assembly_engine",
+        "version_id",
+        "created_at_utc",
+        "source_hashes",
+        "source_manuscript_path",
+        "source_manuscript_hash",
+        "output_paths",
+        "versioned_output_paths",
+        "output_hashes",
+        "versioned_output_hashes",
+        "same_source",
+        "format_generation",
+        "content_checks",
+        "reader_facing_language",
+        "citation_checks",
+        "declaration_checks",
+        "declaration_visibility",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "ready_for_phase_20"
+      ]
+    },
+    {
+      "id": "20",
+      "name": "Submission Hygiene",
+      "route": "default",
+      "trigger": "always",
+      "required_inputs": [
+        "final/manuscript-final.md",
+        "final/manuscript-final.docx",
+        "final/manuscript-final.tex",
+        "final/manuscript-final.pdf",
+        "final/final-manifest.json",
+        "final/LATEST.txt",
+        "citation/references.bib",
+        "ethics/ethics-open-science.json",
+        "replication-package/replication-report.json"
+      ],
+      "required_outputs": [
+        "submission/manuscript-submission.md",
+        "submission/manuscript-submission.docx",
+        "submission/manuscript-submission.tex",
+        "submission/manuscript-submission.pdf",
+        "submission/semantic-body-prose-read.md",
+        "submission/submission-hygiene.json",
+        "submission/submission-package-manifest.json",
+        "submission/LATEST.txt"
+      ],
+      "gate": "auto-research-verify.sh 20",
+      "next": "DONE",
+      "hash_dependencies": [
+        "19"
+      ],
+      "pass_schema": [
+        "verdict",
+        "degraded",
+        "source_phase",
+        "submission_engine",
+        "journal_profile_resolution",
+        "final_version_id",
+        "submission_version_id",
+        "created_at_utc",
+        "source_hashes",
+        "hygiene_checks",
+        "citation_rendering",
+        "path_scrub",
+        "placeholder_scan",
+        "internal_metadata_scan",
+        "reader_facing_language",
+        "semantic_body_prose_read",
+        "declaration_visibility",
+        "figure_packaging",
+        "format_generation",
+        "findings",
+        "fix_checklist",
+        "route_back_phase",
+        "pipeline_complete",
+        "package_manifest"
+      ]
+    }
+  ]
+}

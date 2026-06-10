@@ -1,0 +1,559 @@
+{
+  "aliases": {
+    "ajs": "american journal of sociology",
+    "american journal of sociology": "american journal of sociology",
+    "american sociological review": "american sociological review",
+    "asr": "american sociological review",
+    "demography": "demography",
+    "jmf": "journal of marriage and family",
+    "journal of marriage and family": "journal of marriage and family",
+    "nature computational science": "nature computational science",
+    "nature human behavior": "nature human behaviour",
+    "nature human behaviour": "nature human behaviour",
+    "pnas": "proceedings of the national academy of sciences",
+    "proceedings of the national academy of sciences": "proceedings of the national academy of sciences",
+    "science advances": "science advances",
+    "social forces": "social forces"
+  },
+  "description": "Auto-research journal profile resolution templates. The verifier and emitter both read this file so fallback_asr cannot drift into a generic article shell.",
+  "fallback_profile_key": "american sociological review",
+  "profiles": {
+    "american journal of sociology": {
+      "aliases": [
+        "ajs",
+        "american journal of sociology"
+      ],
+      "discussion_conclusion_policy": "combined_only",
+      "display_architecture": {
+        "descriptive_table_requirement": "table_1_required_for_quantitative",
+        "editable_text_tables": true,
+        "figure_placement_policy": "editorial_discretion_figures",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "editorial_discretion_end_matter",
+        "table_rendering_mode": "editable_text_manuscript",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "data and methods",
+      "name": "American Journal of Sociology",
+      "profile_source": "scholar-journal/references/profiles/ajs.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "table_1_required_for_quantitative",
+        "display_callout_style": "numbered_tables_and_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "editorial_discretion_figures",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "A_B_C",
+        "supplement_label_prefix": "Appendix",
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "editorial_discretion_end_matter",
+        "table_rendering_mode": "editable_text_manuscript",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Data and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Theory",
+        "Data and Methods",
+        "Results",
+        "Discussion"
+      ],
+      "results_before_methods": false,
+      "section_sequence": [
+        "introduction",
+        "theory",
+        "data and methods",
+        "results",
+        "discussion"
+      ],
+      "supplement_policy": "journal_optional_appendix",
+      "theory_presentation": "theory_section",
+      "total_word_budget": {
+        "max": 12000,
+        "min": 9000
+      }
+    },
+    "american sociological review": {
+      "aliases": [
+        "asr",
+        "american sociological review"
+      ],
+      "discussion_conclusion_policy": "split_required",
+      "display_architecture": {
+        "descriptive_table_requirement": "table_1_required_for_quantitative",
+        "editable_text_tables": true,
+        "figure_placement_policy": "separate_files_after_tables",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_after_references",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "data and methods",
+      "name": "American Sociological Review",
+      "profile_source": "scholar-journal/references/profiles/asr.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "table_1_required_for_quantitative",
+        "display_callout_style": "table_1_figure_1",
+        "editable_text_tables": true,
+        "figure_placement_policy": "separate_files_after_tables",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "lettered_panels",
+        "supplement_label_prefix": "Online Appendix",
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_after_references",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Data and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Theory",
+        "Data and Methods",
+        "Results",
+        "Discussion",
+        "Conclusion"
+      ],
+      "results_before_methods": false,
+      "section_sequence": [
+        "introduction",
+        "theory",
+        "data and methods",
+        "results",
+        "discussion",
+        "conclusion"
+      ],
+      "supplement_policy": "end_matter_tables_and_separate_figures",
+      "theory_presentation": "theory_section",
+      "total_word_budget": {
+        "max": 12000,
+        "min": 9000
+      }
+    },
+    "demography": {
+      "aliases": [
+        "demography"
+      ],
+      "discussion_conclusion_policy": "combined_only",
+      "display_architecture": {
+        "descriptive_table_requirement": "table_1_mandatory",
+        "editable_text_tables": true,
+        "figure_placement_policy": "manuscript_or_supplement_figures",
+        "figure_rendering_mode": "journal_standard_figure_files",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_with_online_supplement",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "data and methods",
+      "name": "Demography",
+      "profile_source": "scholar-journal/references/profiles/demography.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "table_1_mandatory",
+        "display_callout_style": "numbered_tables_and_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "manuscript_or_supplement_figures",
+        "figure_rendering_mode": "journal_standard_figure_files",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "A_B_C",
+        "supplement_label_prefix": "Online Appendix",
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_with_online_supplement",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Data and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Background",
+        "Data and Methods",
+        "Results",
+        "Discussion"
+      ],
+      "results_before_methods": false,
+      "section_sequence": [
+        "introduction",
+        "background",
+        "data and methods",
+        "results",
+        "discussion"
+      ],
+      "supplement_policy": "online_supplement_required",
+      "theory_presentation": "background_section",
+      "total_word_budget": {
+        "max": 12000,
+        "min": 8000
+      }
+    },
+    "journal of marriage and family": {
+      "aliases": [
+        "jmf",
+        "journal of marriage and family"
+      ],
+      "discussion_conclusion_policy": "split_required",
+      "display_architecture": {
+        "descriptive_table_requirement": "journal_optional",
+        "editable_text_tables": true,
+        "figure_placement_policy": "separate_files_after_tables",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_after_references",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "data and methods",
+      "name": "Journal of Marriage and Family",
+      "profile_source": "scholar-journal/references/profiles/jmf.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "journal_optional",
+        "display_callout_style": "numbered_tables_and_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "separate_files_after_tables",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "A_B_C",
+        "supplement_label_prefix": "Appendix",
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_after_references",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Data and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Background",
+        "Data and Methods",
+        "Results",
+        "Discussion",
+        "Conclusion"
+      ],
+      "results_before_methods": false,
+      "section_sequence": [
+        "introduction",
+        "background",
+        "data and methods",
+        "results",
+        "discussion",
+        "conclusion"
+      ],
+      "supplement_policy": "journal_optional_appendix",
+      "theory_presentation": "background_section",
+      "total_word_budget": {
+        "max": 9000,
+        "min": 7000
+      }
+    },
+    "nature computational science": {
+      "aliases": [
+        "nature computational science"
+      ],
+      "discussion_conclusion_policy": "combined_only",
+      "display_architecture": {
+        "descriptive_table_requirement": "none",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "methods",
+      "name": "Nature Computational Science",
+      "profile_source": "scholar-journal/references/profiles/nature-computational-science.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "none",
+        "display_callout_style": "numbered_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "lettered_panels",
+        "supplement_label_prefix": "Supplementary Information",
+        "table_notes_policy": "caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Results",
+        "Discussion",
+        "Methods"
+      ],
+      "results_before_methods": true,
+      "section_sequence": [
+        "introduction",
+        "results",
+        "discussion",
+        "methods"
+      ],
+      "supplement_policy": "reporting_summary_and_supplement_required",
+      "theory_presentation": "embedded_in_introduction",
+      "total_word_budget": {
+        "max": 9000,
+        "min": 5000
+      }
+    },
+    "nature human behaviour": {
+      "aliases": [
+        "nature human behaviour",
+        "nature human behavior"
+      ],
+      "discussion_conclusion_policy": "combined_only",
+      "display_architecture": {
+        "descriptive_table_requirement": "none",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": 6,
+        "table_notes_policy": "caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "methods",
+      "name": "Nature Human Behaviour",
+      "profile_source": "scholar-journal/references/profiles/nature-human-behaviour.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "none",
+        "display_callout_style": "numbered_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": 6,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "lettered_panels",
+        "supplement_label_prefix": "Supplementary Information",
+        "table_notes_policy": "caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Results",
+        "Discussion",
+        "Methods"
+      ],
+      "results_before_methods": true,
+      "section_sequence": [
+        "introduction",
+        "results",
+        "discussion",
+        "methods"
+      ],
+      "supplement_policy": "extended_data_and_supplementary_required",
+      "theory_presentation": "embedded_in_introduction",
+      "total_word_budget": {
+        "max": 9000,
+        "min": 5000
+      }
+    },
+    "proceedings of the national academy of sciences": {
+      "aliases": [
+        "pnas",
+        "proceedings of the national academy of sciences"
+      ],
+      "discussion_conclusion_policy": "combined_only",
+      "display_architecture": {
+        "descriptive_table_requirement": "none",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "materials and methods",
+      "name": "Proceedings of the National Academy of Sciences",
+      "profile_source": "scholar-journal/references/profiles/pnas.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "none",
+        "display_callout_style": "numbered_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "lettered_panels",
+        "supplement_label_prefix": "SI Appendix",
+        "table_notes_policy": "caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Materials and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Results",
+        "Discussion",
+        "Materials and Methods"
+      ],
+      "results_before_methods": true,
+      "section_sequence": [
+        "introduction",
+        "results",
+        "discussion",
+        "materials and methods"
+      ],
+      "supplement_policy": "si_appendix_allowed",
+      "theory_presentation": "embedded_in_introduction",
+      "total_word_budget": {
+        "max": 8000,
+        "min": 5000
+      }
+    },
+    "science advances": {
+      "aliases": [
+        "science advances"
+      ],
+      "discussion_conclusion_policy": "combined_only",
+      "display_architecture": {
+        "descriptive_table_requirement": "none",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": 7,
+        "table_notes_policy": "supplement_or_caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "materials and methods",
+      "name": "Science Advances",
+      "profile_source": "scholar-journal/references/profiles/science-advances.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "none",
+        "display_callout_style": "numbered_tables_and_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "embedded_main_text",
+        "figure_rendering_mode": "embedded_main_text_figures",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": 7,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "lettered_panels",
+        "supplement_label_prefix": "Supplementary Materials",
+        "table_notes_policy": "supplement_or_caption_notes",
+        "table_placement_policy": "embedded_main_text",
+        "table_rendering_mode": "embedded_text_tables",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Materials and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Results",
+        "Discussion",
+        "Materials and Methods"
+      ],
+      "results_before_methods": true,
+      "section_sequence": [
+        "introduction",
+        "results",
+        "discussion",
+        "materials and methods"
+      ],
+      "supplement_policy": "supplementary_materials_required",
+      "theory_presentation": "embedded_in_introduction",
+      "total_word_budget": {
+        "max": 8000,
+        "min": 4500
+      }
+    },
+    "social forces": {
+      "aliases": [
+        "social forces"
+      ],
+      "discussion_conclusion_policy": "split_required",
+      "display_architecture": {
+        "descriptive_table_requirement": "table_1_required_for_quantitative",
+        "editable_text_tables": true,
+        "figure_placement_policy": "separate_files_after_tables",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_after_references",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "methods_section_label": "data and methods",
+      "name": "Social Forces",
+      "profile_source": "scholar-journal/references/profiles/social-forces.json",
+      "resolution_display_architecture": {
+        "descriptive_table_requirement": "table_1_required_for_quantitative",
+        "display_callout_style": "numbered_tables_and_figures",
+        "editable_text_tables": true,
+        "figure_placement_policy": "separate_files_after_tables",
+        "figure_rendering_mode": "separate_figure_files",
+        "image_tables_forbidden": true,
+        "main_text_display_cap": null,
+        "main_text_figure_cap": null,
+        "main_text_table_cap": null,
+        "panel_label_style": "A_B_C",
+        "supplement_label_prefix": "Online Appendix",
+        "table_notes_policy": "below_table_notes",
+        "table_placement_policy": "end_matter_after_references",
+        "table_rendering_mode": "editable_text_end_matter",
+        "table_title_position": "above_table"
+      },
+      "resolution_methods_section_label": "Data and Methods",
+      "resolution_section_sequence": [
+        "Introduction",
+        "Literature Review and Theory",
+        "Data and Methods",
+        "Results",
+        "Discussion",
+        "Conclusion"
+      ],
+      "results_before_methods": false,
+      "section_sequence": [
+        "introduction",
+        "literature review and theory",
+        "data and methods",
+        "results",
+        "discussion",
+        "conclusion"
+      ],
+      "supplement_policy": "end_matter_tables_and_separate_figures",
+      "theory_presentation": "standalone_literature_theory",
+      "total_word_budget": {
+        "max": 12000,
+        "min": 8000
+      }
+    }
+  },
+  "schema_version": "1.0.0"
+}

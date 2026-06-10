@@ -3,6 +3,27 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.14.0] - 2026-06-10
+
+Ports `scholar-auto-research` from upstream `open-scholar-skills` (private), scrubbed of all project-specific and personal data and adapted for this fork's researcher-in-the-loop philosophy. **This release adds an end-to-end pipeline, but it is not autonomous research, and we do not endorse using it as such.** Unlike the deliberately-absent `scholar-full-paper` orchestrator, `scholar-auto-research` is *stable and deterministic*: it ships a mandatory human-in-the-loop mode that stops for explicit researcher approval between phases, gates every phase with auditable deterministic checks rather than loose advisory passes, and forbids helper scripts from substituting for the specialist skills that do the substantive scholarly work. We encourage running it in human-in-the-loop mode — and, when it is run autonomously, holding every output to the same independent-verification standard the README's [Ethical Use](README.md#ethical-use-of-ai-in-academic-research) section requires. The researcher remains the author of the question, the argument, and every interpretation.
+
+### Added
+
+**New skill: `scholar-auto-research`**
+
+- **`.claude/skills/scholar-auto-research/SKILL.md`** — a 21-phase pipeline (safety → research question → literature/theory → design → data/measurement → analysis plan → pre-execution review → premortem → execution → post-execution review → runtime sanity → results lock → blueprint → draft → verify → citation → ethics/open science → replication → quality gate → final assembly → submission hygiene). Two persistent run modes — `autonomous` and `human-in-loop` — with the Phase 0 prompt asking which; the default does not infer autonomous mode from silence.
+- **Self-contained.** Bundles its own state machine (`scripts/auto-research-state.sh`), verifier (`scripts/auto-research-verify.sh`), gate scripts (`scripts/gates/`), and contracts (`references/*-contract.md`) under the skill directory, with no dependency on the parent `scripts/gates/`.
+- **Deterministic, auditable gates** at each phase: results lock with a SHA-256 manifest, citation-metadata verification against CrossRef, rendered-references-against-bib checks, four-agent manuscript verification, and a journal-calibrated quality review — enforced by scripts, not prose.
+- **Quality over compliance** is baked in: passing contracts, hashes, and manifests is a floor, not the goal. `scholar-write` remains the prose engine and `scholar-citation` the citation engine; a phase that can only be passed by weakening scholarly quality or bypassing the intended skill is treated as a workflow failure.
+
+**Sensitive-data scrub (dev → public)**
+
+- All upstream audit-provenance comments were generalized: real (unpublished) project slugs, local filesystem paths, project-specific variable names, a contributor's real name, and the specific citations from a private manuscript were replaced with neutral "Rationale:" explanations that preserve *why* each gate exists without exposing private research. Gate logic is unchanged; the full validation suite (contract lint, the 21-phase fixture test, the publication-quality fixture test, and the four bundled smoke tests) passes.
+
+### Changed
+
+- Skill counts updated across `README.md`, `CLAUDE.md`, and `.claude-plugin/plugin.json` to 32 scholar skills + 1 utility = 33 total. README's "Note on the Full-Paper Orchestrator" now explains why `scholar-auto-research` is included despite the no-black-box-orchestrator stance.
+
 ## [5.13.0] - 2026-05-31
 
 Updates `scholar-init` from upstream `open-scholar-skills` (private), adapted for this fork's modular, researcher-in-the-loop philosophy. Two features land: an auto-managed project memory file and a scaffold-first init flow. The upstream bootstrap infrastructure (the P2-R `scholar-skill-bootstrap.sh` stanzas and the full-paper "upgrade" path) was deliberately **not** ported — it depends on orchestrator-only scripts this fork does not ship, and there is no full-paper orchestrator here.

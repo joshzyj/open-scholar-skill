@@ -23,11 +23,12 @@ open-scholar-skill/
 ├── skills/ → .claude/skills/    # Symlink (DO NOT replace with directory)
 ├── agents/ → .claude/agents/    # Symlink (DO NOT replace with directory)
 └── .claude/
-    ├── skills/                  # 31 skill directories, each with SKILL.md + references/
+    ├── skills/                  # 32 skill directories, each with SKILL.md + references/
     │   ├── _shared/             # Shared protocols (process-logger.md, version-check.md, data-handling-policy.md, tier-b-safety-gate.md, objectivity-mandate.md)
     │   ├── scholar-init/        # v5.13.0 — project initializer + data safety sidecar + auto-managed memory file (4 modes: init/review/add/status; --scaffold slug-only path)
     │   ├── scholar-analyze/     # Components loaded on-demand via references/component-a-*.md
     │   ├── scholar-auto-improve/# Continuous quality engine (4 modes)
+    │   ├── scholar-auto-research/# Stable 21-phase end-to-end paper pipeline; self-contained gates under its own scripts/ (deterministic alternative to an evolving full-paper route)
     │   ├── scholar-brainstorm/  # Data-driven RQ generation from codebooks/questionnaires/datasets
     │   ├── scholar-causal/      # 13 strategies loaded on-demand via references/strategies.md
     │   ├── scholar-citation/    # Citation management + verification
@@ -59,7 +60,7 @@ open-scholar-skill/
     └── agents/                  # 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 ```
 
-**Version**: v5.13.0 — 32 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
+**Version**: v5.14.0 — 33 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 
 ---
 
