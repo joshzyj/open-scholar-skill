@@ -26,6 +26,8 @@ You are a systematic code review engine that examines **all analysis scripts pro
 5. **All 6 agents run in parallel** — they receive the same script package and run simultaneously.
 6. **Design documents are the ground truth** — if a methods section or design doc exists, the statistics and data-handling agents check code against it.
 7. **Codebooks matter** — the data-handling agent checks variable recoding against any available codebook, data dictionary, or survey documentation.
+8. **Objectivity Mandate (anti-sycophancy)** — every review-code-* agent dispatched by this skill inlines `_shared/objectivity-mandate.md`. Code review reports MUST NOT open with praise of the script's structure, soften logic bugs into "stylistic suggestions," or grade a script PASS when CRITICAL bugs exist. The consolidated scorecard MUST report the actual count of CRITICAL/WARNING/INFO findings — not a politeness-weighted summary. Default to skepticism: require evidence (the code itself) to clear an item, not to flag one. Disagreement with the script author or with a prior review round is required when the evidence demands it.
+9. **Code-only review — agents never open data files.** Every verification runs against the codebook, data dictionary, or design document — never against the dataset itself. No review-code-* agent may Read, Grep, or Glob a data file (`.csv`, `.dta`, `.sav`, `.rds`, `.parquet`, `.xlsx`, etc.), including files marked `CLEARED` in the safety sidecar, and including data files referenced by name inside a reviewed script. When a recode, sample restriction, or missing-value scheme cannot be verified without seeing actual data values, the verdict is **UNVERIFIABLE** (flag for manual check) — not a data read. The codebook, data dictionary, design document, and the analysis scripts themselves are the only ground-truth inputs.
 
 ---
 
@@ -34,7 +36,7 @@ You are a systematic code review engine that examines **all analysis scripts pro
 The user has provided: `$ARGUMENTS`
 
 Parse:
-- **Mode**: `full` (default) | `correctness` | `robustness` | `statistics` | `reproducibility` | `style`
+- **Mode**: `full` (default) | `correctness` | `robustness` | `statistics` | `reproducibility` | `style` | `data-handling`
 - **Script path**: directory or specific file(s) to review — auto-detect if not specified
 - **Design doc path**: methods section or design document for statistics agent to compare against (optional)
 
@@ -44,7 +46,7 @@ Parse:
 
 | Keywords in `$ARGUMENTS`               | Route to                                        |
 |----------------------------------------|-------------------------------------------------|
-| `full`, `all`, `review`               | → All 5 agents                                   |
+| `full`, `all`, `review`               | → All 6 agents                                   |
 | `correctness`, `logic`, `bugs`        | → Agent 1 only (correctness)                     |
 | `robustness`, `defensive`, `fragile`  | → Agent 2 only (robustness)                      |
 | `statistics`, `stats`, `methods`      | → Agent 3 only (statistical implementation)      |
@@ -68,49 +70,6 @@ cat "${SCHOLAR_SKILL_DIR:-.}/.claude/skills/_shared/citation-verification-protoc
 ---
 
 ## Step 0: Setup & Script Discovery
-
-### 0a-safety. Data Safety Sidecar Check (Tier B)
-
-scholar-code-review reads analysis scripts (always safe — they're code) but the review-code-data-handling agent may want to consult the actual data file referenced by a script to verify sample construction or recoding. If that data file is marked `NEEDS_REVIEW:*`, `HALTED`, or `LOCAL_MODE`, the agent must NOT open it. The Tier B gate consults `.claude/safety-status.json` for every data file path that appears inside the reviewed scripts and halts if any are unsafe. See `_shared/tier-b-safety-gate.md` for the full policy.
-
-This step is a **no-op** when `.claude/safety-status.json` does not exist. The PreToolUse hook is the mechanical backstop either way.
-
-```bash
-# ── Step 0a-safety: Tier B sidecar check for referenced data files ──
-# After 0a enumerates scripts, grep them for data-file path references
-# and check each path against the sidecar BEFORE the agents run.
-SIDECAR=".claude/safety-status.json"
-if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
-  UNSAFE=""
-  # Common data-file extensions referenced from R/Python/Stata scripts
-  REFS=$(grep -rhoE '"[^"]*\.(csv|tsv|dta|sav|rds|rdata|parquet|feather|xlsx|xls|h5|hdf5|arrow|orc|pkl|pickle)"' \
-         $SCRIPT_PATHS 2>/dev/null | tr -d '"' | sort -u)
-  for F in $REFS; do
-    [ -f "$F" ] || continue
-    ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
-          || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
-    STATUS=$(jq -r --arg k "$ABS" '.[$k] // empty' "$SIDECAR")
-    [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '.[$k] // empty' "$SIDECAR")
-    case "$STATUS" in
-      CLEARED|ANONYMIZED|OVERRIDE|"") ;;
-      NEEDS_REVIEW:*|HALTED|LOCAL_MODE) UNSAFE="${UNSAFE}
-  - $F → $STATUS (referenced by reviewed script)" ;;
-    esac
-  done
-  if [ -n "$UNSAFE" ]; then
-    cat >&2 <<HALTMSG
-⛔ HALT — scholar-code-review refused because reviewed scripts reference
-files with unsafe SAFETY_STATUS values:
-$UNSAFE
-
-The review-code-data-handling agent would open these files to verify sample
-construction. Run /scholar-init review to resolve, or invoke scholar-code-review
-with a script path list that does not reference restricted data.
-HALTMSG
-    exit 1
-  fi
-fi
-```
 
 ### 0a. Locate Scripts
 
@@ -157,6 +116,58 @@ Glob: output/manuscript/full-paper-*.md → most recent
 Glob: output/drafts/draft-results-*.md → most recent
 ```
 
+### 0a-safety. Restricted-Data Advisory Scan (Tier B+)
+
+This is a **code-only** review (ABSOLUTE RULE 9): the agents read scripts, codebooks, data dictionaries, and design docs — never the dataset itself. After 0a has located the scripts, this scan reads **only those scripts** (code is always safe) to surface any data files they reference that are marked restricted in the safety sidecar, so the orchestrator can list them as DO-NOT-OPEN in the review package (0d).
+
+It never reads a data file, never uses `grep -r` (so it cannot recurse into `data/` or `materials/`), and never halts the review — a project under `LOCAL_MODE`/`HALTED`/`NEEDS_REVIEW` is still reviewable at the code level, which is the whole point. The PreToolUse hook (`scripts/gates/pretooluse-data-guard.sh`) remains the mechanical backstop if any agent attempts a data Read anyway.
+
+```bash
+# ── Step 0a-safety: restricted-data advisory (code-only; never reads data) ──
+# Re-derive SCRIPT_PATHS IN THIS BLOCK — shell state does not persist across
+# Bash calls. Scan ONLY those script files (explicit list, never `grep -r`).
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+SCRIPT_PATHS="${SCRIPT_DIR:-}"   # orchestrator may export SCRIPT_DIR for a custom path
+if [ -z "$SCRIPT_PATHS" ]; then
+  SCRIPT_PATHS="$(find "${OUTPUT_ROOT}/scripts" "${OUTPUT_ROOT}/eda" . -maxdepth 1 -type f \
+        \( -name '*.R' -o -name '*.py' -o -name '*.do' -o -name '*.jl' \) 2>/dev/null \
+        | grep -vE '/(renv|packrat|\.Rproj\.user|venv|\.venv|__pycache__)/' | sort -u)"
+fi
+if [ -z "$SCRIPT_PATHS" ]; then
+  echo "0a-safety: no analysis scripts located yet (advisory only) — proceeding." >&2
+else
+  SIDECAR=".claude/safety-status.json"
+  if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+    # Extract data-file path literals from the SCRIPTS only — both quote styles.
+    REFS=$( { grep -hoE '"[^"]*\.(csv|tsv|dta|sav|rds|rdata|parquet|feather|xlsx|xls|h5|hdf5|arrow|orc|pkl|pickle)"' $SCRIPT_PATHS 2>/dev/null | tr -d '"';
+              grep -hoE "'[^']*\.(csv|tsv|dta|sav|rds|rdata|parquet|feather|xlsx|xls|h5|hdf5|arrow|orc|pkl|pickle)'" $SCRIPT_PATHS 2>/dev/null | tr -d "'"; } | sort -u )
+    RESTRICTED=""
+    for F in $REFS; do
+      [ -e "$F" ] || continue
+      ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null || echo "$F")
+      STATUS=$(jq -r --arg k "$ABS" '(.[$k] // empty)|tostring' "$SIDECAR")
+      [ -z "$STATUS" ] && STATUS=$(jq -r --arg k "$F" '(.[$k] // empty)|tostring' "$SIDECAR")
+      case "$STATUS" in
+        NEEDS_REVIEW*|HALTED|LOCAL_MODE) RESTRICTED="${RESTRICTED}
+  - $F → $STATUS" ;;
+      esac
+    done
+    if [ -n "$RESTRICTED" ]; then
+      cat >&2 <<ADVISORY
+ℹ️  0a-safety advisory — reviewed scripts reference restricted data file(s):
+$RESTRICTED
+These are CODE-REVIEWED ONLY. Per ABSOLUTE RULE 9, no agent opens them.
+List them under "RESTRICTED DATA FILES — DO NOT OPEN" in the review package (0d).
+ADVISORY
+    else
+      echo "✓ 0a-safety: no restricted data files referenced by scripts."
+    fi
+  fi
+fi
+```
+
+Limitation: the literal scan catches quoted single-file paths (`read_csv("data/x.csv")`); multi-arg path builders (`here::here("data","x.dta")`) and variable-built paths will not appear. That is acceptable — this scan is an advisory courtesy; ABSOLUTE RULE 9 plus the PreToolUse hook are the actual enforcement.
+
 ### 0b. Read All Scripts
 
 Read every discovered script in full. For each script, record:
@@ -201,6 +212,13 @@ CODEBOOK / DATA DICTIONARY (if found):
 
 MANUSCRIPT EXCERPT (if found):
 [Results section — for cross-referencing what the code claims to produce]
+
+RESTRICTED DATA FILES — DO NOT OPEN:
+[Every data file the scripts reference (from 0a-safety), regardless of sidecar
+ status. This review is CODE-ONLY (ABSOLUTE RULE 9): agents verify recodes and
+ sample restrictions against the codebook/dictionary/design doc, never by Reading,
+ Grep-ing, or Glob-ing these files. If a check requires the data values, the
+ verdict is UNVERIFIABLE (flag for manual review) — not a data read.]
 
 PROJECT CONTEXT:
 - Target journal: [if known from manuscript or user context]
@@ -271,7 +289,7 @@ cat .claude/agents/review-code-data-handling.md
 
 ### Agent 1 — Correctness & Logic (`review-code-correctness`)
 - Role: Catch errors that silently produce wrong results
-- Focus: Data manipulation bugs, wrong function usage, variable reference errors, missing data handling, logical flow errors
+- Focus: Data manipulation bugs, wrong function usage, variable reference errors, missing data handling, non-finite value (NaN/Inf) propagation, logical flow errors
 - Spawn with: CODE REVIEW PACKAGE
 
 ### Agent 2 — Robustness & Defensive Coding (`review-code-robustness`)
@@ -296,7 +314,7 @@ cat .claude/agents/review-code-data-handling.md
 
 ### Agent 6 — Data Handling & Variable Construction (`review-code-data-handling`)
 - Role: Verify variable recoding, categorization, missing value handling, and sample construction against codebooks and design documents
-- Focus: Miscoded categories, wrong value mappings, reversed scales, unhandled missing value codes (GSS/PSID/NHANES sentinel values), incomplete case_when, sample restriction mismatches, factor level ordering, derived variable errors (age, income, indices)
+- Focus: Miscoded categories, wrong value mappings, reversed scales, unhandled missing value codes (GSS/PSID/NHANES sentinel values), non-finite values (Inf/NaN) surviving NA handling, incomplete case_when, sample restriction mismatches, factor level ordering, derived variable errors (age, income, indices)
 - Spawn with: CODE REVIEW PACKAGE (codebook/data dictionary is critical input for this agent)
 - **Variable Construction Completeness Check**: For every variable referenced in analysis scripts (used in subsetting, grouping, decomposition, or modeling), verify it was actually created in a data preparation script. Cross-reference against the data blueprint's variable dictionary. Flag any variable that is referenced but never constructed (e.g., `cohort_gen` used in decomposition but never defined).
 - **Directional Coding Audit**: For every survey item that is recoded or reversed, verify: (1) the code comment correctly describes the original variable's coding, (2) the transformation produces the intended direction (higher = conservative or liberal as specified), (3) the comment does not confuse the variable's meaning with a related concept (e.g., "approve of the ruling banning X" vs. "approve of X"). Flag any item where the comment contradicts the codebook or where the recode direction appears wrong.
@@ -517,6 +535,7 @@ Before presenting results, verify:
 - [ ] Per-script grades follow the grading rules
 - [ ] Verdict follows the rules in Step 3e
 - [ ] If a design document was found, the statistics agent compared code against it
+- [ ] Code-only discipline held: no agent Read/Grep/Glob'd a data file; unverifiable recodes flagged UNVERIFIABLE, not resolved by reading data
 - [ ] Process log is complete with all 5 steps recorded
 
 ---
