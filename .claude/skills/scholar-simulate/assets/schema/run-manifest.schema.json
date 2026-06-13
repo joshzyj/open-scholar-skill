@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "scholar-simulate run manifest",
+  "description": "Single source of truth for one simulation run. All fields that affect outputs are pinned here for reproducibility.",
+  "type": "object",
+  "required": ["run_id", "paradigm", "provider", "model", "personas", "items"],
+  "additionalProperties": true,
+  "properties": {
+    "run_id": {"type": "string", "description": "Unique run identifier; also the default checkpoint subdirectory name."},
+    "paradigm": {"type": "string", "enum": ["silicon-survey", "generative-abm", "experiment", "interactive"], "description": "Which simulation paradigm this run implements. 'interactive' = small-N multi-agent conversation served by assets/interactive_runner.py (LangGraph), NOT the batch engine."},
+    "provider": {"type": "string", "enum": ["anthropic", "openai", "openai-compatible", "ollama"], "description": "Backend vendor."},
+    "model": {"type": "string", "description": "Exact, pinned model id (e.g., claude-haiku-4-5, gpt-4o-mini, llama3.1)."},
+    "temperature": {"type": "number", "minimum": 0, "maximum": 2, "default": 0.7},
+    "top_p": {"type": "number", "minimum": 0, "maximum": 1, "default": 1.0},
+    "seed": {"type": "integer", "default": 42, "description": "Best-effort determinism (provider-dependent)."},
+    "max_tokens": {"type": "integer", "minimum": 1, "default": 256, "description": "Output token cap per call (cost control)."},
+    "scale_strategy": {"type": "string", "enum": ["batch", "async", "local"], "default": "async", "description": "batch=managed Batch API (anthropic/openai, ~50% off); async=concurrent cloud calls; local=async vs a local server."},
+    "cache": {"type": "boolean", "default": true, "description": "Prompt-cache the system+persona prefix so a persona's repeated items/reps do not re-pay input tokens."},
+    "personas": {"type": "string", "description": "Path to personas.jsonl (from MODE 2)."},
+    "items": {"type": "string", "description": "Path to the items document (survey/vignette/conjoint)."},
+    "conditions": {
+      "type": "array",
+      "description": "Experimental arms. Omit for a single base condition.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string"},
+          "overrides": {"type": "object", "description": "Arm overrides, e.g. {\"system\": \"extra treatment instruction\"}."}
+        }
+      }
+    },
+    "n_reps": {"type": "integer", "minimum": 1, "default": 1, "description": "Responses per (persona,item) to capture within-persona stochasticity."},
+    "checkpoint_dir": {"type": "string", "description": "Where responses.jsonl / cost-ledger.jsonl / batch-state.json are written."},
+    "cost_cap_usd": {"type": "number", "description": "Hard ceiling: the engine refuses to run if the estimate exceeds this (ignored for local)."},
+    "price_per_mtok": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "Optional [input,output] USD per 1M tokens override for cost estimation."},
+    "max_concurrency": {"type": "integer", "minimum": 1, "default": 8, "description": "Async path concurrency hint."},
+    "flush_every": {"type": "integer", "minimum": 1, "default": 50, "description": "Async path: responses per checkpoint flush."},
+
+    "agents": {
+      "type": "array",
+      "description": "INTERACTIVE paradigm only: the conversational roles. Each is a node in the LangGraph multi-agent graph.",
+      "items": {
+        "type": "object",
+        "required": ["id", "role"],
+        "properties": {
+          "id": {"type": "string", "description": "Unique agent id; appears in the transcript custom_id."},
+          "role": {"type": "string", "description": "Human-readable role (e.g., 'moderator', 'participant-A')."},
+          "persona_ref": {"type": "string", "description": "Optional persona_id from personas.jsonl to ground this agent."},
+          "system": {"type": "string", "description": "System prompt / role brief for this agent."}
+        }
+      }
+    },
+    "topology": {"type": "string", "enum": ["dyad", "supervisor", "round-robin"], "default": "round-robin", "description": "INTERACTIVE paradigm only: the LangGraph graph shape governing turn order."},
+    "max_turns": {"type": "integer", "minimum": 1, "default": 12, "description": "INTERACTIVE paradigm only: hard ceiling on turns per conversation (also caps cost)."},
+    "termination": {
+      "type": "object",
+      "description": "INTERACTIVE paradigm only: stopping rule for a conversation.",
+      "properties": {
+        "on": {"type": "string", "enum": ["max_turns", "agent_signal", "consensus_fn"], "default": "max_turns"},
+        "signal": {"type": "string", "description": "For agent_signal: a stop token an agent may emit to end the conversation."}
+      }
+    },
+    "tools": {"type": "array", "items": {"type": "string"}, "default": [], "description": "INTERACTIVE paradigm only: allowed tool names. Under LOCAL_MODE the runner permits local-only tools and disables any with external egress."},
+    "n_conversations": {"type": "integer", "minimum": 1, "default": 1, "description": "INTERACTIVE paradigm only: number of independent conversations to run. Small-N by design; the runner enforces an upper cap (default 50)."}
+  }
+}

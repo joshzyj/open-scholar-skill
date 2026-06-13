@@ -1,0 +1,25 @@
+# Quarantined optional dependencies for the scholar-simulate INTERACTIVE paradigm only.
+# ---------------------------------------------------------------------------------------------
+# The bulk engine (simulate_engine.py / providers.py / personas.py / validate.py) NEVER imports
+# any of these — it runs on the Python standard library plus the vendor SDK for the chosen
+# provider. Install these extras ONLY when you run `interactive_runner.py` (MODE 10). Keeping
+# them out of the base path preserves the bulk engine's lightweight, reproducible footprint
+# (methods appendix §A.3.1).
+#
+# These are API-compatibility FLOORS, not verified-installed pins. After installing, freeze an
+# exact lockfile for reproducibility:
+#     pip install -r requirements-interactive.txt
+#     pip freeze > requirements-interactive.lock.txt   # commit the lock with your run manifest
+#
+# The runner's _import_live() tolerates the SqliteSaver import path moving between langgraph
+# releases (langgraph.checkpoint.sqlite vs the standalone langgraph-checkpoint-sqlite package).
+
+# --- graph orchestration -------------------------------------------------------------------
+langgraph>=0.2.0
+langgraph-checkpoint-sqlite>=1.0.0   # SqliteSaver native checkpointer (DECISION B; file-backed)
+
+# --- LangChain chat-model adapters (DECISION A) --------------------------------------------
+langchain-core>=0.3.0
+langchain-openai>=0.2.0      # ChatOpenAI; also drives vLLM / LM Studio / Together / Groq / OpenRouter via base_url
+langchain-anthropic>=0.2.0   # ChatAnthropic
+langchain-ollama>=0.2.0      # ChatOllama (local open models; LOCAL_MODE-safe)

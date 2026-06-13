@@ -23,7 +23,7 @@ open-scholar-skill/
 ├── skills/ → .claude/skills/    # Symlink (DO NOT replace with directory)
 ├── agents/ → .claude/agents/    # Symlink (DO NOT replace with directory)
 └── .claude/
-    ├── skills/                  # 32 skill directories, each with SKILL.md + references/
+    ├── skills/                  # 33 skill directories, each with SKILL.md + references/
     │   ├── _shared/             # Shared protocols (process-logger.md, version-check.md, data-handling-policy.md, tier-b-safety-gate.md, objectivity-mandate.md)
     │   ├── scholar-init/        # v5.13.0 — project initializer + data safety sidecar + auto-managed memory file (4 modes: init/review/add/status; --scaffold slug-only path)
     │   ├── scholar-analyze/     # Components loaded on-demand via references/component-a-*.md
@@ -35,6 +35,7 @@ open-scholar-skill/
     │   ├── scholar-code-review/ # 6-agent code auditor for analysis scripts
     │   ├── scholar-collaborate/ # Multi-author collaboration (CRediT, tasks, mentoring)
     │   ├── scholar-compute/     # 11 modules (on-demand loading via references/module-*.md)
+    │   ├── scholar-simulate/    # LLM-powered social simulation: silicon sampling, generative ABM, experiments; ships an execution engine under assets/ (multi-provider Batch APIs + local async); mandatory human-data validation
     │   ├── scholar-conceptual/  # Theory building + conceptual diagrams (TikZ/Mermaid)
     │   ├── scholar-data/        # Data collection, open data directory (100+ sources), web scraping
     │   ├── scholar-design/      # Research design + power analysis
@@ -60,7 +61,7 @@ open-scholar-skill/
     └── agents/                  # 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 ```
 
-**Version**: v5.14.0 — 33 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
+**Version**: v5.15.0 — 34 skills, 19 agents (9 peer-reviewer + 4 verify + 6 code-review)
 
 ---
 

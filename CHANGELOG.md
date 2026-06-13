@@ -3,6 +3,20 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.15.0] - 2026-06-13
+
+Ports `scholar-simulate` from upstream `open-scholar-skills` (private), reviewed and confirmed free of project-specific and personal data, with its dev-only bootstrap shim removed in favor of this fork's `${SCHOLAR_SKILL_DIR:-.}` convention. **LLM-powered social simulation is a research instrument, not a substitute for human data.** The skill enforces this in its own contract: simulated respondents (silicon sampling, generative agents) may only support a publishable claim *after* fidelity validation against real human data — the skill treats an unvalidated simulated result as inadmissible, not as evidence. Use it to prototype designs, stress-test theory, and bound expectations; do not report its outputs as findings about people without the human-data check.
+
+### Added
+
+**New skill: `scholar-simulate`** (34 skills total)
+
+- **`.claude/skills/scholar-simulate/SKILL.md`** — LLM-powered social simulation at scale across paradigms: silicon sampling (LLMs as survey respondents), generative agent-based models, survey/vignette/conjoint experiments, and opinion-dynamics simulation. Modes: `design`, `personas`, `silicon-survey`, `generative-abm`, `experiment`, `interactive`, `validate`, `calibrate`, `run`, `report`.
+- **Ships a real execution engine** under `assets/` (not in-context snippets): `simulate_engine.py`, `providers.py` (multi-provider — Anthropic / OpenAI / open-source / local), `personas.py`, `interactive_runner.py`, and `validate.py`, scaling from dozens to hundreds of thousands of agent-calls via managed Batch APIs and local async concurrency. JSON schemas (`assets/schema/`) for personas, items, responses, and run manifests.
+- **Mandatory human-data fidelity validation.** `validate.py` and the validation/calibration modes compare simulated distributions against human reference data before any result is treated as publishable; the contract forbids reporting unvalidated simulated output as a finding.
+- **10 reference files** (`references/`): silicon-sampling, generative-abm, persona-construction, paradigms, providers, scale-engine, validation-fidelity, dynamic-orchestration, interactive-multiagent, reporting-templates.
+- Cross-references existing skills (`scholar-citation`, `scholar-causal`, `scholar-analyze`, `scholar-compute`, `scholar-monitor`) and `_shared/data-handling-policy.md` — all resolve in this fork.
+
 ## [5.14.0] - 2026-06-10
 
 Ports `scholar-auto-research` from upstream `open-scholar-skills` (private), scrubbed of all project-specific and personal data and adapted for this fork's researcher-in-the-loop philosophy. **This release adds an end-to-end pipeline, but it is not autonomous research, and we do not endorse using it as such.** Unlike the deliberately-absent `scholar-full-paper` orchestrator, `scholar-auto-research` is *stable and deterministic*: it ships a mandatory human-in-the-loop mode that stops for explicit researcher approval between phases, gates every phase with auditable deterministic checks rather than loose advisory passes, and forbids helper scripts from substituting for the specialist skills that do the substantive scholarly work. We encourage running it in human-in-the-loop mode — and, when it is run autonomously, holding every output to the same independent-verification standard the README's [Ethical Use](README.md#ethical-use-of-ai-in-academic-research) section requires. The researcher remains the author of the question, the argument, and every interpretation.

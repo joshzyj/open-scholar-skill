@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "scholar-simulate persona",
+  "description": "One persona line in personas.jsonl, sampled from a real joint distribution via IPF/raking. Variable fields (age, education, party, ...) are dynamic and depend on the persona spec.",
+  "type": "object",
+  "required": ["persona_id", "description"],
+  "additionalProperties": true,
+  "properties": {
+    "persona_id": {"type": "string", "description": "Stable, zero-padded id (e.g., p00001)."},
+    "description": {"type": "string", "description": "Natural-language persona scaffold used as the system-prompt prefix."},
+    "_context": {"type": "object", "description": "Macro context (time period, country, etc.) merged into every persona."}
+  }
+}

@@ -89,7 +89,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 > **Trademark Notice:** Journal names listed above and throughout this project are trademarks of their respective publishers. They are used here for identification and formatting purposes only. This project is not affiliated with or endorsed by any journal or publisher.
 
-## Skills Overview (32 skills + 1 utility = 33 total)
+## Skills Overview (33 skills + 1 utility = 34 total)
 
 ### Research Pipeline (Orchestrator)
 
@@ -126,6 +126,7 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 | `scholar-eda` | `/scholar-eda` | Exploratory data analysis, missing data, cleaning, pre-analysis plans |
 | `scholar-causal` | `/scholar-causal` | Causal inference toolkit: DAGs, 13 identification strategies (OLS, DiD, staggered DiD, RD, IV, FE, matching, synthetic control, mediation, DML, causal forests, bunching, Bartik IV) + distributional methods, sensitivity analysis |
 | `scholar-compute` | `/scholar-compute` | 11 modular modules: NLP/text-as-data, ML, network/GNN, ABM, computer vision, LLM workflows, synthetic data, geospatial, audio, life2vec |
+| `scholar-simulate` | `/scholar-simulate` | LLM-powered social simulation at scale: silicon sampling, generative ABM, survey/vignette/conjoint experiments, opinion dynamics. Ships a real execution engine (multi-provider Batch APIs + local async concurrency), not in-context snippets; multi-provider (Anthropic/OpenAI/open-source/local). **Mandatory human-data fidelity validation before any publishable claim** — simulated respondents do not substitute for human data. |
 | `scholar-open` | `/scholar-open` | Preregistration, data sharing, code packaging, open access |
 | `scholar-replication` | `/scholar-replication` | Build, document, test, verify, and archive journal-ready replication packages (EDA outputs, artifact registry, format verification) |
 | `scholar-qual` | `/scholar-qual` | Qualitative methods: open/axial/selective coding, thematic analysis, content analysis, LLM-assisted coding with human validation, mixed-methods integration, inter-coder reliability |
@@ -194,7 +195,7 @@ bash setup.sh
 1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
 2. Auto-detect your Zotero library (or prompt for path)
 3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 32 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — installed per-entry alongside any existing personal skills
+4. Install all 33 skills + 19 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — installed per-entry alongside any existing personal skills
 5. Register the PreToolUse data-safety hook in `~/.claude/settings.json` (idempotent; preserves existing settings)
 6. Check for `jq` and `python3` (required by the data-safety hook)
 7. Write a `.env` file with your configuration

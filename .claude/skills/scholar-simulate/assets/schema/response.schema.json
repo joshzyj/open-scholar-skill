@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "scholar-simulate response",
+  "description": "One checkpointed model response line in responses.jsonl. Idempotency key is custom_id.",
+  "type": "object",
+  "required": ["custom_id", "text"],
+  "additionalProperties": true,
+  "properties": {
+    "custom_id": {"type": "string", "description": "Join key 'condition|persona_id|item_id|rep' set at request time."},
+    "text": {"type": "string", "description": "The model's raw text answer."},
+    "input_tokens": {"type": "integer", "description": "Billed input tokens (for the cost ledger)."},
+    "output_tokens": {"type": "integer", "description": "Billed output tokens (for the cost ledger)."},
+    "cached_tokens": {"type": "integer", "description": "Input tokens served from prompt cache (billed at ~10%)."},
+    "error": {"type": "string", "description": "Non-empty if the call failed; such rows are re-queued on --resume."}
+  }
+}
