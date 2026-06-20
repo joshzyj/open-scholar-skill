@@ -4,6 +4,16 @@ Standard prompts for each Codex review agent. These are templates — the skill 
 
 ---
 
+## DATA ACCESS PROHIBITION (BINDING — the skill PREPENDS this to every prompt below)
+
+E1: `codex exec` runs with `sandbox_permissions=["disk-full-read-access"]`, so it *can* read the dataset — and these prompts must forbid it from doing so. This is a CODE / PROSE review, not a data review.
+
+- **NEVER open files under `data/`, `data/raw/`, `data/processed/`, or `materials/`, or any row-level data file** (`.dta/.csv/.tsv/.sav/.rds/.RData/.parquet/.feather/.xlsx/.xls/.h5/.pkl/.sas7bdat/.por`), **even if a script names one.** The project may run under LOCAL_MODE, where the microdata is license-/IRB-restricted and MUST NOT enter any model's context. Transmitting respondent rows to the API is a data-use violation.
+- When a recode, scale, sample restriction, missing-value scheme, or variable construction cannot be confirmed from the **scripts + codebook/data-dictionary + design doc** alone, your verdict is **UNVERIFIABLE** (flag for manual check) — never resolve it by opening the data.
+- Reading codebooks, data dictionaries, design documents, READMEs, the analysis scripts, the aggregated tables/figures, and the manuscript is expected and encouraged. The prohibition is on the raw/row-level data only.
+
+---
+
 ## A1 — Code Correctness
 
 ```

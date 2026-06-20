@@ -190,6 +190,73 @@ REVIEW_DIR="${OUTPUT_ROOT}/reviews/codex"
 CODEX_WORKDIR="$(pwd)"
 mkdir -p "$REVIEW_DIR"
 
+# E1 hard control "B": on a LOCAL_MODE project, point codex at a DATA-FREE
+# MIRROR instead of the live tree. `-s read-only` / `disk-full-read-access` do
+# NOT confine reads — codex can `cat` any absolute path — so the mirror, not the
+# sandbox flag, is what keeps restricted microdata off the cloud reviewer. The
+# scripts read data by RELATIVE path, so from cwd=mirror `read_dta("data/raw/..")`
+# resolves to <mirror>/data/.. which does not exist → codex reports the data
+# UNVERIFIABLE while still reviewing the scripts. Helper:
+# scripts/phases/build-codex-mirror.sh (grep-guards absolute data paths → RED;
+# rsync-excludes data/ + microdata extensions). On CLEARED projects reading data
+# is not a violation, so the mirror is LOCAL_MODE-only (avoids the copy cost).
+# LOCAL_MODE detection fails TOWARD building the mirror (a false negative would
+# silently let codex read restricted data); robust detection (subtree find +
+# ancestor walk-up over sidecar AND project-state.md) lives in
+# local-mode-detect.sh, with an inline bare-LOCAL_MODE grep as fallback.
+_DETECT="${SCHOLAR_SKILL_DIR:-.}/scripts/phases/local-mode-detect.sh"
+_LOCAL_MODE=0
+if [ -f "$_DETECT" ]; then
+  bash "$_DETECT" "${PROJ:-.}" "$(pwd)" && _LOCAL_MODE=1 || _LOCAL_MODE=0
+else
+  for _f in "${PROJ:-.}/.claude/safety-status.json" "$(pwd)/.claude/safety-status.json" \
+            "${PROJ:-.}/logs/project-state.md" "$(pwd)/logs/project-state.md"; do
+    [ -f "$_f" ] && grep -qi 'LOCAL_MODE' "$_f" 2>/dev/null && { _LOCAL_MODE=1; break; }
+  done; unset _f
+fi
+if [ "$_LOCAL_MODE" = "1" ]; then
+  _MK="${SCHOLAR_SKILL_DIR:-.}/scripts/phases/build-codex-mirror.sh"
+  if [ -x "$_MK" ] || [ -f "$_MK" ]; then
+    _MERRF="$(mktemp)"
+    _MOUT="$(bash "$_MK" "$(pwd)" "${PROJ:-.}" 2>"$_MERRF")"; _MRC=$?
+    if [ "$_MRC" -eq 0 ]; then
+      CODEX_WORKDIR="$(printf '%s' "$_MOUT" | sed -n 's/^MIRROR=//p' | tail -1)"
+      # CRIT guard: an empty/invalid mirror path would make `codex exec -C ""`
+      # fall back to the LIVE tree → data exposure. Fail CLOSED on a LOCAL_MODE
+      # project — never the live tree.
+      if [ -z "$CODEX_WORKDIR" ] || [ ! -d "$CODEX_WORKDIR" ]; then
+        echo "HALT: mirror build reported success but path is empty/invalid ('$CODEX_WORKDIR')." >&2
+        echo "      Refusing to dispatch codex at the live tree on a LOCAL_MODE project." >&2
+        rm -f "$_MERRF"; exit 1
+      fi
+      echo "LOCAL_MODE: codex -C → data-free mirror: $CODEX_WORKDIR"
+    elif [ "$_MRC" -eq 1 ]; then
+      echo "HALT: build-codex-mirror.sh RED — a script hard-codes an ABSOLUTE data path." >&2
+      cat "$_MERRF" >&2
+      echo "Refusing to dispatch codex (restricted data could reach the cloud reviewer)." >&2
+      echo "Rewrite the path as RELATIVE (file.path(DATA,\"x.dta\")) then re-run." >&2
+      rm -f "$_MERRF"; exit 1
+    else
+      # Fail-closed: a mirror that could not be built (rc=2: rsync missing, etc.)
+      # MUST NOT degrade to dispatching codex at the live tree — codex runs with
+      # disk-full-read and would expose data/raw to the cloud reviewer. The
+      # prompt-prohibition prefix alone is not an enforced control.
+      echo "HALT: data-free mirror unavailable ($(tail -1 "$_MERRF" 2>/dev/null)) on a LOCAL_MODE" >&2
+      echo "      project — refusing to dispatch codex at the live tree (would expose data/raw to a" >&2
+      echo "      disk-full-read cloud agent). Install rsync / fix the mirror builder and re-run, or" >&2
+      echo "      run the review against a non-LOCAL_MODE copy." >&2
+      rm -f "$_MERRF"; exit 1
+    fi
+    rm -f "$_MERRF"
+  else
+    # Fail-closed: no mirror builder on a LOCAL_MODE project → do NOT fall back
+    # to the live tree. The prompt prohibition is a belt, not a wall.
+    echo "HALT: build-codex-mirror.sh not found at $_MK on a LOCAL_MODE project — refusing to" >&2
+    echo "      dispatch codex at the live tree (data exposure). Restore the mirror builder and re-run." >&2
+    exit 1
+  fi
+fi
+
 # Timestamp for this review run
 RUN_TS=$(date +%Y-%m-%d-%H%M%S)
 
@@ -204,15 +271,23 @@ echo "Tables: $TABLE_FILES"
 echo "Manuscript: $MANUSCRIPT_FILE"
 ```
 
+**Data Access Prohibition (E1) — MANDATORY prompt prefix.** `codex exec` is spawned with `sandbox_permissions=["disk-full-read-access"]`, so it *can* read the dataset; `-s read-only` / the sandbox flag restrict writes, not read scope (codex can `cat` any absolute path). Two controls apply:
+
+1. **Belt — prompt prohibition.** Before every prompt you send, **PREPEND the verbatim "DATA ACCESS PROHIBITION (BINDING)" block from the top of `references/codex-review-prompts.md`** so the Codex agent is instructed never to open `data/`, `data/raw/`, or any row-level data file and to report **UNVERIFIABLE** rather than read the data.
+2. **Suspenders — data-free mirror.** On a LOCAL_MODE project the Step 2 block above builds a mirror with no `data/` and no microdata files and points `codex exec -C` at it (`$CODEX_WORKDIR`), so a relative data read cannot resolve. This is the *enforced* control (the prompt prohibition alone is not). The mirror builder also HALTs the dispatch if a script hard-codes an absolute data path. On a LOCAL_MODE project, **do not dispatch a codex review without both.**
+
 Then spawn each agent. Example for Agent A1 (Code Correctness):
 
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 REVIEW_DIR="${OUTPUT_ROOT}/reviews/codex"
 RUN_TS="[TIMESTAMP]"  # re-derive or hardcode from Step 2 above
+# CODEX_WORKDIR is set by the Step 2 block (the data-free mirror on LOCAL_MODE
+# projects). Fail closed rather than let `-C` default to the live tree.
+: "${CODEX_WORKDIR:?run the Step 2 LOCAL_MODE/mirror block first — do not point codex -C at the live tree}"
 
 codex exec \
-  -C "$(pwd)" \
+  -C "$CODEX_WORKDIR" \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -o "${REVIEW_DIR}/A1-code-correctness-${RUN_TS}.md" \
   "You are a code review agent for a social science research project.
@@ -270,10 +345,11 @@ echo "All agents finished at $(date +%H:%M:%S)"
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 REVIEW_DIR="${OUTPUT_ROOT}/reviews/codex"
 RUN_TS="[TIMESTAMP]"
+: "${CODEX_WORKDIR:?run the Step 2 LOCAL_MODE/mirror block first — do not point codex -C at the live tree}"
 
 # Spawn with timeout (5 min each)
 timeout 300 codex exec \
-  -C "$(pwd)" \
+  -C "$CODEX_WORKDIR" \
   -c 'sandbox_permissions=["disk-full-read-access"]' \
   -o "${REVIEW_DIR}/A1-code-correctness-${RUN_TS}.md" \
   "[PROMPT]" &
@@ -449,7 +525,9 @@ LOGFOOTER
 ## Quality Checklist (Self-Audit Before Completion)
 
 - [ ] Codex CLI was verified as installed before spawning
-- [ ] All agents ran with `sandbox_permissions=["disk-full-read-access"]`
+- [ ] DATA ACCESS PROHIBITION block was prepended to every prompt
+- [ ] On a LOCAL_MODE project: `codex exec -C` pointed at the data-free mirror (`$CODEX_WORKDIR`), NOT the live tree — and the dispatch HALTed if the mirror could not be built (never fell back to the live tree)
+- [ ] All agents ran with `sandbox_permissions=["disk-full-read-access"]` (note: this flag does not confine reads; the LOCAL_MODE mirror is the enforced control)
 - [ ] Each agent's output file was checked for existence and non-emptiness
 - [ ] Failed agents are clearly marked in the consolidated report
 - [ ] Every CRITICAL issue has exact location (file:line or manuscript quote)
