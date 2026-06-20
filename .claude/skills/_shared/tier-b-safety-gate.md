@@ -8,6 +8,8 @@ This is the *lightweight* half of the v5.8.0 data-safety stack. Unlike scholar-e
 
 The gate MUST run before the first `Read` / `NotebookRead` / `Grep` / `Glob` call that targets a user data file (CSV, .dta, .rds, .parquet, .xlsx, .sav, etc.). It does NOT need to run before reading manuscripts, scripts, logs, or reference documents.
 
+> Note: the PreToolUse hook now ALSO covers the **Bash** channel (a cooperative-agent speed-bump that blocks obvious `cat`/`sed`/`awk`/… dumps of sensitive paths) and **Edit/Write** to `.claude/safety-status.json` (tamper guard), so a Tier B skill cannot sidestep the sidecar by `cat`-ing a restricted file either. That Bash gate is a guardrail, not a wall (see `data-handling-policy.md` §9). The Tier B sidecar check still matters — it fails earlier and with a clearer, data-type-specific message than the hook's generic refusal.
+
 Allowed statuses (proceed):
 - `CLEARED` — safe, open data
 - `ANONYMIZED` — de-identified derivative exists; the skill should Read the derivative, never the raw file

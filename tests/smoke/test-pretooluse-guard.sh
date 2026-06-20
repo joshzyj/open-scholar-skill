@@ -1244,6 +1244,73 @@ else
   echo "    stderr:"; sed 's/^/      /' "$TMPDIR_BASE/stderr"
 fi
 
+# ════════════════════════════════════════════════════════════════════════
+# Bash / Edit / Write channel — Standard-tier dump gate + sidecar guard
+# ════════════════════════════════════════════════════════════════════════
+# The Bash gate is a COOPERATIVE-AGENT SPEED-BUMP (blocks obvious dumps of
+# sensitive raw paths, allows the sanctioned LOCAL_MODE aggregate loaders,
+# fails OPEN on ambiguity); the Edit/Write branch guards safety-status.json
+# tamper. Documented residual bypasses are asserted as ALLOW on purpose.
+echo ""
+echo "=== Bash/Edit/Write channel (Standard tier) ==="
+BGP="$TMPDIR_BASE/bashgate"
+mkdir -p "$BGP/data/raw" "$BGP/data/interim" "$BGP/output/tables" "$BGP/.claude" "$BGP/logs"
+printf 'id,first_name,ssn\n1,John,123-45-6789\n2,Jane,987-65-4321\n' > "$BGP/data/raw/x.csv"
+printf 'term,estimate,se\nx,0.3,0.02\n' > "$BGP/output/tables/results.csv"
+printf 'a,b\n1,2\n' > "$BGP/cleared.csv"
+printf '# README\n' > "$BGP/README.md"
+jq -n --arg raw "$BGP/data/raw/x.csv" --arg cl "$BGP/cleared.csv" \
+  '{($raw):"NEEDS_REVIEW:RED", ($cl):"CLEARED"}' > "$BGP/.claude/safety-status.json"
+
+bgp_bash() { jq -n --arg c "$1" --arg cwd "$BGP" \
+  '{session_id:"t",transcript_path:"",cwd:$cwd,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}'; }
+bgp_write() { jq -n --arg fp "$1" --arg ct "$2" --arg cwd "$BGP" \
+  '{session_id:"t",transcript_path:"",cwd:$cwd,hook_event_name:"PreToolUse",tool_name:"Write",tool_input:{file_path:$fp,content:$ct}}'; }
+bgp_chk() { local want="$1" desc="$2" pl="$3" rc; rc=$(run_guard_capture "$pl"); if [ "$rc" = "$want" ]; then pass "$desc (exit $rc)"; else fail "$desc — want $want got $rc"; fi; }
+
+# BLOCK (exit 2): dump verbs / bypasses on a sensitive raw path
+bgp_chk 2 "Bash cat raw"            "$(bgp_bash 'cat data/raw/x.csv')"
+bgp_chk 2 "Bash head raw"           "$(bgp_bash 'head -5 data/raw/x.csv')"
+bgp_chk 2 "Bash sed -n raw"         "$(bgp_bash "sed -n '1,5p' data/raw/x.csv")"
+bgp_chk 2 "Bash awk raw"            "$(bgp_bash "awk 'NR<5' data/raw/x.csv")"
+bgp_chk 2 "Bash od raw"             "$(bgp_bash 'od -c data/raw/x.csv')"
+bgp_chk 2 "Bash base64 raw"         "$(bgp_bash 'base64 data/raw/x.csv')"
+bgp_chk 2 "Bash cmd-subst cat raw"  "$(bgp_bash 'echo $(cat data/raw/x.csv)')"
+bgp_chk 2 "Bash redirection raw"    "$(bgp_bash 'cat < data/raw/x.csv')"
+bgp_chk 2 "Bash env-wrapper raw"    "$(bgp_bash 'env cat data/raw/x.csv')"
+bgp_chk 2 "Bash grep rows raw"      "$(bgp_bash 'grep 123 data/raw/x.csv')"
+bgp_chk 2 "Bash py open().read()"   "$(bgp_bash "python3 -c \"print(open('data/raw/x.csv').read())\"")"
+bgp_chk 2 "Bash R head() dump"      "$(bgp_bash "Rscript -e 'd<-read.csv(\"data/raw/x.csv\"); print(head(d))'")"
+bgp_chk 2 "Bash var-assembled (S2)" "$(bgp_bash 'D=data/raw; cat "$D/x.csv"')"
+bgp_chk 2 "Bash ruby File.read"     "$(bgp_bash "ruby -e 'puts File.read(\"data/raw/x.csv\")'")"
+
+# ALLOW (exit 0): must-not-regress legitimate pipeline patterns
+bgp_chk 0 "Bash cat output/tables"  "$(bgp_bash 'cat output/tables/results.csv')"
+bgp_chk 0 "Bash jq sidecar"         "$(bgp_bash 'jq . .claude/safety-status.json')"
+bgp_chk 0 "Bash grep -c raw"        "$(bgp_bash 'grep -c 123 data/raw/x.csv')"
+bgp_chk 0 "Bash wc -l raw"          "$(bgp_bash 'wc -l data/raw/x.csv')"
+bgp_chk 0 "Bash cp raw"             "$(bgp_bash 'cp data/raw/x.csv data/interim/y.csv')"
+bgp_chk 0 "Bash R aggregate loader" "$(bgp_bash "Rscript -e 'd<-read.csv(\"data/raw/x.csv\"); cat(\"N=\", nrow(d))'")"
+bgp_chk 0 "Bash py aggregate (dtypes)" "$(bgp_bash "python3 -c \"import pandas as pd; df=pd.read_csv('data/raw/x.csv'); print(df.dtypes)\"")"
+bgp_chk 0 "Bash ls raw dir"         "$(bgp_bash 'ls -la data/raw')"
+bgp_chk 0 "Bash cat CLEARED file"   "$(bgp_bash 'cat cleared.csv')"
+bgp_chk 0 "Bash cat README"         "$(bgp_bash 'cat README.md')"
+bgp_chk 0 "Bash git status"         "$(bgp_bash 'git status')"
+bgp_chk 0 "Bash empty command"      "$(bgp_bash '')"
+bgp_chk 0 "Bash ruby IO.foreach (documented bypass)" "$(bgp_bash "ruby -e 'IO.foreach(\"data/raw/x.csv\"){|l| puts l}'")"
+
+# E4 sidecar tamper (Write)
+bgp_chk 2 "Write flip RED->CLEARED no provenance" \
+  "$(bgp_write "$BGP/.claude/safety-status.json" "$(jq -n --arg r "$BGP/data/raw/x.csv" '{($r):"CLEARED"}')")"
+printf '## Decision history\n### 2026-06-19 10:00 — %s\n- New status: CLEARED\n' "$BGP/data/raw/x.csv" > "$BGP/logs/init-report.md"
+bgp_chk 0 "Write flip RED->CLEARED WITH provenance" \
+  "$(bgp_write "$BGP/.claude/safety-status.json" "$(jq -n --arg r "$BGP/data/raw/x.csv" '{($r):"CLEARED"}')")"
+bgp_chk 0 "Write downgrade to LOCAL_MODE" \
+  "$(bgp_write "$BGP/.claude/safety-status.json" "$(jq -n --arg r "$BGP/data/raw/x.csv" '{($r):"LOCAL_MODE"}')")"
+bgp_chk 0 "Write normal manuscript (not sidecar)" \
+  "$(bgp_write "$BGP/manuscript.md" "edited body text")"
+bgp_chk 0 "Bash default-open (no dump verb)" "$(bgp_bash 'file data/raw/x.csv')"
+
 # ─── Summary ────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════"

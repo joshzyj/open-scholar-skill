@@ -422,8 +422,24 @@ echo "▸ Registering PreToolUse data-safety hook in ~/.claude/settings.json..."
 HOOK_SCRIPT="$SCRIPT_DIR/scripts/gates/pretooluse-data-guard.sh"
 SETTINGS_FILE="$HOME/.claude/settings.json"
 
+# Claude Code runs a hook `command` as a shell line, so a bare path that
+# contains SPACES (e.g. a Google Drive install: ".../My Drive/...") is split
+# on whitespace and fails to execute → the hook silently FAILS OPEN and the
+# data guard never runs. Wrap the (single-quoted) path in `bash '...'` so the
+# spaces survive. (Paths containing a literal single quote are unsupported —
+# vanishingly rare.)
+HOOK_CMD="bash '$HOOK_SCRIPT'"
+
+# Strict-tier PostToolUse redactor (self-gates on safety level — a no-op below
+# the 'strict' level, so it is safe to register unconditionally).
+PT_SCRIPT="$SCRIPT_DIR/scripts/gates/posttooluse-output-guard.sh"
+PT_CMD="bash '$PT_SCRIPT'"
+
 if [ ! -x "$HOOK_SCRIPT" ] && [ -f "$HOOK_SCRIPT" ]; then
   chmod +x "$HOOK_SCRIPT" 2>/dev/null || true
+fi
+if [ -f "$PT_SCRIPT" ] && [ ! -x "$PT_SCRIPT" ]; then
+  chmod +x "$PT_SCRIPT" 2>/dev/null || true
 fi
 
 if [ ! -f "$HOOK_SCRIPT" ]; then
@@ -437,9 +453,17 @@ elif ! command -v jq >/dev/null 2>&1; then
       "hooks": {
         "PreToolUse": [
           {
-            "matcher": "Read|NotebookRead|NotebookEdit|Grep|Glob",
+            "matcher": "Read|NotebookRead|NotebookEdit|Grep|Glob|Bash|Edit|Write|MultiEdit",
             "hooks": [
-              { "type": "command", "command": "$HOOK_SCRIPT" }
+              { "type": "command", "command": "$HOOK_CMD" }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "matcher": "Bash",
+            "hooks": [
+              { "type": "command", "command": "$PT_CMD" }
             ]
           }
         ]
@@ -455,37 +479,59 @@ else
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|NotebookRead|NotebookEdit|Grep|Glob",
+        "matcher": "Read|NotebookRead|NotebookEdit|Grep|Glob|Bash|Edit|Write|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "$HOOK_SCRIPT" }
+          { "type": "command", "command": "$HOOK_CMD" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "$PT_CMD" }
         ]
       }
     ]
   }
 }
 HOOKJSON
-    echo "  ✓ Created $SETTINGS_FILE with PreToolUse hook"
+    echo "  ✓ Created $SETTINGS_FILE with PreToolUse + PostToolUse hooks"
   else
     # Merge: drop any existing hook whose command matches this hook
     # script (so re-runs don't duplicate), then append a fresh entry.
     TMP_SETTINGS="$(mktemp -t scholar-settings.XXXXXX)"
     if jq \
-        --arg cmd "$HOOK_SCRIPT" \
-        --arg matcher "Read|NotebookRead|NotebookEdit|Grep|Glob" \
+        --arg cmd "$HOOK_CMD" \
+        --arg script "$HOOK_SCRIPT" \
+        --arg ptcmd "$PT_CMD" \
+        --arg ptscript "$PT_SCRIPT" \
+        --arg matcher "Read|NotebookRead|NotebookEdit|Grep|Glob|Bash|Edit|Write|MultiEdit" \
         '
           . as $orig
           | (.hooks // {}) as $hooks
           | ($hooks.PreToolUse // []) as $pretool
+          # Drop ANY prior entry that references this guard — both the new
+          # wrapped form ("bash ${cmd}") and a legacy bare-path command — so a
+          # re-run does not leave a duplicate or a broken bare entry behind.
           | ($pretool | map(
-              .hooks |= ((. // []) | map(select(.command != $cmd)))
+              .hooks |= ((. // []) | map(select((.command // "") | contains($script) | not)))
             ) | map(select((.hooks // []) | length > 0))) as $cleaned
+          | ($hooks.PostToolUse // []) as $posttool
+          | ($posttool | map(
+              .hooks |= ((. // []) | map(select((.command // "") | contains($ptscript) | not)))
+            ) | map(select((.hooks // []) | length > 0))) as $ptcleaned
           | .hooks.PreToolUse = ($cleaned + [{
               "matcher": $matcher,
               "hooks": [{"type": "command", "command": $cmd}]
             }])
+          | .hooks.PostToolUse = ($ptcleaned + [{
+              "matcher": "Bash",
+              "hooks": [{"type": "command", "command": $ptcmd}]
+            }])
         ' "$SETTINGS_FILE" > "$TMP_SETTINGS" 2>/dev/null; then
       mv "$TMP_SETTINGS" "$SETTINGS_FILE"
-      echo "  ✓ Merged PreToolUse hook into $SETTINGS_FILE"
+      echo "  ✓ Merged PreToolUse + PostToolUse hooks into $SETTINGS_FILE"
     else
       rm -f "$TMP_SETTINGS"
       echo "  ⚠ jq merge failed — $SETTINGS_FILE left unchanged."

@@ -867,6 +867,15 @@ cd ~/research/nhanes-bmi
 - Fine-grained geographic data: GPS coordinates, census tracts, geocodes
 - IRB participant markers: participant IDs, consent, interview, transcript
 
+**Mechanical enforcement.** `scripts/gates/pretooluse-data-guard.sh` is registered as a PreToolUse hook in `~/.claude/settings.json` by `setup.sh`. It refuses anything targeting a file whose sidecar status is `NEEDS_REVIEW:*` or `HALTED`, so even if a sub-skill forgets to check, the hook stops the unsafe access before it reaches the API. It now covers two channels that used to be open:
+
+- **Bash** — a *cooperative-agent speed-bump* that blocks obvious content-dump commands (`cat`/`head`/`tail`/`sed`/`awk`/`grep`-rows/`sqlite3`/python·R row dumps) on a sensitive path, while allowing the sanctioned LOCAL_MODE `Rscript -e`/`python3 -c` aggregate loaders. It is **not a wall** — other interpreters, encodings, and variable-assembled paths bypass it. At the **strict** level a PostToolUse hook (`posttooluse-output-guard.sh`) additionally redacts PII/bulk-row Bash *output*.
+- **Edit/Write** — blocks tampering with `.claude/safety-status.json` (promoting a restricted file to `CLEARED`/`OVERRIDE` without a `/scholar-init review` provenance entry).
+
+**Safety levels** (`/scholar-safety level <standard|strict|lockdown>`, stored as `_safety_level` in the sidecar): **standard** = Bash speed-bump + sidecar guard; **strict** = + PostToolUse output redactor; **lockdown** = + OS sandbox (a kernel-enforced wall; not yet shipped in this release). Standard and strict are guardrails against accidental/cooperative leakage, **not** walls.
+
+> **Two activation gotchas.** (1) Hook config is snapshotted at session start — a `settings.json` change only takes effect after Claude Code is **restarted**. (2) Claude Code runs a hook `command` as a shell line, so if your repo path contains spaces (e.g. a Google Drive install), the command MUST be wrapped (`"command": "bash '<path>'"`); a bare spaced path silently fails to execute and the guard becomes inert for *all* tools. `setup.sh` writes the wrapped form automatically.
+
 ---
 
 ### 16. Research Ethics — `/scholar-ethics`

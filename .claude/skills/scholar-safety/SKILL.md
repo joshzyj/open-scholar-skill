@@ -2,7 +2,7 @@
 name: scholar-safety
 description: Real-time data privacy and leakage protection layer for AI-assisted research. Before any file is read by Claude Code and transmitted to Anthropic's API, proactively scans it locally for sensitive content (PII, HIPAA, IRB-protected, restricted licensed data) using local Bash pattern matching — so the sensitive data itself never enters the AI context during the scan. Issues tiered warnings (green/yellow/red), requests explicit user permission before transmitting any sensitive data, and offers safe alternatives: anonymization scripts, local-mode analysis (bash-only, no data in context), data minimization, or full halt. Four modes: SCAN (audit a file using only local grep/awk — sensitive data stays local), GATE (intercept a proposed operation and ask permission before execution), PROTOCOL (generate a project-level data safety protocol), STATUS (safety status log). Works alongside scholar-eda, scholar-analyze, scholar-compute, and scholar-data to protect any data-touching operation.
 tools: Bash, Read, Write
-argument-hint: "[scan|gate|protocol|status] [file path or operation description] [optional: data type, project name, journal target]"
+argument-hint: "[scan|gate|protocol|status|level] [file path / operation description / level name] [optional: data type, project name, journal target]"
 user-invocable: true
 ---
 
@@ -19,7 +19,7 @@ You are the data safety guardian for AI-assisted research. Your job is to interc
 The user has provided: `$ARGUMENTS`
 
 Parse to determine:
-- **MODE**: `scan` | `gate` | `protocol` | `status`
+- **MODE**: `scan` | `gate` | `protocol` | `status` | `level`
 - **TARGET**: file path, directory path, or description of the proposed operation
 - **DATA_TYPE**: hint from user (health, survey, interview, restricted, etc.) — optional
 - **PROJECT**: project name for logging
@@ -35,6 +35,7 @@ Parse to determine:
 | `gate`, `before`, `about to`, `going to read`, `going to load` | **MODE 2: Operation Safety Gate** |
 | `protocol`, `plan`, `project safety`, `data handling plan` | **MODE 3: Project Safety Protocol** |
 | `status`, `log`, `what was shared`, `history` | **MODE 4: Safety Status Log** |
+| `level` + `standard`/`strict`/`lockdown` | **MODE 5: Set Safety Level** |
 | Any mode that finds HIGH risk | **Halt → present options → wait for user selection** |
 
 ---
@@ -537,6 +538,45 @@ fi
 ```
 
 Format the log as a readable summary table before returning it to the user. If the log is empty or missing, tell the user how to populate it (`/scholar-safety scan <file>`) rather than returning a silent empty result.
+
+---
+
+## MODE 5: Set Safety Level
+
+*Choose how strongly the data-safety enforcement layer protects this project. The level is stored per-project as the `_safety_level` key in `.claude/safety-status.json` and is read by the PreToolUse/PostToolUse hooks (`resolve_safety_level` in `scripts/gates/sidecar-schema.sh`).*
+
+### The three levels — honest guarantees
+
+| Level | What it enforces | Stops accidental/cooperative leakage | Stops a determined/adversarial agent |
+|-------|------------------|:---:|:---:|
+| **standard** (default) | PreToolUse Bash dump-verb gate (`cat`/`head`/`sed`/`awk`/`grep`-rows/`sqlite3`/python·R row dumps on a sensitive path) + Edit/Write sidecar-tamper guard | ✅ | ❌ — it is a denylist; other interpreters, encodings, and variable-assembled paths bypass it |
+| **strict** | standard **+** a PostToolUse hook that redacts PII / bulk-row Bash **output** before it reaches context (any verb) | ✅ stronger | ❌ — evadable by encoding (`base64`/`gzip`/`hex`) and by `cp`-to-benign-path → Read |
+| **lockdown** | strict **+** an OS sandbox (`denyRead` on data dirs) so subprocess reads of data are blocked at the kernel | ✅ | ✅ — a real boundary (the only one) |
+
+Standard and strict are **cooperative-agent guardrails, not walls** — say so when you set them. Only lockdown is a containment boundary. *(The lockdown OS-sandbox layer is not yet shipped in this release; `standard` and `strict` are available now.)*
+
+### Step 5.1 — Write the level
+
+```bash
+LVL="$(printf '%s' "$ARGUMENTS" | tr 'A-Z' 'a-z' | grep -oE '\b(standard|strict|lockdown)\b' | head -1)"
+[ -n "$LVL" ] || { echo "Usage: /scholar-safety level <standard|strict|lockdown>"; exit 0; }
+SIDE=".claude/safety-status.json"
+[ -f "$SIDE" ] || { mkdir -p .claude; echo '{}' > "$SIDE"; }
+TMP="$(mktemp)"
+if jq --arg l "$LVL" '. + {"_safety_level":$l}' "$SIDE" > "$TMP" 2>/dev/null; then
+  mv "$TMP" "$SIDE"
+  echo "Safety level set to '$LVL' in $SIDE"
+else
+  rm -f "$TMP"; echo "ERROR: could not update $SIDE (is it valid JSON? is jq installed?)"
+fi
+```
+
+### Step 5.2 — Report honestly
+
+- Confirm the level written and **what it actually enforces today** (use the table above — standard/strict are not walls).
+- **Hook config is snapshotted at session start** — tell the user the change takes effect after they **restart Claude Code**.
+- For **lockdown**: the OS-sandbox layer is not yet shipped, so `_safety_level=lockdown` currently enforces strict-level (hook) behavior — state this plainly rather than implying a wall exists.
+- Global default: a machine-wide default can be set via the `SCHOLAR_SAFETY_LEVEL` env var; the per-project `_safety_level` key overrides it.
 
 ---
 

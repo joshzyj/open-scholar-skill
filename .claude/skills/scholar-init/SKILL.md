@@ -349,7 +349,7 @@ Review complete.
   OVERRIDE:    0 file(s)
   HALTED:      1 file(s)
 
-The PreToolUse guard will now honor these decisions on every Read.
+The PreToolUse guard will now honor these decisions on every Read — and, for restricted files, also block obvious `cat`/`sed`/`awk`/… dumps via the **Bash** channel and tamper-edits to `.claude/safety-status.json` (a cooperative-agent speed-bump, not a wall; see `_shared/data-handling-policy.md` §9). Activation requires a Claude Code restart (hook config is snapshotted at session start).
 ```
 
 Then recommend the next skill (see Step 1.4).
@@ -427,7 +427,7 @@ Then print a list of NEEDS_REVIEW files (if any) and recommend `/scholar-init re
 
 7. **Never cache or echo the contents of a file that scored NEEDS_REVIEW:RED**, even in error messages. The scan output (aggregated counts) is safe; the file body is not.
 
-8. **If the PreToolUse hook fires during this skill and blocks a Read, that is correct behavior — do not try to work around it.** It means you're about to read something you shouldn't. Stop and ask the user.
+8. **If the PreToolUse hook fires and blocks a Read — or a Bash `cat`/`sed`/`awk` dump of a restricted path, or a tamper-edit of `.claude/safety-status.json` — that is correct behavior; do not try to work around it.** It means you're about to read or expose something you shouldn't. Stop and ask the user. (The Bash gate is a cooperative-agent speed-bump, not a wall — never treat "it didn't block X" as license to exfiltrate via another channel.)
 
 ---
 

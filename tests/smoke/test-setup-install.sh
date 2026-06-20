@@ -76,14 +76,27 @@ if [ -f "$SETTINGS_1" ]; then
     cat "$SETTINGS_1" | sed 's/^/    /'
   fi
   GUARD_CMD=$(jq -r '.hooks.PreToolUse[0].hooks[0].command // empty' "$SETTINGS_1" 2>/dev/null)
+  # The command MUST be wrapped as `bash '<path>'` — a bare spaced path is
+  # word-split by Claude Code and silently fails to execute (fail-open). A
+  # regression to the bare form is a hard FAIL.
   case "$GUARD_CMD" in
-    */scripts/gates/pretooluse-data-guard.sh) pass "hook command points to pretooluse-data-guard.sh" ;;
-    *) fail "hook command was '$GUARD_CMD' (expected */pretooluse-data-guard.sh)" ;;
+    "bash '"*"/scripts/gates/pretooluse-data-guard.sh'") pass "PreToolUse command is wrapped: bash '<path>/pretooluse-data-guard.sh' (spaced-path safe)" ;;
+    */scripts/gates/pretooluse-data-guard.sh) fail "PreToolUse command is a BARE path '$GUARD_CMD' — must be wrapped 'bash <path>' or it fails open on spaced paths" ;;
+    *) fail "PreToolUse command was '$GUARD_CMD' (expected bash '<path>/pretooluse-data-guard.sh')" ;;
   esac
   MATCHER=$(jq -r '.hooks.PreToolUse[0].matcher // empty' "$SETTINGS_1" 2>/dev/null)
   case "$MATCHER" in
     *Read*) pass "hook matcher includes Read" ;;
     *) fail "hook matcher was '$MATCHER' (expected to include Read)" ;;
+  esac
+  case "$MATCHER" in
+    *Bash*) pass "hook matcher includes Bash (Bash channel gated)" ;;
+    *) fail "hook matcher was '$MATCHER' (expected to include Bash)" ;;
+  esac
+  PT_CMD=$(jq -r '.hooks.PostToolUse[0].hooks[0].command // empty' "$SETTINGS_1" 2>/dev/null)
+  case "$PT_CMD" in
+    "bash '"*"/scripts/gates/posttooluse-output-guard.sh'") pass "PostToolUse redactor registered (wrapped)" ;;
+    *) fail "PostToolUse command was '$PT_CMD' (expected bash '<path>/posttooluse-output-guard.sh')" ;;
   esac
 else
   fail "~/.claude/settings.json was not created"

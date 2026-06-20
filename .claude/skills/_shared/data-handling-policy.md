@@ -390,6 +390,22 @@ If SAFETY_STATUS is HALTED → the skill must have already stopped.
 
 The data-handling policy is implemented as a PreToolUse hook plus a collection of Bash helpers. This design has real safety value but also real limits that users should understand.
 
+**Channel coverage and safety levels.** The guard now inspects more than the read tools:
+
+- **Read / NotebookRead / NotebookEdit / Grep / Glob** — the original read channel (sidecar + `safety-scan.sh`, fail-closed).
+- **Bash** — a *cooperative-agent speed-bump* (`pretooluse-data-guard.sh` §2d): blocks obvious content-dump commands (`cat`/`head`/`tail`/`sed`/`awk`/`grep`-rows/`sqlite3`/python·R row dumps) when a path token resolves to a sensitive target (`is_rawdata_path`/`is_qual_path`/sidecar `LOCAL_MODE`·`HALTED`·`NEEDS_REVIEW`). It is **not a wall** — other interpreters (`ruby`/`node`), encodings (`base64`/`gzip`/`hex`), variable-assembled paths, and `cp`-to-benign-path → Read all bypass it. It **fails open** on ambiguity.
+- **Edit / Write / MultiEdit** — guarded only for writes to `.claude/safety-status.json` (blocks promoting a restricted file to `CLEARED`/`OVERRIDE` without a `/scholar-init review` provenance entry).
+
+These compose into three **selectable safety levels** (`_safety_level` key in `.claude/safety-status.json`, or the `SCHOLAR_SAFETY_LEVEL` env var; set via `/scholar-safety level`):
+
+| Level | Adds | Stops cooperative leakage | Stops a determined agent |
+|-------|------|:---:|:---:|
+| **standard** | Bash speed-bump + sidecar-tamper guard | ✅ | ❌ |
+| **strict** | + PostToolUse redactor of PII/bulk Bash **output** (`posttooluse-output-guard.sh`) | ✅ stronger | ❌ (encoding/file-hop evade) |
+| **lockdown** | + OS sandbox `denyRead` on data dirs (kernel-enforced) | ✅ | ✅ (the only real boundary) |
+
+Be honest about this in any user-facing message: **standard and strict are guardrails against accidental/cooperative leakage, not containment boundaries.** Only lockdown's OS sandbox stops a determined or prompt-injected agent, and it imposes real friction (data analysis must run through an explicit unsandboxed escalation). *Note: the lockdown OS-sandbox layer is not yet shipped in this release — `standard` and `strict` are available now.*
+
 **TOCTOU between scan and Read.** The PreToolUse hook fires *before* Claude's `Read` tool call but cannot atomically hand off the verified state to the Read itself. Between the moment `safety-scan.sh` finishes and the moment Claude's Read actually opens the file, an attacker (or an accidental file swap) could replace the file contents. The gap is narrow in practice — sub-second on a non-contended machine — but it is not zero. Mitigations in place:
 
 - The hook resolves symlinks via `realpath` before scanning, so a symlink-swap between `safety-scan.sh` runs and `Read` will be visible in the sidecar lookup.
@@ -411,7 +427,9 @@ A determined local attacker can still win the race if they can write to the proj
 
 A user who bypasses `scholar-init` and hand-edits the sidecar with a blank rationale can still set `OVERRIDE` on a tabular file. This is by design: the hook is a technical safeguard, not a replacement for institutional review.
 
-**`jq` is required for reliable payload parsing.** When `jq` is absent, the guard falls back to a `sed`-based parser that cannot reliably handle escaped quotes, Unicode, or multiline fields in the hook payload. In that case the guard fails *closed* on any gated tool call (Read / NotebookRead / NotebookEdit / Grep / Glob) whose `file_path` or `path` argument could not be extracted. The practical effect: if jq is missing, the user will see a clear "install jq" message on every data-file read. Install jq before using this plugin.
+**`jq` is required for reliable payload parsing.** When `jq` is absent, the guard falls back to a `sed`-based parser that cannot reliably handle escaped quotes, Unicode, or multiline fields in the hook payload. In that case the guard fails *closed* on the five read-channel tools (Read / NotebookRead / NotebookEdit / Grep / Glob) whose `file_path` or `path` argument could not be extracted. The Bash / Edit / Write branches instead fail **open** (allow) without jq — bricking the universal shell escape hatch is worse than a missed best-effort check. The practical effect: if jq is missing, the user sees a clear "install jq" message on every data-file read. Install jq before using this plugin.
+
+**Hook command paths with spaces silently fail open.** Claude Code runs a hook's `command` as a shell line, so a bare path containing spaces (e.g. a Google Drive install: `.../My Drive/...`) is word-split and fails to execute — the hook then does nothing and the guard is inert for *every* tool. The fix (in `setup.sh` and required for any hand-edited `~/.claude/settings.json`) is to wrap the path: `"command": "bash '<absolute path to guard>'"`. Also: hook config is snapshotted at session start, so a settings edit only takes effect after Claude Code is **restarted**.
 
 ---
 

@@ -6,8 +6,11 @@
 # decides whether to allow or block the call.
 #
 # Behavior:
-#   - Inspects tool_name ∈ {Read, NotebookRead, NotebookEdit, Grep, Glob}.
-#     All other tools pass through.
+#   - Inspects tool_name ∈ {Read, NotebookRead, NotebookEdit, Grep, Glob,
+#     Bash, Edit, Write, MultiEdit}. Any other tool passes through.
+#     (REQUIRES the ~/.claude/settings.json PreToolUse matcher to list these
+#     tools; the matcher is snapshotted at session start, so a matcher edit
+#     only takes effect after the Claude Code session is restarted.)
 #   - For Read / NotebookRead / NotebookEdit:
 #     * Extracts the file_path (or notebook_path) argument.
 #     * Canonicalizes it via realpath (resolves symlinks + relative segments).
@@ -23,6 +26,19 @@
 #     * If it targets a raw-data directory segment, blocks the call
 #       (Grep would return matching lines from sensitive files into
 #       Claude's context, which is exactly what the guard must prevent).
+#   - For Bash (Standard-tier SPEED-BUMP, see §2d):
+#     * Parses tool_input.command, finds path tokens that resolve to a
+#       sensitive data target (is_rawdata_path / is_qual_path / sidecar
+#       LOCAL_MODE|HALTED|NEEDS_REVIEW), and blocks obvious content-dump
+#       commands (cat/head/sed/awk/grep-rows/sqlite3/python|R row dumps).
+#     * NOT a containment boundary — arbitrary shell can bypass it (other
+#       interpreters, encodings, var-assembled paths). It FAILS OPEN on any
+#       ambiguity so the shell is never bricked. The real wall is the OS
+#       sandbox configured by the Lockdown safety level.
+#   - For Edit / Write / MultiEdit:
+#     * Passes through instantly UNLESS the target is .claude/safety-status.json,
+#       in which case it blocks a CLEARED/OVERRIDE promotion of a restricted
+#       file that lacks /scholar-init review provenance. Also fails OPEN.
 #
 # Exit codes (Claude Code hook semantics):
 #   0 → allow the tool call
@@ -300,7 +316,8 @@ if ! declare -F is_valid_status >/dev/null 2>&1; then
   is_valid_status() {
     case "$1" in
       CLEARED|ANONYMIZED|OVERRIDE|LOCAL_MODE|HALTED) return 0 ;;
-      NEEDS_REVIEW|NEEDS_REVIEW:*) return 0 ;;
+      # `:?*` requires a non-empty level; rejects a malformed `NEEDS_REVIEW:`.
+      NEEDS_REVIEW|NEEDS_REVIEW:?*) return 0 ;;
     esac
     return 1
   }
@@ -360,6 +377,12 @@ if command -v jq >/dev/null 2>&1; then
   # pattern itself (Glob). We extract whichever the tool uses.
   GREP_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.path // empty' 2>/dev/null)"
   GLOB_PATTERN="$(printf '%s' "$INPUT" | jq -r '.tool_input.pattern // empty' 2>/dev/null)"
+  # Bash channel: the shell command string. (NB: do NOT name this BASH_COMMAND —
+  # that is a bash-reserved auto-variable bash overwrites before each command.)
+  TOOL_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+  # Edit/Write/MultiEdit channel: the new content being written. We only use
+  # this to guard writes to .claude/safety-status.json (sidecar tamper).
+  EDIT_NEW="$(printf '%s' "$INPUT" | jq -r '[.tool_input.new_string, .tool_input.content, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")' 2>/dev/null)"
   JQ_OK=1
 else
   # Pure-bash fallback. We extract only the fields we need to make a
@@ -372,6 +395,12 @@ else
   CWD="$(printf '%s' "$INPUT" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
   GREP_PATH="$(printf '%s' "$INPUT" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
   GLOB_PATTERN="$(printf '%s' "$INPUT" | sed -n 's/.*"pattern"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  # The Bash/Edit/Write guards REQUIRE jq for reliable extraction; without it
+  # they FAIL OPEN (allow) — bricking the shell escape hatch on a parse
+  # limitation is worse than a missed best-effort check. The read tools still
+  # fail closed below.
+  TOOL_CMD=""
+  EDIT_NEW=""
   JQ_OK=0
 fi
 
@@ -459,6 +488,191 @@ EOF
     fi
     ;;
 esac
+
+# ─── 2d. Bash / Edit / Write helpers (Standard tier) ────────────────────
+#
+# These guard the two channels the read-tool gate never covered:
+#   - Bash: cat/sed/awk/python… dumping rows into context (→ API)
+#   - Edit/Write: tampering with .claude/safety-status.json to flip a
+#     restricted file to CLEARED/OVERRIDE
+#
+# BY DESIGN this is a COOPERATIVE-AGENT SPEED-BUMP, not a containment
+# boundary. Arbitrary shell cannot be vetted in bash, so a determined agent
+# can bypass it (other interpreters like ruby/node, base64/gzip/hex
+# encodings, variable-assembled paths, `< file` redirection into a non-dump
+# verb, a copy-to-benign-path then Read). The real boundary is the OS sandbox
+# wired by the Lockdown safety level. Accordingly EVERY path here FAILS OPEN
+# on ambiguity — bricking the universal Bash escape hatch is worse than a
+# missed exotic dump.
+
+# Look up a path's sidecar SAFETY_STATUS (best-effort; prints "" if none).
+bash_sidecar_status() {
+  local p="$1" root sf=""
+  [ -n "$p" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  root="$(find_project_root "$p" 2>/dev/null || true)"
+  [ -n "$root" ] && [ -f "${root}/.claude/safety-status.json" ] && sf="${root}/.claude/safety-status.json"
+  if [ -z "$sf" ] && [ -n "${CWD:-}" ]; then
+    root="$(find_project_root "$CWD" 2>/dev/null || true)"
+    [ -n "$root" ] && [ -f "${root}/.claude/safety-status.json" ] && sf="${root}/.claude/safety-status.json"
+  fi
+  [ -n "$sf" ] || return 0
+  jq -r --arg k "$p" '(.[$k] // empty) | if type=="string" then . else empty end' "$sf" 2>/dev/null || true
+}
+
+# Find the command's primary verb: skip leading VAR=val assignments and
+# transparent wrappers (env/sudo/time/…), strip any /dir/ prefix, lowercase.
+# Relies on the caller having `set -f` (noglob) so an unquoted `$s` word-split
+# cannot glob-expand `*.csv` etc.
+bash_primary_verb() {
+  local s="$1" w first=""
+  for w in $s; do
+    case "$w" in
+      *=*) continue ;;                                  # VAR=val assignment
+      env|command|builtin|nohup|nice|stdbuf|time|sudo|exec|then|do|'{'|'(') continue ;;
+      *) first="$w"; break ;;
+    esac
+  done
+  first="${first##*/}"                                  # strip dir prefix
+  printf '%s' "$first" | tr 'A-Z' 'a-z'
+}
+
+# Echo the first path token in $1 that resolves to a SENSITIVE data target
+# (is_rawdata_path / is_qual_path, or a sidecar status that forbids reads).
+# NEVER a bare extension and NEVER output/tables/.claude (is_rawdata_path
+# already excludes those). Empty output = no sensitive target found.
+bash_first_sensitive_target() {
+  local cmd="$1" norm tok canon lower st ext
+  # Reveal embedded + assignment-RHS paths: turn shell punctuation (incl. '='
+  # so `D=data/raw` exposes data/raw) into spaces. Keep '/' and '$'.
+  norm="$(printf '%s' "$cmd" | tr '"'"'"'`(){}[],;|&<>=' '              ')"
+  for tok in $norm; do
+    case "$tok" in
+      -*|'') continue ;;
+      *'$'*) continue ;;                                # unexpanded var — cannot resolve
+    esac
+    # Only worth resolving if it has a path separator OR a data extension.
+    case "$tok" in
+      */*) : ;;
+      *.*) ext="$(printf '%s' "${tok##*.}" | tr 'A-Z' 'a-z')"; is_data_ext "$ext" || continue ;;
+      *) continue ;;
+    esac
+    canon="$(canonicalize "$tok" 2>/dev/null || true)"
+    [ -n "$canon" ] || canon="$tok"
+    lower="$(printf '%s' "$canon" | tr 'A-Z' 'a-z')"
+    if is_rawdata_path "$lower" || is_qual_path "$lower"; then
+      printf '%s\n' "$canon"; return 0
+    fi
+    st="$(bash_sidecar_status "$canon")"
+    case "$st" in
+      LOCAL_MODE|HALTED|NEEDS_REVIEW|NEEDS_REVIEW:*) printf '%s\n' "$canon"; return 0 ;;
+    esac
+  done
+  return 0
+}
+
+# Decide whether $1 uses a CONTENT-REVEALING mechanism. Returns 0 = block,
+# 1 = allow. Best-effort, pure-bash (NOT a real shell lexer):
+#   - primary verb is an interpreter (python/R/ruby/node/…) → the sanctioned
+#     LOCAL_MODE channel; allow UNLESS the code has an obvious whole-file/row
+#     dump. This deliberately does NOT word-scan for `cat`, so `cat("N=",…)`
+#     inside R is not mistaken for a shell `cat`.
+#   - otherwise → scan each segment's leading verb for dump / row-matching
+#     commands.
+bash_command_is_dump() {
+  local cmd="$1" pv seg segs verb
+  pv="$(bash_primary_verb "$cmd")"
+  case "$pv" in
+    python|python2|python3|rscript|r|ruby|node|nodejs|php|lua)
+      # Sanctioned LOCAL_MODE channel. Allow UNLESS the code has an obvious
+      # whole-file / row dump. The forbidden set is deliberately narrow so the
+      # policy's own aggregate loaders pass: print(df.dtypes), print(summary(df)),
+      # df.describe(), cat("N=", nrow(df)) must NOT match. We flag only:
+      #   open(...).read() · readLines( · .to_string( · .to_csv() [stdout]
+      #   .head/.tail/.sample/.iloc/.values/.to_dict · head(df)/tail(df)/str(df)/View(df)
+      #   print(<bareframe>)  [no dot → excludes print(df.dtypes)]
+      #   cat(df$col) · File.read / readFileSync / file_get_contents / io.read
+      if printf '%s' "$cmd" | grep -Eq 'open[[:space:]]*\([^)]*\)[[:space:]]*\.[[:space:]]*read[[:space:]]*\(|readLines[[:space:]]*\(|\.to_string[[:space:]]*\(|\.to_csv[[:space:]]*\([[:space:]]*\)|\.(head|tail|sample|iloc|values|to_dict)[[:space:]]*[([]|(^|[^A-Za-z0-9_.])(head|tail|str|View)[[:space:]]*\([[:space:]]*[A-Za-z_.]|(^|[^A-Za-z0-9_.])print[[:space:]]*\([[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)|cat[[:space:]]*\([^)]*\$|File\.read|readFileSync|file_get_contents|io\.read' 2>/dev/null; then
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+  # Non-interpreter: split into segments (translate separators + sub-shell
+  # parens/backticks to newlines) and inspect each segment's leading verb.
+  segs="$(printf '%s' "$cmd" | tr '|;&()`' '\n\n\n\n\n\n')"
+  while IFS= read -r seg; do
+    [ -n "$seg" ] || continue
+    verb="$(bash_primary_verb "$seg")"
+    case "$verb" in
+      cat|tac|nl|rev|head|tail|more|less|bat|fold|od|xxd|hexdump|hd|strings|base64|base32|column|csvlook|csvcut|xsv|mlr|datamash|pbcopy|zcat|gzcat|bzcat|xzcat|sqlite3|duckdb|jq|yq|open|textutil)
+        return 0 ;;
+      grep|egrep|fgrep|rg|ag|ack)
+        case " $seg " in
+          *" -c "*|*" --count "*|*" -l "*|*" --files-with-matches "*|*" -L "*|*" --files-without-match "*|*" -q "*|*" --quiet "*) : ;;
+          *) return 0 ;;
+        esac ;;
+      sed|awk|gawk|nawk|mawk|perl)
+        return 0 ;;
+    esac
+  done <<EOF
+$segs
+EOF
+  return 1
+}
+
+# Guard a write to .claude/safety-status.json. BLOCK only when the new content
+# promotes a path to CLEARED/OVERRIDE while its current on-disk status is
+# restricted (NEEDS_REVIEW:RED / HALTED) or the file currently scans RED, AND
+# there is no human-review provenance entry in logs/init-report.md. Downgrades
+# and LOCAL_MODE / ANONYMIZED / HALTED writes are always allowed.
+# Returns 0 = allow, 2 = block.
+inspect_sidecar_write() {
+  local sidecar="$1" newc="$2" root report keys key cur suspect
+  root="$(find_project_root "$sidecar" 2>/dev/null || true)"
+  report=""
+  [ -n "$root" ] && report="${root}/logs/init-report.md"
+  keys="$(printf '%s\n' "$newc" \
+    | grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*"(CLEARED|OVERRIDE)"' 2>/dev/null \
+    | sed -E 's/^"([^"]+)".*/\1/' || true)"
+  [ -n "$keys" ] || return 0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    case "$key" in _*) continue ;; esac               # skip meta keys (_safety_level)
+    cur=""
+    [ -f "$sidecar" ] && cur="$(jq -r --arg k "$key" '(.[$k] // empty) | if type=="string" then . else empty end' "$sidecar" 2>/dev/null || true)"
+    suspect=0
+    case "$cur" in NEEDS_REVIEW:RED|HALTED) suspect=1 ;; esac
+    if [ "$suspect" = 0 ] && [ -e "$key" ] && [ -f "$GATE_SCRIPT" ]; then
+      bash "$GATE_SCRIPT" "$key" >/dev/null 2>&1
+      [ "$?" = 1 ] && suspect=1                        # safety-scan RED
+    fi
+    [ "$suspect" = 1 ] || continue
+    if [ -n "$report" ] && [ -f "$report" ] && { grep -qF "$key" "$report" 2>/dev/null || grep -qF "$(basename "$key")" "$report" 2>/dev/null; }; then
+      continue                                         # human-review provenance exists
+    fi
+    cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked — safety-status.json tamper protection.
+
+This write promotes a restricted file to CLEARED/OVERRIDE with no human-review
+provenance:
+    $key
+Current status: ${cur:-RED (fresh scan)}
+
+A status may only be raised to CLEARED/OVERRIDE through '/scholar-init review',
+which records a typed rationale in logs/init-report.md. No decision entry was
+found for this path. Resolve it via:
+
+    /scholar-init review
+
+(Downgrades and LOCAL_MODE / ANONYMIZED / HALTED writes are allowed.)
+EOF
+    return 2
+  done <<EOF
+$keys
+EOF
+  return 0
+}
 
 # ─── 3. Dispatch by tool name ───────────────────────────────────────────
 case "$TOOL_NAME" in
@@ -707,6 +921,54 @@ EOF
 
     exit 0
     ;;
+  Bash)
+    # Standard-tier Bash speed-bump (see the §2d helper header). Blocks the
+    # obvious content-dump commands on a sensitive data path; fails OPEN on any
+    # ambiguity so the shell is never bricked. NOT a containment boundary —
+    # that is the Lockdown OS sandbox.
+    set -f                # noglob: an unquoted `$cmd` split must not glob-expand
+    [ -n "${TOOL_CMD:-}" ] || exit 0
+    _SENS="$(bash_first_sensitive_target "$TOOL_CMD")"
+    [ -n "$_SENS" ] || exit 0
+    if bash_command_is_dump "$TOOL_CMD"; then
+      cat >&2 <<EOF
+SAFETY GUARD: Bash blocked — command appears to read sensitive data into context.
+
+Target classified as sensitive (raw-data / qualitative / LOCAL_MODE-restricted):
+    $_SENS
+
+The command uses a content-revealing mechanism (cat/head/tail/sed/awk/grep/
+sqlite3 or a python/R row dump) on that path. Reading row-level data via Bash
+transmits it to the API exactly as the Read tool would.
+
+Do this instead:
+  - Aggregates only: one Rscript -e / python3 -c call that prints summaries
+    (nrow, names+classes, summary(), table() with n<10 suppressed) — see
+    _shared/data-handling-policy.md §3a/§3b.
+  - Counts: 'wc -l <file>'  or  'grep -c PATTERN <file>'.
+
+NOTE: this Bash gate is a cooperative-agent SPEED-BUMP, not a containment wall.
+For a kernel-enforced boundary, enable the Lockdown safety level.
+EOF
+      exit 2
+    fi
+    exit 0
+    ;;
+
+  Edit|Write|MultiEdit)
+    # Sidecar tamper protection. Only .claude/safety-status.json is guarded;
+    # every other edit/write passes through instantly. Fails OPEN on any
+    # ambiguity (no jq, no content) so normal editing is never bricked.
+    case "$(basename "${FILE_PATH:-}")" in
+      safety-status.json) : ;;
+      *) exit 0 ;;
+    esac
+    command -v jq >/dev/null 2>&1 || exit 0
+    [ -n "${EDIT_NEW:-}" ] || exit 0
+    inspect_sidecar_write "$FILE_PATH" "$EDIT_NEW"
+    exit $?
+    ;;
+
   *)
     # Not a file-reading tool — pass through.
     exit 0
