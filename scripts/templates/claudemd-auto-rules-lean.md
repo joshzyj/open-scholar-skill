@@ -32,7 +32,7 @@ Three layers (full text in `<plugin>/.claude/skills/_shared/data-handling-policy
 
 1. **Policy** — `_shared/data-handling-policy.md`. Five `SAFETY_STATUS` values: `CLEARED`, `LOCAL_MODE`, `ANONYMIZED`, `OVERRIDE`, `HALTED`. LOCAL_MODE execution contract uses `Rscript -e` / `python3 -c` heredocs; forbidden verbs: `head(df)`, `print(df)`, `df.head()`, `df.sample()`.
 2. **Ingestion** — `/scholar-init` writes `.claude/safety-status.json`.
-3. **Enforcement** — `pretooluse-data-guard.sh` registered as a global PreToolUse hook.
+{{ENFORCEMENT_BLOCK}}
 
 **LOCAL_MODE scope clarification.** LOCAL_MODE applies to *data values and rows* — `.dta` / `.csv` / `.sav` files and any row-level derivatives. It does NOT prohibit cross-model code review of `scripts/*.R` or `scripts/*.py` files — those contain variable construction logic and estimator setup, not respondent-level values. Excusing a cloud reviewer under a LOCAL_MODE-data-prohibition rationale when the artifact is code (not data) is a category error.
 

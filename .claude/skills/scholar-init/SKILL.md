@@ -122,7 +122,21 @@ Run the setup script against the project directory created in Step 1.1.5 or Step
 ```bash
 PROJ_DIR="${DEST:-.}/$SLUG"
 bash "${SCHOLAR_SKILL_DIR:-.}/scripts/phases/setup-project-claudemd.sh" "$PROJ_DIR" --mode lean
+
+# Codex-host data-safety enforcement (2026-07). The PreToolUse data guard is
+# registered in ~/.claude/settings.json, which a **Codex** host never reads —
+# so under Codex the guard is inert. When this project could be driven by Codex
+# (host is `codex`, or `unknown` — same rule that writes AGENTS.md), also install
+# the guard as a Codex PreToolUse hook in <proj>/.codex/config.toml. Harmless
+# under Claude Code; it activates only once the user TRUSTS the project in Codex.
+_HOST="$(bash "${SCHOLAR_SKILL_DIR:-.}/scripts/detect-host-agent.sh" 2>/dev/null || echo unknown)"
+if [ "$_HOST" = "codex" ] || [ "$_HOST" = "unknown" ]; then
+  bash "${SCHOLAR_SKILL_DIR:-.}/scripts/phases/setup-codex-hooks.sh" "$PROJ_DIR" || true
+fi
+unset _HOST
 ```
+
+**Codex-host hook (2026-07).** When the host is Codex (or unknown), `scripts/phases/setup-codex-hooks.sh` writes a `[hooks.PreToolUse]` block into `<proj>/.codex/config.toml` that runs `scripts/gates/codex-pretooluse-hook.sh` (a thin adapter delegating to the same `pretooluse-data-guard.sh`). Surface its one-line output, including the **trust reminder**: the hook only fires once the user accepts Codex's trust prompt for this project (or sets `trust_level = "trusted"` under `[projects."<abs>"]` in `~/.codex/config.toml`). If the project already has a non-scholar `[hooks]` table, the installer refuses to clobber it (exit 3) and prints the block to add manually — relay that verbatim.
 
 The block holds the rules that apply across every scholar-* skill: no destructive regex on manuscripts, the Objectivity Mandate, the data-safety stack + LOCAL_MODE scope, citation rules, and cross-skill workflow rules. This fork ships **one** profile (lean) — it is the complete, terminal cross-skill contract; there is no separate "full" profile to upgrade to.
 
@@ -461,8 +475,10 @@ scholar-init does NOT produce a manuscript document; it produces an initialized 
 
 ```
 <dest>/<slug>/
-└── CLAUDE.md (or AGENTS.md)      ← auto-managed cross-skill rules block
-                                     (lean profile; idempotent, non-destructive)
+├── CLAUDE.md (or AGENTS.md)      ← auto-managed cross-skill rules block
+│                                    (lean profile; idempotent, non-destructive)
+└── .codex/config.toml            ← Codex PreToolUse data-guard hook
+                                     (only when host is codex/unknown)
 ```
 
 **At end of run, print a summary to the user:**

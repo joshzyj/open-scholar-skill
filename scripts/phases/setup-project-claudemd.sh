@@ -136,25 +136,52 @@ COND
   fi
 fi
 
-# Render the template with conditional substitution. awk -v can't carry
-# multi-line values; write the conditional block to a temp file and slurp it
-# in with awk's getline.
+# Render the template with conditional + enforcement substitution. awk -v can't
+# carry multi-line values; write each substituted block to a temp file and slurp
+# it in with awk's getline. COND_TMP is target-independent; the enforcement block
+# is host-conditional (CLAUDE.md vs AGENTS.md), re-selected per target below.
 COND_TMP=$(mktemp)
 printf '%s' "$CONDITIONAL_RULES" > "$COND_TMP"
-RENDERED=$(awk -v cond_file="$COND_TMP" '
-  /\{\{CONDITIONAL_RULES\}\}/ {
-    while ((getline line < cond_file) > 0) print line
-    close(cond_file)
-    next
-  }
-  { print }
-' "$TEMPLATE")
-rm -f "$COND_TMP"
 
-# ── Assemble the marker block ────────────────────────────────────────────
-AUTO_BLOCK="${MARK_BEGIN}
-${RENDERED}
+# ── Enforcement block variants (host-conditional) ────────────────────────
+# The data-safety "Enforcement" bullet MUST be host-accurate. Claude Code fires
+# a global PreToolUse hook from ~/.claude/settings.json; a Codex host does NOT
+# read that file, so telling a Codex session the same hook protects it is FALSE
+# (a false-security bug). CLAUDE.md keeps the accurate global-hook line; AGENTS.md
+# documents the Codex-native .codex/config.toml PreToolUse hook + trust
+# requirement + the actionable sidecar contract.
+ENFORCEMENT_CLAUDE='3. **Enforcement** — `pretooluse-data-guard.sh` registered as a global PreToolUse hook in `~/.claude/settings.json`; Claude Code fires it before every `Read`/`Bash`/`Grep`/`Glob` and blocks reads of `LOCAL_MODE`/`HALTED`/`NEEDS_REVIEW` files.'
+ENFORCEMENT_CODEX='3. **Enforcement (Codex host)** — Codex does NOT read `~/.claude/settings.json`, so the Claude PreToolUse hook does NOT run in this session. A Codex-native PreToolUse hook is registered in this project'\''s `.codex/config.toml` and **activates only once you trust this project** (accept the trust prompt on first `codex` run in this directory, or set `trust_level = "trusted"` under `[projects."<abs-path>"]` in `~/.codex/config.toml`). **Until it is trusted, YOU are the enforcement:** before reading ANY file under `data/`, look it up in `.claude/safety-status.json` — `CLEARED`/`ANONYMIZED`/`OVERRIDE` may be read; `LOCAL_MODE`/`HALTED`/`NEEDS_REVIEW` must NEVER be read (analyze those via a single `Rscript -e` / `python3 -c` Bash call emitting summary-only output — forbidden: `head(df)`, `print(df)`, `df.head()`, `df.sample()`).'
+
+# render_auto_block <target_basename> — sets the global AUTO_BLOCK by rendering
+# $TEMPLATE with {{CONDITIONAL_RULES}} and the host-appropriate
+# {{ENFORCEMENT_BLOCK}} substituted. AGENTS.md → Codex variant; anything else
+# (CLAUDE.md) → Claude variant. Templates without the token render unchanged.
+ENF_TMP=$(mktemp)
+render_auto_block() {
+  local target_base="$1" rendered
+  case "$target_base" in
+    AGENTS.md) printf '%s' "$ENFORCEMENT_CODEX"  > "$ENF_TMP" ;;
+    *)         printf '%s' "$ENFORCEMENT_CLAUDE" > "$ENF_TMP" ;;
+  esac
+  rendered=$(awk -v cond_file="$COND_TMP" -v enf_file="$ENF_TMP" '
+    /\{\{CONDITIONAL_RULES\}\}/ {
+      while ((getline line < cond_file) > 0) print line
+      close(cond_file)
+      next
+    }
+    /\{\{ENFORCEMENT_BLOCK\}\}/ {
+      while ((getline line < enf_file) > 0) print line
+      close(enf_file)
+      next
+    }
+    { print }
+  ' "$TEMPLATE")
+  # ── Assemble the marker block ──────────────────────────────────────────
+  AUTO_BLOCK="${MARK_BEGIN}
+${rendered}
 ${MARK_END}"
+}
 
 # ── Detect host AI agent and compute target file list ───────────────────
 HELPER="${SCRIPTS_ROOT}/detect-host-agent.sh"
@@ -240,8 +267,11 @@ process_target() {
   return 0
 }
 
-# Iterate every chosen target. Each call is independent.
+# Iterate every chosen target. Each call is independent. render_auto_block picks
+# the host-accurate enforcement variant (CLAUDE.md vs AGENTS.md) before each write.
 for tf in "${TARGET_FILES[@]}"; do
+  render_auto_block "$tf"
   process_target "$PROJ/$tf"
 done
+rm -f "$COND_TMP" "$ENF_TMP"
 exit 0

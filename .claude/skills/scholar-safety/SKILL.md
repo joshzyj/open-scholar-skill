@@ -551,9 +551,9 @@ Format the log as a readable summary table before returning it to the user. If t
 |-------|------------------|:---:|:---:|
 | **standard** (default) | PreToolUse Bash dump-verb gate (`cat`/`head`/`sed`/`awk`/`grep`-rows/`sqlite3`/python·R row dumps on a sensitive path) + Edit/Write sidecar-tamper guard | ✅ | ❌ — it is a denylist; other interpreters, encodings, and variable-assembled paths bypass it |
 | **strict** | standard **+** a PostToolUse hook that redacts PII / bulk-row Bash **output** before it reaches context (any verb) | ✅ stronger | ❌ — evadable by encoding (`base64`/`gzip`/`hex`) and by `cp`-to-benign-path → Read |
-| **lockdown** | strict **+** an OS sandbox (`denyRead` on data dirs) so subprocess reads of data are blocked at the kernel | ✅ | ✅ — a real boundary (the only one) |
+| **lockdown** | strict **+** an OS sandbox read-deny on the data dirs, auto-generated per-project by `generate-lockdown-config.sh` (Claude Code: `sandbox.filesystem.denyRead` w/ `allowUnsandboxedCommands:false`; Codex: `[permissions]` `"data"="deny"`) so subprocess reads of data are blocked at the kernel (Seatbelt/Landlock) | ✅ | ✅ — a real boundary (the only one) |
 
-Standard and strict are **cooperative-agent guardrails, not walls** — say so when you set them. Only lockdown is a containment boundary. *(The lockdown OS-sandbox layer is not yet shipped in this release; `standard` and `strict` are available now.)*
+Standard and strict are **cooperative-agent guardrails, not walls** — say so when you set them. Only lockdown is a containment boundary, and it imposes real friction (data analysis must run through the sanctioned runner / an explicit unsandboxed escalation). Lockdown is **auto-generated** for the detected host (Claude Code and/or Codex) by Step 5.1b — verified against Claude Code (`cat data/raw/*` → `Operation not permitted`, 0 leak) and Codex (`blocked by the active permission profile`).
 
 ### Step 5.1 — Write the level
 
@@ -571,11 +571,28 @@ else
 fi
 ```
 
+### Step 5.1b — Generate the OS sandbox config (lockdown only)
+
+When `LVL=lockdown`, generate the host-appropriate OS-enforced read-deny config. **This is what makes lockdown a real wall** rather than just a recorded intent — it writes a kernel-enforced deny on the data dirs (Claude Code: `sandbox.filesystem.denyRead` in `<proj>/.claude/settings.json`; Codex: a `[permissions]` `deny` profile in `<proj>/.codex/config.toml`). Verified against Claude Code (Seatbelt) and Codex.
+
+```bash
+if [ "$LVL" = "lockdown" ]; then
+  _b="$HOME/.claude/scholar-skill-bootstrap.sh"; [ -f "$_b" ] || _b="${SCHOLAR_SKILL_DIR:-.}/scripts/scholar-skill-bootstrap.sh"
+  [ -f "$_b" ] && . "$_b"; unset _b
+  # Default is the HARD wall (allowUnsandboxedCommands:false). Pass
+  # --allow-escalation ONLY if the user must run LOCAL_MODE analysis while locked.
+  ESC=""; printf '%s' "$ARGUMENTS" | grep -qiE 'escalat|allow-unsandbox' && ESC="--allow-escalation"
+  bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/generate-lockdown-config.sh" "$(pwd)" --host auto $ESC
+fi
+```
+
+Surface the generator's output verbatim — it prints the denied paths, the restart (Claude) / trust (Codex) reminder, and the **LOCAL_MODE-analysis caveat** (denyRead blocks the sanctioned `Rscript` too, so run analysis before locking or use `--allow-escalation`).
+
 ### Step 5.2 — Report honestly
 
 - Confirm the level written and **what it actually enforces today** (use the table above — standard/strict are not walls).
-- **Hook config is snapshotted at session start** — tell the user the change takes effect after they **restart Claude Code**.
-- For **lockdown**: the OS-sandbox layer is not yet shipped, so `_safety_level=lockdown` currently enforces strict-level (hook) behavior — state this plainly rather than implying a wall exists.
+- **Hook config is snapshotted at session start** — tell the user the change takes effect after they **restart Claude Code** (Codex: after they **trust the project**).
+- For **lockdown**: Step 5.1b has now written the OS-sandbox config into the **project** (`<proj>/.claude/settings.json` and/or `<proj>/.codex/config.toml`) — it is no longer a manual step. Remind the user it activates on restart (Claude) / trust (Codex), and that it blocks ALL reads of `data/` including LOCAL_MODE analysis scripts (run analysis first, or re-run with `--allow-escalation`). If the generator printed a WARN (foreign `[permissions]` / non-JSON settings), relay it verbatim.
 - Global default: a machine-wide default can be set via the `SCHOLAR_SAFETY_LEVEL` env var; the per-project `_safety_level` key overrides it.
 
 ---

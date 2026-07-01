@@ -165,6 +165,20 @@ The target filename is chosen by the vendored `detect-host-agent.sh` helper (add
 
 The script prints a one-time user-facing notice on CREATE / APPEND (full banner with the file path, a summary of what's in it, the auto-managed content for review, and a reminder that the operator can add content outside the markers) and a short banner on REFRESH / MIGRATE. NO-OP runs are silent. **Do not redirect this script's stdout to `/dev/null`** — the notice is intended for the operator to see on first invocation.
 
+5b. Install the Codex data-safety hook when the host could be Codex (2026-07). The data guard (`pretooluse-data-guard.sh`) only fires under Claude Code (`~/.claude/settings.json`); a **Codex** host never reads that file. When the detected host is `codex` or `unknown` — the same rule that writes `AGENTS.md` — register the guard as a Codex PreToolUse hook in `<proj>/.codex/config.toml`. This matters because an auto-research project **not** initialized by `scholar-init` (the branch at step 3 above) would otherwise have no Codex-side enforcement. Harmless under Claude Code; activates once the user trusts the project in Codex.
+
+```bash
+_b="$HOME/.claude/scholar-skill-bootstrap.sh"; [ -f "$_b" ] || _b="${SCHOLAR_SKILL_DIR:-.}/scripts/scholar-skill-bootstrap.sh"
+[ -f "$_b" ] && . "$_b"; unset _b
+_HOST="$(bash "${SCHOLAR_SKILL_DIR:-.}/scripts/detect-host-agent.sh" 2>/dev/null || echo unknown)"
+if [ "$_HOST" = "codex" ] || [ "$_HOST" = "unknown" ]; then
+  bash "${SCHOLAR_SKILL_DIR:-.}/scripts/phases/setup-codex-hooks.sh" "$PROJ" || true
+fi
+unset _HOST
+```
+
+Surface the installer's output verbatim (nothing to relay on NO-OP; on CREATE it prints the trust-onboarding reminder). If the project later opts into `lockdown` via `/scholar-safety level lockdown`, the OS-sandbox wall is generated then (not here).
+
 6. At the start of each turn, read next phase:
 
 ```bash
