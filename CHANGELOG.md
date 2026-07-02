@@ -3,6 +3,19 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [5.16.0] - 2026-07-02
+
+### Data-safety stack — Codex-host enforcement + OS-enforced lockdown wall
+
+Ports the full Codex data-safety feature from the dev repo (`open-scholar-skills`, branch `codex-host-data-safety`) to this release repo (`c051460`). Previously the data-safety stack assumed a **Claude Code** host: under a **Codex** host the PreToolUse guard was inert (Codex never reads `~/.claude/settings.json`), and the `AGENTS.md` written for Codex projects *falsely* claimed the Claude hook protected the session.
+
+- **Codex PreToolUse guard.** `scripts/gates/codex-pretooluse-hook.sh` (delegates to the same `pretooluse-data-guard.sh`) + `scripts/phases/setup-codex-hooks.sh`; installed by `/scholar-init` Step 1.2.5 and `/scholar-auto-research` Phase 0 for codex/unknown hosts.
+- **Honest `AGENTS.md` prose.** A `{{ENFORCEMENT_BLOCK}}` token (lean template + per-target `render_auto_block` in `setup-project-claudemd.sh`): `AGENTS.md` no longer falsely claims the Claude PreToolUse hook protects a Codex session, and carries an actionable sidecar self-enforcement contract instead.
+- **OS-lockdown wall.** `scripts/gates/generate-lockdown-config.sh` writes the per-host kernel read-deny (Claude `sandbox.filesystem.denyRead` / Codex `[permissions]` `"data"="deny"`, plus per-file denies for restricted sidecar files that live inside the workspace but outside `data/`), wired into `/scholar-safety` MODE 5 (Step 5.1b). Default is the hard wall (`allowUnsandboxedCommands:false`) — which also blocks the sanctioned LOCAL_MODE `Rscript` read, so run analysis before locking or pass `--allow-escalation` for a human-approved escape hatch.
+- **Docs.** `data-handling-policy` §9, CLAUDE.md, README, USAGE updated (lockdown "not yet shipped" → shipped). *(This release also completes the README fix the port commit missed — the "Coming next: an OS-level sandbox" / "until the `lockdown` sandbox ships" text that still contradicted the now-shipped feature.)*
+
+Validated in this repo: `test-codex-data-guard` 5/0, `test-setup-codex-hooks` 5/0, `test-generate-lockdown-config` 9/0, `test-setup-project-claudemd` 11/0. Deviations from the dev repo: safety-level is MODE 5 here (Step 5.1b, not 6); lean template only (no full template in this release). The dev-repo source is live-verified against codex 0.142.5 + Claude Code 2.1.197.
+
 ## [5.15.0] - 2026-06-13
 
 Ports `scholar-simulate` from upstream `open-scholar-skills` (private), reviewed and confirmed free of project-specific and personal data, with its dev-only bootstrap shim removed in favor of this fork's `${SCHOLAR_SKILL_DIR:-.}` convention. **LLM-powered social simulation is a research instrument, not a substitute for human data.** The skill enforces this in its own contract: simulated respondents (silicon sampling, generative agents) may only support a publishable claim *after* fidelity validation against real human data — the skill treats an unvalidated simulated result as inadmissible, not as evidence. Use it to prototype designs, stress-test theory, and bound expectations; do not report its outputs as findings about people without the human-data check.
