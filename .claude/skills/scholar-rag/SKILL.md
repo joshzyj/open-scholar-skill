@@ -321,16 +321,16 @@ rag_py semantic.py status
 compressed far higher than phrase similarity — measured on a 5.5k-paper
 social-science corpus, the
 median top-10 *paper* neighbour scored **0.886**, so a 0.55 floor kept
-essentially everything (10.0 edges/paper) including a historical-sociology
+essentially everything (7.9 edges/paper) including a historical-sociology
 monograph sitting next to an LLM benchmark paper. Check the distribution before
 trusting a cutoff:
 
 | paper `min-sim` | edges | per paper |
 |---|---|---|
-| 0.55 | 54,744 | 10.0 |
-| 0.85 | 45,832 | 8.4 |
-| **0.90** (default) | **19,006** | **3.5** |
-| 0.95 | 2,114 | 0.4 |
+| 0.55 | 43,293 | 7.9 |
+| 0.85 | 34,661 | 6.3 |
+| **0.90** (default) | **11,935** | **2.2** |
+| 0.95 | 1,127 | 0.2 |
 
 For *entity names* the picture is different — unrelated short phrases sit around
 0.3–0.6 and genuine synonyms above ~0.85, so 0.80 is a reasonable floor there.

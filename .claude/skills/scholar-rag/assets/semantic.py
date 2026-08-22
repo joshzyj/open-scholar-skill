@@ -44,8 +44,17 @@ def gdir():
 
 
 def _knn_blocks(M, k, min_sim, block=2048):
-    """Top-k neighbours per row of a row-normalized matrix, as (i, j, sim)."""
+    """Top-k neighbours per row of a row-normalized matrix, as (i, j, sim).
+
+    Each unordered pair is yielded ONCE. kNN is not symmetric, but it is often
+    mutual: when i is in j's top-k and j is in i's top-k, a naive scan emits the
+    same pair from both rows. That inflated the reported edge counts ~2x and,
+    because citations.build() *sums* semantic weight into the paper graph
+    (graphrag.build() takes a max, so it was unaffected), silently gave mutual
+    pairs double weight there.
+    """
     import numpy as np
+    seen = set()
     n = M.shape[0]
     for s in range(0, n, block):
         e = min(n, s + block)
@@ -59,10 +68,13 @@ def _knn_blocks(M, k, min_sim, block=2048):
             idx = np.argpartition(-sims[r], kk)[:kk]
             for j in idx:
                 v = float(sims[r, j])
-                if v >= min_sim and i < int(j):   # dedupe: emit once per pair
-                    yield i, int(j), v
-                elif v >= min_sim and i > int(j):
-                    yield int(j), i, v
+                if v < min_sim:
+                    continue
+                a, b = (i, int(j)) if i < int(j) else (int(j), i)
+                if (a, b) in seen:
+                    continue
+                seen.add((a, b))
+                yield a, b, v
 
 
 def doc_vectors(batch_rows=20000):
