@@ -93,7 +93,7 @@ Pre-execution review: report <path> · review_id <id> · scripts N hashed · gat
 
 ## §6 Fix loop, skip, and orchestration
 
-- **Fix loop:** on CRITICAL findings apply `_shared/code-review-fix-loop.md` — AUTO_FIX mechanical/blueprint-specified items via Edit, ESCALATE design-level items to the user, max 2 iterations, log to `${PROJ}/logs/code-review-fixes-[date].md`. After fixes, **re-review is mandatory** (scholar-code-review Step 6): re-dispatch the affected agents against the fixed bytes; the new manifest supersedes the old; re-run the gate.
+- **Fix loop:** on CRITICAL findings apply `_shared/code-review-fix-loop.md` — AUTO_FIX-class items go to a freshly dispatched Task subagent (never the orchestrator's own Edit — see the loop for why), ESCALATE design-level items to the user, max 2 iterations, log to `${PROJ}/logs/code-review-fixes-[date].md`. After fixes, **re-review is mandatory** (scholar-code-review Step 6): re-dispatch the affected agents against the fixed bytes; the new manifest supersedes the old; re-run the gate.
 - **Skip:** `--skip-preexec-review` is honored in standalone invocation only. The skip MUST emit a trace row (`status: skipped`, with the flag as reason) and MUST be justified in the output's Limitations. Under orchestration the flag is ignored.
 - **Orchestration interplay:** under scholar-auto-research (Phase 6), the orchestrator's review phases SUPERSEDE this duty — do not double-review. scholar-brainstorm DATA mode keeps its own equivalent gate (`references/mode-data.md` Step 4b.ii.5, different artifact schema — documented divergence, equally binding).
 

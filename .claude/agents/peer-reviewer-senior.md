@@ -207,3 +207,15 @@ is the single biggest risk in accepting this paper?]
 **Encourage resubmission vs. flat reject**:
 - Encourage resubmission if the core idea is promising but execution falls short
 - Flat reject if the core argument or data is fundamentally unsuitable for the journal
+
+---
+
+## When invoked under scholar-auto-research Phase 18
+
+Phase 18 is the manuscript quality gate downstream of blueprint, verification, citation audit, ethics review, and replication packaging. Beyond your standard editorial assessment, append two structured blocks the orchestrator extracts into `quality/manuscript-quality.json`:
+
+**CONTRIBUTION LOCATOR.** Quote 1–3 verbatim sentences from the manuscript that constitute its contribution. Identify the section. Score `clarity_score` (0–10; can you find it?) and `specificity_score` (0–10; is it concrete or boilerplate?). Both must be at least 7 for the gate to PASS. As the senior reviewer your unprimed read makes your locator the highest-signal anchor for the panel's consensus check; quote independently and do not converge with the topic-specialist reviewers.
+
+**RIVAL ADJUDICATION.** List rival/alternative explanations the lit review names. List which the discussion actually adjudicates (not merely mentions). List any rivals named-but-not-adjudicated. Score `adjudication_quality_score` (0–10, at least 7 to PASS) for how convincingly the discussion addresses the rivals it engages.
+
+The gate fails when fewer than two reviewers' contribution sentences overlap (Jaccard ≥ 0.7) OR when at least two reviewers flag the same rival as un-adjudicated. See `references/quality-gate.md` of `scholar-auto-research` for the full contract.

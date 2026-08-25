@@ -116,10 +116,13 @@ wc -l "$FILE" 2>/dev/null || echo "binary or unreadable"
 ls -lh "$FILE"
 ```
 
-If directory:
+If directory (use `-L` to follow symlinks — a bare `find -type f` skips symlinked
+data files entirely, since a symlink's own type is `l`, not `f`; a directory of
+symlinked `.dta` files would enumerate as empty/near-empty and the scan would
+silently cover nothing):
 ```bash
-find "$DIR_PATH" -type f | head -50
-find "$DIR_PATH" -type f | wc -l
+find -L "$DIR_PATH" -type f | head -50
+find -L "$DIR_PATH" -type f | wc -l
 ```
 
 ### Step 1.2 — Detect Data Type (Quantitative vs. Qualitative)

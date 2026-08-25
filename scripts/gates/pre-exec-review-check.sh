@@ -18,6 +18,11 @@
 #   R2  Hash binding: every scripts[] entry must exist on disk and its SHA-256
 #       must match. Any mismatch/missing => RED (review-then-edit-then-execute
 #       is the loophole this gate exists to close).
+#   R2b Out-of-scope hash binding: when supersedes_review_id is set, every
+#       out_of_scope[] path must still match the SHA-256 the PRIOR manifest
+#       recorded for it. A fix round can declare a file "out of scope — not
+#       touched" while having silently rewritten it; R2 only hashes scripts[]
+#       and R3 only checks name-coverage, so nothing else catches this.
 #   R3  Completeness: reviewable scripts on disk (in --scripts-dir, matching
 #       *.R *.r *.py *.do *.jl) that appear in NEITHER scripts[] NOR
 #       out_of_scope[] => RED (unreviewed script in scope).
@@ -188,6 +193,60 @@ if [ -n "$HASH_FAILS" ]; then
   echo "The reviewed bytes must be the executed bytes. Fix + re-review (scholar-code-review Step 6) before executing."
   exit 1
 fi
+
+# ── R2b: out_of_scope[] is a CLAIM of non-modification — hash-bind it ─────
+# A lying fix receipt can declare a silently-rewritten file "out of scope —
+# not touched" and the rest of the gate clears it for execution: R2 hashes
+# only scripts[], R3 checks name-coverage only, and nothing anywhere hashed
+# an out_of_scope[] path. When the manifest names a superseded manifest,
+# every out_of_scope[] path that the PRIOR manifest hashed must still match
+# the PRIOR sha on disk — "out of scope" defers to the review that DID cover
+# the file, so drift since that review makes the claim false. No prior
+# manifest => no baseline to bind against (the R3 name-coverage rule still
+# applies); this is the documented limit, not a silent one.
+_R2B_SUP=$(jq -r '.supersedes_review_id // empty' "$MANIFEST")
+if [ -n "$_R2B_SUP" ]; then
+  _R2B_PRIOR=""
+  for _pm in "$PROJ"/code-review/reviewed-scripts-*.json; do
+    [ -f "$_pm" ] || continue
+    if [ "$(jq -r '.review_id // empty' "$_pm" 2>/dev/null)" = "$_R2B_SUP" ]; then
+      _R2B_PRIOR="$_pm"
+      break
+    fi
+  done
+  if [ -n "$_R2B_PRIOR" ]; then
+    R2B_FAILS=""
+    N_OOS=$(jq -r '.out_of_scope | length' "$MANIFEST" 2>/dev/null || echo 0)
+    case "$N_OOS" in ''|*[!0-9]*) N_OOS=0 ;; esac
+    i=0
+    while [ "$i" -lt "$N_OOS" ]; do
+      O_PATH=$(jq -r ".out_of_scope[$i].path // empty" "$MANIFEST")
+      i=$((i + 1))
+      [ -n "$O_PATH" ] || continue
+      PRIOR_SHA=$(jq -r --arg p "$O_PATH" '.scripts[] | select(.path == $p) | .sha256' "$_R2B_PRIOR" 2>/dev/null | head -1)
+      [ -n "$PRIOR_SHA" ] || continue
+      case "$O_PATH" in
+        /*) O_ABS="$O_PATH" ;;
+        *)  O_ABS="$PROJ/$O_PATH" ;;
+      esac
+      [ -f "$O_ABS" ] || continue
+      O_DISK=$(_sha256 "$O_ABS")
+      if [ -n "$O_DISK" ] && [ "$O_DISK" != "$PRIOR_SHA" ]; then
+        R2B_FAILS="${R2B_FAILS}\n  - $O_PATH (declared out_of_scope, but its bytes MOVED since review $_R2B_SUP — the claim of non-modification is false)"
+      fi
+    done
+    if [ -n "$R2B_FAILS" ]; then
+      echo "STATUS=RED"
+      echo "FAIL: out_of_scope[] hash binding failed (review_id=$REVIEW_ID supersedes $_R2B_SUP):"
+      printf '%b\n' "$R2B_FAILS"
+      echo "A file declared out of scope defers to the review that covered it; changed bytes"
+      echo "make that declaration a lie. Either move the file into scripts[] (it was touched"
+      echo "— review the new bytes) or restore the reviewed bytes."
+      exit 1
+    fi
+  fi
+fi
+unset _R2B_SUP _R2B_PRIOR R2B_FAILS N_OOS O_PATH PRIOR_SHA O_ABS O_DISK 2>/dev/null || true
 
 # ── R3: completeness (no unreviewed script in scope) ──────────────────────
 COVERED=$( { jq -r '.scripts[].path' "$MANIFEST"; jq -r '.out_of_scope[]?.path // empty' "$MANIFEST"; } 2>/dev/null | sort -u)

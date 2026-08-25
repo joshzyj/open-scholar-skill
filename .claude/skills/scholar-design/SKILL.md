@@ -105,6 +105,46 @@ Recommend the strongest defensible design given the claim and available data:
 
 **Causal gate**: If the claim requires causal inference (DiD, FE, RD, IV, matching, mediation, natural experiment), invoke `/scholar-causal` at this point for full DAG construction, strategy deep-dive, and identification argument. Return here after that skill completes.
 
+### Step 1.5: Multi-Comparison Policy Declaration
+
+**When this is mandatory.** Any time the design contains a pre-registered hypothesis *family* with K ≥ 3 ordered or parallel tests — for example:
+- A heterogeneity panel with K subgroups (e.g., race × sex × cohort cells)
+- A multi-outcome study with K endpoints from the same intervention
+- A multi-mediator decomposition with K candidate mediators
+- A multi-treatment-arm trial with K-1 pairwise contrasts to control
+- A panel of moderators (K interaction terms) tested simultaneously
+
+Multi-comparison correction is **not** triggered by descriptive tables, robustness checks under a single primary hypothesis, or exploratory analyses (which must be flagged "exploratory, not corrected" rather than corrected). Treat each pre-registered family separately — do not lump heterogeneous tests into one "global" alpha.
+
+**What the design blueprint must declare.** Before data work begins, add a `## Multi-Comparison Policy` section to the blueprint with the following machine-readable block, one per family:
+
+```yaml
+multi_comparison_families:
+  - family_id: H3-heterogeneity
+    description: "Treatment effect heterogeneity across 9 race × sex × cohort cells"
+    K: 9
+    correction: bonferroni        # holm | BH | BY | bonferroni | none-with-justification
+    alpha_familywise: 0.05
+    alpha_per_test: 0.0056        # = alpha_familywise / K for bonferroni; computed at runtime for holm/BH/BY
+    primary: false                # true if this family carries a hypothesis test the manuscript headlines; false if secondary
+    decision_rule: "H3 'supported' iff ≥1 cell has p_adj < alpha_familywise; 'partial' iff ≥1 raw p < .05 but 0 survive correction is FORBIDDEN — must be reported as 'no support after correction'"
+  - family_id: H4-mediators
+    description: "Three candidate mediators (M1 income, M2 education, M3 networks)"
+    K: 3
+    correction: holm
+    alpha_familywise: 0.05
+    primary: true
+    decision_rule: "Holm step-down; reject H4 entirely if 0 mediators survive"
+```
+
+`correction`, `K`, and `family_id` here must match the vocabulary `scholar-analyze/references/adjudication-rule.md` expects (`holm | BH | BY | bonferroni`) so the analysis script and this declaration agree on method names.
+
+If a family has K ≥ 3 and the analyst declines correction, they MUST set `correction: none-with-justification` and write a one-paragraph defense of the choice in the blueprint prose (e.g., "all three are independent pre-registered primary endpoints, with reviewer agreement the correction would conflate effective sample size — see Rubin 1976"). The Step 11 Internal Review Panel's R2 (Power & Sample Size Reviewer) scrutinizes this justification; "we ran out of time" is not acceptable.
+
+**Why this lives at design time, not analysis time.** Multi-comparison correction is a design choice, not an output choice. Declaring the correction method here binds the analyst to an a-priori rule and prevents post-hoc α shopping — choosing whether to correct only after seeing which cell has the smallest raw p-value is exactly the pattern this step exists to close off. `scholar-analyze/references/adjudication-rule.md`'s family-correction self-check then requires emission of a `${PROJ}/verify/family-correction-<HID>.csv` artifact for every K ≥ 3 family before Results prose is drafted, and `scholar-write/references/section-standards.md`'s multi-comparison reporting rules forbid "supported" / "partial support" prose for any family where 0 cells survive correction.
+
+**Reviewer panel implication.** Any blueprint with at least one K ≥ 3 family means Step 11 Phase A's Review Package must include this `## Multi-Comparison Policy` block, and R2 (Power & Sample Size Reviewer) must score the existing "MDES / multiple testing" scorecard row against the declared correction method and its justification — not leave the row blank because no family was disclosed.
+
 ---
 
 ## Step 2: Experimental Design Module

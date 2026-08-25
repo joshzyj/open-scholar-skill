@@ -161,3 +161,15 @@ STRENGTHS:
 **Science Advances**: Interdisciplinary framing required — the theory section must be accessible to non-sociologists. Avoid discipline-specific jargon without definitions.
 
 **Nature Human Behaviour**: Behavioral and social science focus; theoretical framing should connect to broad human behavioral patterns. Evolutionary, cognitive, or economic theories as complement to sociological frameworks can strengthen interdisciplinary appeal.
+
+---
+
+## When invoked under scholar-auto-research Phase 18
+
+Phase 18 is the manuscript quality gate downstream of blueprint, verification, citation audit, ethics review, and replication packaging. Beyond your standard review, append two structured blocks the orchestrator extracts into `quality/manuscript-quality.json`:
+
+**CONTRIBUTION LOCATOR.** Quote 1–3 verbatim sentences from the manuscript that constitute its contribution. Identify the section. Score `clarity_score` (0–10; can you find it?) and `specificity_score` (0–10; is it concrete or boilerplate?). Both must be at least 7 for the gate to PASS. Quote independently — the cross-reviewer Jaccard agreement on the sentences each reviewer quotes is the load-bearing signal that the contribution is genuinely locatable.
+
+**RIVAL ADJUDICATION.** List rival/alternative explanations the lit review names. List which the discussion actually adjudicates (not merely mentions). List any rivals named-but-not-adjudicated. Score `adjudication_quality_score` (0–10, at least 7 to PASS) for how convincingly the discussion addresses the rivals it engages.
+
+The gate fails when fewer than two reviewers' contribution sentences overlap (Jaccard ≥ 0.7) OR when at least two reviewers flag the same rival as un-adjudicated. See `references/quality-gate.md` of `scholar-auto-research` for the full contract.

@@ -202,6 +202,21 @@ Layer 3 — INTERPRETATION (what this means — CLEARLY MARKED):
 
 **Why this matters:** When description and interpretation are mixed in the same sentences, interpretive errors (mislabeling patterns, choosing framings that obscure within-group realities) become invisible because they look like empirical statements. Separating them forces the interpretation to be traceable to specific numbers and makes it easier for reviewers (human or automated) to check whether the label fits the data.
 
+**Multi-Comparison Reporting (MANDATORY when K ≥ 3):**
+
+If the design blueprint declared a `multi_comparison_families:` block (`scholar-design` Step 1.5 — any pre-registered hypothesis family with K ≥ 3 ordered or parallel tests: heterogeneity panels, multi-outcome, multi-mediator, multi-arm), the Results section MUST contain a dedicated paragraph for each such family that:
+
+1. **Names the family and the K**: "We test H[N] across K=[N] [strata|outcomes|mediators]: [enumerate]."
+2. **Cites the correction method and α**: "Per the pre-registered multi-comparison policy (`family_id: H[N]`, `correction: holm`, `alpha_familywise: 0.05`), per-test α is [value]."
+3. **Reports BOTH raw and corrected p-values**: For every cell in the family, report `p_raw` and `p_adj` (or the survives-correction flag). Format: "Stratum X: b = .12, SE = .04, p_raw = .003, p_adj = .024 (Holm)."
+4. **Sources from `${PROJ}/verify/family-correction-<HID>.csv`** (emitted by the family-correction self-check in `scholar-analyze/references/adjudication-rule.md`): the prose numbers must match this CSV — do not recompute or eyeball from raw p-values.
+5. **States the survival count**: "After Holm correction, [n_survive] of K=[N] cells survive at α_familywise = [value]."
+
+**Verdict prose constraints (HARD RULE):**
+- If `n_survive == 0`: the verdict prose MUST NOT use "supported," "partial support," "consistent with H[N]," or any equivalent. Permitted phrasings: "no cell in the family survives [correction] at α = [value]," "we cannot reject the null for any cell," "H[N] is not supported under the pre-registered family-wise control."
+- If `0 < n_survive < K`: report which specific cells survive ("only [strata X, Y] survive correction; [strata Z, W] do not"). The aggregate verdict must distinguish between cell-level and family-level claims.
+- `scholar-verify` Stage 2 verify-logic checks this paragraph against the design blueprint's `decision_rule` field (from `scholar-design` Step 1.5) and rejects "supported" prose when the surviving-cell count is 0.
+
 **Table and figure references (MANDATORY for Results; recommended for other sections)**:
 - **Every table and figure in the ARTIFACT REGISTRY must be referenced at least once in the text.** If an artifact exists but does not belong in the current section, note it for another section.
 - Use parenthetical references tied to the ARTIFACT REGISTRY: `(Table 1)`, `(Figure 2)`, `(see Appendix Table A1)`
@@ -253,6 +268,17 @@ Layer 3 — INTERPRETATION (what this means — CLEARLY MARKED):
 - Map each alternative explanation to the specific robustness check that addresses it
 - Write 1–2 paragraphs preemptively addressing the most likely reviewer objections (endogeneity, omitted variable bias, measurement error, selection bias, reverse causality)
 - Frame as: "One concern is that [objection]. We address this by [robustness check], which shows [result]."
+
+**Multi-comparison adjudication (MANDATORY when K ≥ 3):**
+
+If the design blueprint declared any `multi_comparison_families:` family with K ≥ 3 (`scholar-design` Step 1.5), the Discussion MUST adjudicate each such hypothesis using the family-wise correction outcome from `${PROJ}/verify/family-correction-<HID>.csv`:
+
+- **Read the survival count**: pull `n_survive` from that CSV; do NOT recompute or eyeball from raw p-values.
+- **Map survival to verdict**: if `n_survive == 0`, the hypothesis is NOT supported under family-wise control — the Discussion MUST say so explicitly. Forbidden phrasings (flagged by `scholar-verify` Stage 2 verify-logic against the blueprint's `decision_rule` field): "supported," "partial support," "consistent with H[N]," "evidence for H[N]," "we find that H[N]."
+- **Distinguish cell-level from family-level claims**: when `0 < n_survive < K`, the Discussion may say "[X] of [K] cells survive correction" but cannot upgrade this to family-level support without explicit theoretical justification grounded in the pre-registered `decision_rule`.
+- **Engage the null result honestly**: when no cells survive, treat the null as the finding — discuss why expected effects did not materialize (statistical power, measurement, scope conditions, theoretical mechanism), not as a footnote to a "supported" narrative.
+
+This requirement enforces that the Discussion cannot relitigate the family-wise correction outcome through hedged prose. The blueprint's pre-registered `decision_rule` (declared at `scholar-design` Step 1.5, applied by `scholar-analyze/references/adjudication-rule.md`) is the binding contract.
 
 **Writing guidance**:
 - Do not merely restate results — interpret them

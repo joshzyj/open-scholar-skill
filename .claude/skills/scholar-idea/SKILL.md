@@ -132,14 +132,14 @@ eval "$(cat "$SKILL_DIR/.claude/skills/_shared/refmanager-backends.md" | sed -n 
 
 # ── External API searches per angle ──
 echo "=== EXTERNAL APIs: Angle 1 ==="
-scholar_search_crossref "[ANGLE_1_KEYWORDS]" 15
-scholar_search_s2 "[ANGLE_1_KEYWORDS]" 15
-scholar_search_openalex "[ANGLE_1_KEYWORDS]" 15
+scholar_search_crossref_keyword "[ANGLE_1_KEYWORDS]" 15
+scholar_search_semanticscholar_keyword "[ANGLE_1_KEYWORDS]" 15
+scholar_search_openalex_keyword "[ANGLE_1_KEYWORDS]" 15
 echo ""
 echo "=== EXTERNAL APIs: Angle 2 ==="
-scholar_search_crossref "[ANGLE_2_KEYWORDS]" 15
-scholar_search_s2 "[ANGLE_2_KEYWORDS]" 15
-scholar_search_openalex "[ANGLE_2_KEYWORDS]" 15
+scholar_search_crossref_keyword "[ANGLE_2_KEYWORDS]" 15
+scholar_search_semanticscholar_keyword "[ANGLE_2_KEYWORDS]" 15
+scholar_search_openalex_keyword "[ANGLE_2_KEYWORDS]" 15
 # (repeat for additional angles)
 ```
 

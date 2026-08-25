@@ -183,34 +183,218 @@ Verify that WebSearch results confirm:
 - If ALL match → status = `VERIFIED-WEB`
 - If partially matched → status = `PARTIALLY-VERIFIED` (note what could/couldn't be confirmed)
 
-## Step V-3.5: PDF Claim Verification (Optional — when `verify-claims` flag is set)
+## Step V-3.5: Claim Verification (MANDATORY — runs for all verified references)
 
-For references that are VERIFIED-LOCAL and have PDFs in Zotero storage, optionally verify that the cited source actually supports the specific claim made in the manuscript.
+After confirming that each reference exists (Tiers 1–3), verify that the manuscript's prose claims about each cited source are accurate — i.e., that when the manuscript says "Smith (2020) found X," Smith (2020) actually found X. This step catches mischaracterized findings, wrong directionality, overstated effects, unsupported causal language, and claims applied to the wrong population or context.
 
-**When to use:** Only for critical/disputed claims, or when the user passes `verify-claims` flag. Too slow for routine verification.
+**This step is MANDATORY, not optional.** Citation fabrication and citation mischaracterization are equally damaging to scholarly integrity. A real paper cited for a claim it doesn't make is as misleading as a fabricated paper. It runs as Step V-3.5 in every VERIFY execution — not only when a flag is passed.
 
-```bash
-# Read first 300 lines of PDF via pdftotext
-PDF_KEY="[Zotero storage key from search results]"
-PDF_FILE="[filename from search results]"
-pdftotext "$ZOTERO_STORAGE/$PDF_KEY/$PDF_FILE" - | head -300
+### Step V-3.5a: Extract prose claims
+
+Parse the manuscript for every sentence or clause that attributes a specific finding, argument, or conclusion to a cited source. Extract structured claim records:
+
+```
+CLAIM INVENTORY:
+| # | Manuscript text (verbatim) | Cited paper | Claim type | Claim content |
+|---|---------------------------|-------------|------------|---------------|
+| 1 | "Smith (2020) found that X increases Y" | Smith 2020 | empirical finding | X increases Y |
+| 2 | "Following Jones's (2019) argument that..." | Jones 2019 | theoretical argument | [argument] |
+| 3 | "Using the method developed by Lee (2018)..." | Lee 2018 | method attribution | [method] |
 ```
 
-**Verification logic:**
-1. Extract the claim text from the manuscript
-2. Read the cited paper's abstract + first 300 lines
-3. Check if the paper's content supports the specific claim
-4. Status labels:
-   - `CLAIM-SUPPORTED`: Paper content confirms the claim
-   - `CLAIM-AMBIGUOUS`: Paper discusses the topic but doesn't directly support the exact claim
-   - `CLAIM-UNSUPPORTED`: Paper content contradicts or doesn't address the claim
-5. Log results in verification report
+**Claim types to extract:**
+- **Empirical finding**: "found that", "showed that", "demonstrated", "reported", "observed"
+- **Theoretical argument**: "argues that", "contends", "theorizes", "proposes", "following X's framework"
+- **Method attribution**: "using the method developed by", "following the approach of"
+- **Directional claim**: "positive/negative association", "increases/decreases", "more/less likely"
+- **Magnitude claim**: specific numbers, effect sizes, percentages attributed to a source
+- **Population/scope claim**: "among [population]", "in [context]", claims about where a finding applies
+- **Causal claim**: "causes", "leads to", "produces", "results in" — verify the cited paper actually makes a causal claim vs. showing correlation
+
+### Step V-3.5a2: Resolve write-time Evidence Ledger anchors (fast path — before KG)
+
+When the manuscript carries `<!--ev: anchor_id-->` tags (written by lit-review/scholar-write/INSERT per `_shared/evidence-ledger.md`), resolve each tagged claim's anchor_ids against `${PROJ}/evidence/claim-anchors.ndjson` FIRST. The anchor gives you the exact passage the author relied on (`evidence_quote` + `source_loc`), its access tier, and its honesty class (`evidence_form`):
+- A `source_verbatim` T1/T2 anchor whose quote entails the claim → verify against that passage directly (record the anchor_id in the audit record's `anchor_refs[]`).
+- A `kg_paraphrase` or `metadata_only`/`T3` anchor → the write-time evidence was weak: **escalate these claims to a KG/PDF read first** — they are the highest-risk pool.
+- Anchors are leads, not verdicts: the verdict always comes from what the retrieved text actually says.
+
+### Step V-3.5b: Look up cited papers in Knowledge Graph (Tier 0 — fastest)
+
+Before reading PDFs, check the knowledge graph for pre-extracted findings, mechanisms, and theories:
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+fi
+
+# Search by DOI or title
+kg_get_paper "[DOI]"
+# Or by author + title keyword
+kg_search_papers "[AUTHOR TITLE_KEYWORDS]" 3
+```
+
+If the cited paper is in the knowledge graph with `extraction_tier: "full_pdf"` or `"abstract_only"`, compare the manuscript's claim against the paper's `findings[]`, `mechanisms[]`, `theories[]`, `methods[]`, and `populations[]` fields.
+
+**KG-based claim check (fast path — no PDF read needed):**
+1. Match the manuscript claim to the KG paper's extracted fields
+2. Check: Does any finding[] entry support the specific claim?
+3. Check: Does the directionality match? (positive vs. negative, increases vs. decreases)
+4. Check: Does the population/context match the paper's populations[]?
+5. Check: If the manuscript uses causal language, does the paper's methods[] support causal inference? (e.g., "causes" is only justified if the paper used RCT, IV, DiD, RD, or similar)
+6. If KG data is sufficient to verify → assign status and move to next claim
+7. If KG data is insufficient or ambiguous → fall through to PDF verification
+
+### Step V-3.5c: PDF-based verification (Tier 1 — for claims not resolvable via KG)
+
+For claims that cannot be verified from the knowledge graph (paper not in KG, or KG data insufficient), read the cited paper's PDF:
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+eval "$(cat "$SKILL_DIR/_shared/refmanager-backends.md" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+
+# Search for the paper to get Zotero storage key
+scholar_search "AUTHOR_LASTNAME TITLE_KEYWORDS" 3 keyword
+```
+
+```bash
+# Extract text from PDF — abstract + intro + results + discussion
+ZOTERO_DIR="${SCHOLAR_ZOTERO_DIR:-$HOME/Zotero}"
+PDF_PATH="$ZOTERO_DIR/storage/[KEY]/[FILENAME]"
+if [ -f "$PDF_PATH" ]; then
+  # First pass: abstract + intro (first 150 lines)
+  pdftotext -q "$PDF_PATH" - | head -150
+fi
+```
+
+```bash
+# Second pass: results + discussion (where findings live)
+if [ -f "$PDF_PATH" ]; then
+  TOTAL_LINES=$(pdftotext -q "$PDF_PATH" - | wc -l | tr -d ' ')
+  # Read the last 40% (typically Results through Conclusion)
+  START=$((TOTAL_LINES * 60 / 100))
+  pdftotext -q "$PDF_PATH" - | tail -n +${START} | head -300
+fi
+```
+
+**Read strategically based on claim type:**
+- Empirical finding → focus on Results and Discussion sections (last 40% of paper)
+- Theoretical argument → focus on Introduction and Theory/Literature Review (first 30%)
+- Method attribution → focus on Methods/Data section (middle 30%)
+- Magnitude claim → search for specific numbers in Results tables and text
+
+### Step V-3.5d: Verification logic and status assignment
+
+For each claim, assign one of these statuses:
+
+| Status | Meaning | Action |
+|--------|---------|--------|
+| `CLAIM-VERIFIED` | Paper content confirms the claim as stated in the manuscript | No action needed |
+| `CLAIM-IMPRECISE` | Paper supports the general direction but manuscript overstates, understates, or simplifies | Flag for author revision with specific correction |
+| `CLAIM-MISCHARACTERIZED` | Paper's finding is meaningfully different from what the manuscript claims | **Flag as error** — manuscript must be corrected |
+| `CLAIM-UNSUPPORTED` | Paper does not address this specific claim at all | **Flag as error** — wrong citation or fabricated claim |
+| `CLAIM-REVERSED` | Paper finds the opposite direction of what the manuscript claims | **Flag as critical error** — immediate correction required |
+| `CLAIM-OVERCAUSAL` | Manuscript uses causal language but paper reports only correlation/association | Flag for language correction |
+| `CLAIM-WRONG-POPULATION` | Paper studied a different population than what the manuscript attributes | Flag for scope correction |
+| `CLAIM-NOT-A-CLAIM` | Sentence cites a source but attributes no checkable finding/argument/method to it (e.g., background mention) | No action — not a factual attribution |
+| `CLAIM-NOT-CHECKABLE` | No PDF available and not in KG; claim cannot be verified | Log and note in report |
+
+**IMPORTANT — Insert markers inline in the manuscript draft.** For all statuses except `CLAIM-VERIFIED` and `CLAIM-NOT-A-CLAIM`, insert a bracketed marker adjacent to the problematic claim in the manuscript text itself (not just in the report). Format: `[CLAIM-REVERSED: Author Year — paper finds opposite direction]`. These inline markers are what `scripts/gates/verify-claims.sh` scans for. Without inline markers, the gate cannot detect errors.
+
+**IMPORTANT — Emit an audit record for EVERY adjudicated claim, including `CLAIM-VERIFIED`.** Markers persist only the defects; without positive records a verified claim is indistinguishable from an unchecked one and a skipped V-3.5 pass is indistinguishable from a passing one. Append one `claim-audit-record/v1` line per (sentence, citation) pair to `${PROJ}/evidence/claim-faithfulness-audit-[YYYY-MM-DD].ndjson` (schema: `schema/claim-audit-record.schema.json`; fields incl. verbatim sub-claim `evidence_quote`s, `access_tier`, `anchor_refs[]` from Step V-3.5a2, and `claim_fingerprint` = sha256 of the normalized comment-stripped sentence). After the pass: write the audit filename to `${PROJ}/evidence/LATEST-audit.txt`, validate with `bash scripts/gates/check-claim-audit-consistency.sh <audit-file>` (fix any violation), and re-render the Evidence Dossier (`python3 scripts/render-evidence-dossier.py --proj "$PROJ" --out <version-checked evidence/evidence-dossier-*.md path> --draft <manuscript>`) so verdicts appear beside the passages.
+
+For a deeper sentence-level audit (or to offload this entire step), dispatch the `verify-claim-faithfulness` agent — it implements the same sub-claim decomposition and tier chain described in V-3.5a–d against the identical schema. When dispatched, consume its artifact instead of re-deriving these steps manually; do not double-write the audit file.
+
+**Decision rules:**
+1. **Directional match**: If the manuscript says "X increases Y" but the paper found "X decreases Y" → `CLAIM-REVERSED`
+2. **Causal inflation**: If the paper uses "associated with" / "correlated with" but the manuscript says "causes" / "leads to" → `CLAIM-OVERCAUSAL`
+3. **Population mismatch**: If the paper studied "US adults" but the manuscript says "across all Western democracies" → `CLAIM-WRONG-POPULATION`
+4. **Magnitude mismatch**: If the manuscript cites a specific number (β = 0.45) that doesn't appear in the paper → `CLAIM-MISCHARACTERIZED`
+5. **Finding attribution**: If the paper's main finding is about topic A but the manuscript cites it for topic B → `CLAIM-UNSUPPORTED`
+6. **Theoretical misattribution**: If the manuscript says "following Smith's (2020) theory of X" but Smith proposes theory of Y → `CLAIM-MISCHARACTERIZED`
+7. **Hedging mismatch**: If the paper says "suggestive evidence" but the manuscript says "strong evidence" → `CLAIM-IMPRECISE`
+
+### Step V-3.5e: Claim verification report
+
+Append to the main verification report:
+
+```
+CLAIM VERIFICATION REPORT
+─────────────────────────────────────────────────
+Total prose claims checked: [N]
+
+CLAIM-VERIFIED:           [N] ([%])  — claim accurately represents cited source
+CLAIM-IMPRECISE:          [N] ([%])  — mostly correct but overstated/simplified
+CLAIM-MISCHARACTERIZED:   [N] ([%])  — meaningfully different from source
+CLAIM-UNSUPPORTED:        [N] ([%])  — source doesn't address this claim
+CLAIM-REVERSED:           [N] ([%])  — source contradicts the claim direction
+CLAIM-OVERCAUSAL:         [N] ([%])  — causal language for correlational finding
+CLAIM-WRONG-POPULATION:   [N] ([%])  — population/context mismatch
+CLAIM-NOT-CHECKABLE:      [N] ([%])  — no PDF/KG data available
+
+Verified via Knowledge Graph: [N]
+Verified via PDF:             [N]
+─────────────────────────────────────────────────
+
+ERRORS REQUIRING CORRECTION:
+
+  [#]. CLAIM-REVERSED: "[manuscript text]" — citing [Author Year]
+       Manuscript says: [X increases Y]
+       Paper actually found: [X decreases Y]
+       Evidence (VERBATIM): "[exact source passage that contradicts the claim]"
+       Source: [PDF p.N / KG findings[] — access tier T0/T1/T2/T3] | anchors: [anchor_ids or none]
+       → CORRECTION NEEDED: [suggested fix]
+
+  [#]. CLAIM-MISCHARACTERIZED: "[manuscript text]" — citing [Author Year]
+       Manuscript says: [claim]
+       Paper actually says: [what the paper says]
+       Evidence (VERBATIM): "[exact source passage]"
+       Source: [PDF p.N / KG — access tier] | anchors: [anchor_ids or none]
+       → CORRECTION NEEDED: [suggested fix]
+
+  [#]. CLAIM-OVERCAUSAL: "[manuscript text]" — citing [Author Year]
+       Manuscript says: "[causes / leads to / produces]"
+       Paper's method: [OLS / cross-sectional / correlational]
+       → CORRECTION: Change to "[is associated with / correlates with]"
+
+WARNINGS (author should review):
+
+  [#]. CLAIM-IMPRECISE: "[manuscript text]" — citing [Author Year]
+       Manuscript says: [overstated version]
+       Paper actually says: [more nuanced version]
+       → SUGGESTED REVISION: [more precise wording]
+
+  [#]. CLAIM-WRONG-POPULATION: "[manuscript text]" — citing [Author Year]
+       Manuscript implies: [broader population]
+       Paper studied: [specific population]
+       → SUGGESTED REVISION: [scope-qualified wording]
+
+NOT CHECKABLE:
+
+  [#]. [Author Year] — no PDF available, not in knowledge graph
+       Claim: "[manuscript text]"
+       → Author must manually verify this claim against the source
+─────────────────────────────────────────────────
+```
+
+### Step V-3.5f: File corrections back to Knowledge Graph
+
+If claim verification revealed that a paper's findings were different from what the KG had recorded (or the KG was missing key details), update the knowledge graph:
+
+```bash
+SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
+KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"
+if [ -f "$KG_REF" ]; then
+  eval "$(cat "$KG_REF" | sed -n '/^```bash/,/^```/p' | sed '1d;$d')" 2>/dev/null
+  # Update paper's findings if corrections found during PDF reading
+  # This feeds the cross-skill loop: future claim checks benefit from richer KG data
+fi
+```
+
+This feedback loop means each VERIFY run enriches the knowledge graph, making future claim checks faster and more accurate (more papers resolvable via KG fast path, fewer requiring slow PDF reads).
 
 **Note:** This step does NOT replace metadata verification (Tiers 1–3). It supplements by checking content relevance.
-
-**Evidence Ledger integration (`_shared/evidence-ledger.md`):**
-- **Fast path:** when the manuscript carries `<!--ev: anchor_id-->` tags, resolve them against `${PROJ}/evidence/claim-anchors.ndjson` FIRST — the anchor's `evidence_quote`/`source_loc` tells you where to look, and weak anchors (`kg_paraphrase`, `metadata_only`) mark the claims to check first. Anchors are leads, not verdicts.
-- **Persist every adjudication, including CLAIM-SUPPORTED:** append one `claim-audit-record/v1` line per checked claim to `${PROJ}/evidence/claim-faithfulness-audit-[YYYY-MM-DD].ndjson` (schema: `schema/claim-audit-record.schema.json`; map CLAIM-SUPPORTED→CLAIM-VERIFIED, CLAIM-AMBIGUOUS→CLAIM-IMPRECISE, CLAIM-UNSUPPORTED→CLAIM-UNSUPPORTED only when full text was read, else CLAIM-NOT-CHECKABLE). Without positive records, a checked claim is indistinguishable from an unchecked one. Validate with `bash scripts/gates/check-claim-audit-consistency.sh <audit-file>` and update `${PROJ}/evidence/LATEST-audit.txt`. For a deeper sentence-level audit, dispatch the `verify-claim-faithfulness` agent (it implements the full sub-claim decomposition and tier chain).
 
 ## Step V-4: Unverified Reference Handling
 

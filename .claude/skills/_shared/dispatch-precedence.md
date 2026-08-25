@@ -18,7 +18,7 @@ When a user's request matches keywords in both `scholar-compute` (MODULE 1) and 
 | **Computational sociolinguistics** (embedding regression for *linguistic* variables, LLM annotation for *linguistic* coding, semantic change of *linguistic* forms) | `scholar-ling` MODULE 6 | Same tools as compute MODULE 1 but framed through sociolinguistic theory |
 | **Biber MDA** (multi-dimensional analysis, register comparison) | `scholar-ling` MODULE 8 | Specialized linguistics method |
 | **Network analysis** of any kind | `scholar-compute` MODULE 3 | Always compute |
-| **Agent-based modeling** | `scholar-compute` MODULE 4 | Always compute |
+| **Agent-based modeling** (mechanistic or LLM-powered) | `scholar-simulate` | Owns ABM (generative + mechanistic Mesa/NetLogo); `scholar-compute` MODULE 4 redirects there (Step 1c) so the mandatory validate-against-human-data gate cannot be bypassed |
 | **Computer vision** | `scholar-compute` MODULE 6 | Always compute |
 | **Geospatial analysis** | `scholar-compute` MODULE 9 | Always compute |
 | **Audio/speech as data** (acoustic features, transcription, classification) | `scholar-compute` MODULE 10 | Always compute (even for speech data) |

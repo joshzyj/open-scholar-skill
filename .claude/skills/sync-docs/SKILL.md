@@ -93,16 +93,38 @@ For each STALE item, update all documents to use the authoritative value.
 
 Compile all LaTeX documents using `xelatex` (not `pdflatex`):
 
+**A compile FAILURE must not be masked as success.** `xelatex ... 2>&1 | tail -20`
+discards xelatex's exit code (the pipe returns `tail`'s status, which is
+always 0 as long as it can read stdin), so a broken LaTeX run can leave a
+STALE PDF from a previous compile while being reported as "compiled." Fixes:
+add `-halt-on-error`, capture the compiler exit via `${PIPESTATUS[0]}`, and
+require the output PDF's mtime to be NEWER than the source before trusting it.
+
 ```bash
-# For each .tex file
-cd "$(dirname "$FILE")" && xelatex -interaction=nonstopmode "$(basename "$FILE")" 2>&1 | tail -20
-# Run twice for cross-references
-xelatex -interaction=nonstopmode "$(basename "$FILE")" 2>&1 | tail -5
+# For each .tex file — capture xelatex's real exit code (not tail's).
+cd "$(dirname "$FILE")"
+BASE="$(basename "$FILE")"; PDF="${BASE%.tex}.pdf"
+xelatex -halt-on-error -interaction=nonstopmode "$BASE" 2>&1 | tail -20; rc=${PIPESTATUS[0]}
+# Run twice for cross-references (only if the first pass succeeded).
+if [ "$rc" -eq 0 ]; then
+  xelatex -halt-on-error -interaction=nonstopmode "$BASE" 2>&1 | tail -5; rc=${PIPESTATUS[0]}
+fi
+# Fail loudly: non-zero exit OR a PDF that is not newer than its source ⇒ the
+# render is stale/failed. Do NOT report success.
+if [ "$rc" -ne 0 ] || [ ! -f "$PDF" ] || [ "$PDF" -ot "$BASE" ]; then
+  echo "❌ xelatex FAILED for $BASE (rc=$rc; PDF stale or missing) — fix the LaTeX error; do NOT ship the old PDF." >&2
+  exit 1
+fi
+echo "✓ compiled $PDF"
 ```
 
-For Markdown documents, compile with pandoc:
+For Markdown documents, compile with pandoc (same fail-loud discipline):
 ```bash
-pandoc "$FILE" -o "${FILE%.md}.pdf" --pdf-engine=xelatex -V geometry:margin=1in -V fontsize=12pt 2>&1
+PDF="${FILE%.md}.pdf"
+if ! pandoc "$FILE" -o "$PDF" --pdf-engine=xelatex -V geometry:margin=1in -V fontsize=12pt 2>&1; then
+  echo "❌ pandoc FAILED for $FILE — do NOT ship a stale PDF." >&2; exit 1
+fi
+[ -f "$PDF" ] && [ ! "$PDF" -ot "$FILE" ] || { echo "❌ $PDF not newer than $FILE — render did not update." >&2; exit 1; }
 ```
 
 ## Step 6 — Verify Output

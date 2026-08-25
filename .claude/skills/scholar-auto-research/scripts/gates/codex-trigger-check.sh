@@ -98,7 +98,14 @@ fi
 # ─── Detect dispatch artifacts ───────────────────────────────────────────
 DID_FIRE=false
 glob_has_match() {
-  ls $1 2>/dev/null | head -1 | grep -q .
+  # F3 (audit 2026-08-25 port): use `compgen -G`, not `ls $1`. The unquoted `ls $1`
+  # word-split any project path containing a space so a PRESENT dispatch artifact
+  # was reported fired=false — a false RED that forced a redundant re-dispatch.
+  # `compgen -G "$1"` globs the quoted pattern (spaces and A[1-3] classes intact)
+  # and returns nonzero ONLY when there is truly no match. The nonzero return is
+  # safe: glob_has_match is only ever evaluated as an `if`/`||` condition, which
+  # is exempt from `set -e`.
+  compgen -G "$1" > /dev/null 2>&1
 }
 if [ "$MODE" = "code" ]; then
   if glob_has_match "$PROJ/reviews/codex/A[1-3]-*.md" \

@@ -243,6 +243,33 @@ cat .claude/agents/verify-logic.md
 cat .claude/agents/verify-completeness.md
 ```
 
+### `--write-to` path contract (BINDING)
+
+Each agent's report path is the **orchestrator's** responsibility, not the agent's. The harness directive ("do not create new files unless explicitly required") routinely overrides per-agent prose telling them to Write a report — the result is silent stdout-only output and a parent that has nothing on disk to grep against. Each of the four agent profiles above already carries the agent-side half of this contract (its RAO Trace section names `--write-to <report-path>` and requires ending stdout with `WROTE: <report-path>`); the orchestrator must supply the other half, or that clause never fires. To prevent this, every dispatched verification agent MUST receive an explicit `--write-to <absolute-path>` argument inside its prompt payload.
+
+Compute the per-agent path BEFORE dispatch:
+
+```bash
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+DATE=$(date +%Y-%m-%d)
+VERIFY_DIR="${OUTPUT_ROOT}/verify"
+mkdir -p "$VERIFY_DIR"
+WRITE_NUMERICS="${VERIFY_DIR}/verify-numerics-${DATE}.md"
+WRITE_FIGURES="${VERIFY_DIR}/verify-figures-${DATE}.md"
+WRITE_LOGIC="${VERIFY_DIR}/verify-logic-${DATE}.md"
+WRITE_COMPLETENESS="${VERIFY_DIR}/verify-completeness-${DATE}.md"
+```
+
+Each `Agent(subagent_type="verify-…")` call MUST include the line `--write-to <absolute-path>` somewhere in its prompt body, using the matching `$WRITE_*` path above. Agents read that line, persist their report to that exact path via `Write`, and end stdout with `WROTE: <absolute-path>`. After all agents return, the orchestrator confirms the reports actually landed on disk — never relies on stdout alone:
+
+```bash
+for path in "$WRITE_NUMERICS" "$WRITE_FIGURES" "$WRITE_LOGIC" "$WRITE_COMPLETENESS"; do
+  [ -s "$path" ] || { echo "FATAL: ${path} not persisted by agent" >&2; exit 1; }
+done
+```
+
+If any expected output is missing or empty, the gate fails closed. **Do not** fall back to extracting the report from agent stdout — a report that only exists in the transcript is not on disk for Step 2/3 to synthesize from, and not there for a later session to re-read.
+
 ### Stage 1 Agents (Raw Outputs → Manuscript Tables/Figures):
 
 **Agent 1 — Raw-to-Manuscript Numeric Checker** (`verify-numerics`):

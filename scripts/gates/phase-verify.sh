@@ -33,11 +33,29 @@ check_file() {
   fi
 }
 
+# Word count with HTML comments stripped (multiline-safe). Anchor comments
+# (<!--anchor: ...-->) and Evidence Ledger bindings (<!--ev: ...-->) are audit
+# machinery, not prose — raw `wc -w` inflated budgets by their token count.
+# Falls back to raw wc -w if python3 is unavailable.
+word_count_nocomments() {
+  local file="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$file" <<'PYEOF'
+import re, sys
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    t = f.read()
+print(len(re.sub(r"<!--.*?-->", "", t, flags=re.S).split()))
+PYEOF
+  else
+    wc -w < "$file" | tr -d ' '
+  fi
+}
+
 check_word_count() {
   local label="$1" file="$2" min="$3"
   if [ -f "$file" ]; then
     local wc_actual
-    wc_actual=$(wc -w < "$file" | tr -d ' ')
+    wc_actual=$(word_count_nocomments "$file")
     if [ "$wc_actual" -lt "$min" ]; then
       REPORT="${REPORT}\n  FAIL: $label has $wc_actual words (minimum: $min): $file"
       ISSUES=$((ISSUES + 1))
@@ -179,8 +197,8 @@ case "$PHASE" in
     ;;
   5|analysis)
     # Analysis: check tables and figures directories have content
-    TABLE_COUNT=$(find "$PROJ/tables" -type f 2>/dev/null | wc -l | tr -d ' ')
-    FIG_COUNT=$(find "$PROJ/figures" -type f 2>/dev/null | wc -l | tr -d ' ')
+    TABLE_COUNT=$(find "$PROJ/tables" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    FIG_COUNT=$(find "$PROJ/figures" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
     # Check if data-available mode (existing-data in PROJECT STATE)
     DATA_AVAILABLE=""
     if [ -n "$STATE_FILE" ] && [ -f "$STATE_FILE" ]; then
@@ -206,14 +224,14 @@ case "$PHASE" in
     fi
     # Check table format coverage (should have CSV for replication)
     if [ "$TABLE_COUNT" -gt 0 ]; then
-      CSV_COUNT=$(find "$PROJ/tables" -name "*.csv" -type f 2>/dev/null | wc -l | tr -d ' ')
+      CSV_COUNT=$(find "$PROJ/tables" -maxdepth 1 -name "*.csv" -type f 2>/dev/null | wc -l | tr -d ' ')
       if [ "$CSV_COUNT" -eq 0 ]; then
         REPORT="${REPORT}\n  WARN: No CSV tables in $PROJ/tables/ — CSV needed for replication package"
         WARNINGS=$((WARNINGS + 1))
       fi
     fi
     # Check scripts directory
-    SCRIPT_COUNT=$(find "$PROJ/scripts" -type f \( -name "*.R" -o -name "*.py" \) 2>/dev/null | wc -l | tr -d ' ')
+    SCRIPT_COUNT=$(find "$PROJ/scripts" -maxdepth 1 -type f \( -name "*.R" -o -name "*.py" \) 2>/dev/null | wc -l | tr -d ' ')
     if [ "$SCRIPT_COUNT" -eq 0 ]; then
       REPORT="${REPORT}\n  WARN: No scripts in $PROJ/scripts/ — script archiving may have failed"
       WARNINGS=$((WARNINGS + 1))
@@ -298,7 +316,7 @@ case "$PHASE" in
       # Also count total words across all section drafts
       TOTAL_WORDS=0
       while IFS= read -r f; do
-        [ -f "$f" ] && TOTAL_WORDS=$((TOTAL_WORDS + $(wc -w < "$f" | tr -d ' ')))
+        [ -f "$f" ] && TOTAL_WORDS=$((TOTAL_WORDS + $(word_count_nocomments "$f")))
       done < <(find "$PROJ/drafts" -name "draft-*.md" -type f 2>/dev/null)
       if [ "$TOTAL_WORDS" -gt 0 ]; then
         REPORT="${REPORT}\n  INFO: Total words across all section drafts: $TOTAL_WORDS"
@@ -392,7 +410,7 @@ case "$PHASE" in
     fi
     # Check replication package exists (Phase 9c — most commonly skipped)
     if [ -d "$PROJ/replication-package" ]; then
-      REPL_CODE=$(find "$PROJ/replication-package/code" -type f \( -name "*.R" -o -name "*.py" \) 2>/dev/null | wc -l | tr -d ' ')
+      REPL_CODE=$(find "$PROJ/replication-package/code" -maxdepth 1 -type f \( -name "*.R" -o -name "*.py" \) 2>/dev/null | wc -l | tr -d ' ')
       REPL_README=$([ -f "$PROJ/replication-package/README.md" ] && echo "1" || echo "0")
       if [ "$REPL_CODE" -eq 0 ]; then
         REPORT="${REPORT}\n  WARN: Replication package exists but code/ is empty"

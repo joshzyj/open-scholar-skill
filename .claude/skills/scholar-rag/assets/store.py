@@ -227,6 +227,49 @@ def read_manifest():
     return {}
 
 
+def stats_payload():
+    """Corpus stats with an explicit status — never a bare zero.
+
+    A dropped MCP connection, a missing corpus, and a genuinely empty library
+    are three different facts; returning bare counts made them indistinguishable
+    (a caller reading "0 documents" could not tell "no index built" from "index
+    unreachable" from "index built, empty"). Every count ships beside the
+    corpus path and on-disk size so a zero is immediately checkable against
+    the file.
+
+    status: ok | ok-empty | corpus-missing | corpus-corrupt | server-error
+
+    Deliberately does NOT call connect() when no corpus file exists —
+    connect() creates an empty corpus.sqlite (via ensure_dirs() + the schema
+    script), which would manufacture the very "0 documents" state this
+    function exists to disambiguate. No side effects: this function never
+    creates a directory or a file.
+    """
+    p = db_path()
+    payload = {"corpus_path": p}
+    if not os.path.isfile(p):
+        payload["status"] = "corpus-missing"
+        payload["detail"] = ("no corpus.sqlite at this path — this host has no built "
+                             "RAG index (distinct from an empty or unreachable one); "
+                             "run the scholar-rag build pipeline")
+        return payload
+    payload["on_disk_bytes"] = os.path.getsize(p)
+    try:
+        con = sqlite3.connect(p)
+        con.row_factory = sqlite3.Row
+        payload["counts"] = counts(con)
+        payload["manifest"] = read_manifest()
+        payload["status"] = ("ok-empty" if payload["counts"].get("documents", 0) == 0
+                             else "ok")
+    except sqlite3.DatabaseError as e:
+        payload["status"] = "corpus-corrupt"
+        payload["error"] = "%s: %s" % (e.__class__.__name__, e)
+    except Exception as e:  # unexpected — still a structured report, never a bare 0
+        payload["status"] = "server-error"
+        payload["error"] = "%s: %s" % (e.__class__.__name__, e)
+    return payload
+
+
 def write_manifest(**kw):
     p = os.path.join(rag_dir(), "manifest.json")
     man = read_manifest()
@@ -238,6 +281,8 @@ def write_manifest(**kw):
 
 
 if __name__ == "__main__":
-    con = connect()
-    print(json.dumps(counts(con), indent=2))
-    print("store:", rag_dir())
+    # Stdlib-only stats CLI — the fallback when the MCP server is unreachable:
+    # `python3 store.py` needs no venv and never creates a corpus as a side
+    # effect (the old `connect()` call here did — reporting an empty store
+    # it had just manufactured).
+    print(json.dumps(stats_payload(), indent=2, ensure_ascii=False))

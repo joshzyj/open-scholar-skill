@@ -1,6 +1,6 @@
 # Code-Review Fix Loop (shared by scholar-respond R&R, scholar-auto-research Phase 6, and the standalone pre-execution-review protocol)
 
-When any pre-execution code-review gate returns CRITICAL findings, the orchestrator applies this loop. Goal: auto-fix cheap/unambiguous issues, escalate the rest, leave a full audit trail — never silently bypass.
+When any pre-execution code-review gate returns CRITICAL findings, the orchestrator applies this loop. Goal: auto-fix cheap/unambiguous issues, escalate the rest, leave a full audit trail — never silently bypass. The orchestrator CLASSIFIES and ADJUDICATES; it does not edit the scripts itself — AUTO_FIX findings are dispatched to a freshly launched Task subagent instead, because a measured postmortem found that fixes applied directly from the orchestrator's own (already-saturated, unreviewed) context were the dominant source of new defects: 4 of 5 iteration-3 CRITICALs traced back to fixes the orchestrator itself made at iteration 2.
 
 ## Loop
 
@@ -11,13 +11,17 @@ while gate_verdict == CRITICAL and iteration < 2:
   for each CRITICAL finding:
     classify finding (see table below)
     if class = AUTO_FIX:
-      apply Edit to the offending script using the reviewer's suggested fix
-      append row to ${PROJ}/logs/code-review-fixes-[date].md
+      add finding to this round's fix scope (script, finding, reviewer's suggested fix)
     elif class = ESCALATE:
       add to user-escalation list
   if user-escalation list is non-empty:
     break and hand to user (do NOT run scripts)
+  dispatch ONE fresh Task subagent (NOT the orchestrator's own reviewing context)
+    with this round's fix scope; the subagent applies each AUTO_FIX using the
+    reviewer's suggested fix and appends rows to
+    ${PROJ}/logs/code-review-fixes-[date].md
   re-run the same scholar-code-review invocation against updated scripts
+    (the fixer never verifies itself — the re-review is independent)
 
 if iteration == 2 and gate_verdict still == CRITICAL:
   escalate the remaining CRITICALs to the user; do NOT proceed to execution
@@ -50,7 +54,7 @@ When in doubt, escalate. Auto-fix is for mechanical, blueprint-specified changes
 
 ## Fix log format
 
-Append one row per auto-fix to `${PROJ}/logs/code-review-fixes-[date].md`:
+One row per applied fix in `${PROJ}/logs/code-review-fixes-[date].md` (the fix subagent appends these as part of its return — the orchestrator writes nothing here):
 
 ```markdown
 | Timestamp | Gate | Script | Finding (abbrev) | Reviewer agent | Fix applied | Class |

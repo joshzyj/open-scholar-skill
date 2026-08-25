@@ -1196,7 +1196,7 @@ while IFS= read -r f; do
   if [ ! -f "replication-package/$f" ]; then
     echo "MISSING: $f"
   fi
-done < <(grep -oP '`[^`]+\.(R|py|csv|rds|dta|txt)`' replication-package/README.md | tr -d '`')
+done < <(grep -oE '`[^`]+\.(R|py|csv|rds|dta|txt)`' replication-package/README.md | tr -d '`')  # POSIX -oE (BSD grep rejects -P)
 ```
 
 **Check 2 — Syntax validation:**
@@ -1481,25 +1481,26 @@ Parse the manuscript file (`.md`, `.tex`, or `.docx`) to build an inventory of a
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 # Extract table references from manuscript
-grep -oP 'Table\s+\d+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
-grep -oP 'Table\s+[A-Z]\d+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u  # Appendix tables
+# E-06: use POSIX `grep -oE` (not `-oP`) — BSD/macOS grep rejects -P (exit 2), \s → [[:space:]], \d → [0-9]
+grep -oE 'Table[[:space:]]+[0-9]+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
+grep -oE 'Table[[:space:]]+[A-Z][0-9]+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u  # Appendix tables
 ```
 
 **Figures:**
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-grep -oP 'Figure\s+\d+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
-grep -oP 'Figure\s+[A-Z]\d+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u  # Appendix figures
+grep -oE 'Figure[[:space:]]+[0-9]+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
+grep -oE 'Figure[[:space:]]+[A-Z][0-9]+' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u  # Appendix figures
 ```
 
 **Placement markers** (from `scholar-write` artifact integration):
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 # Extract placement markers — these indicate where tables/figures appear in the manuscript
-grep -oP '\[Table \d+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
-grep -oP '\[Figure \d+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
-grep -oP '\[Appendix Table [A-Z]\d+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
-grep -oP '\[Appendix Figure [A-Z]\d+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
+grep -oE '\[Table [0-9]+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
+grep -oE '\[Figure [0-9]+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
+grep -oE '\[Appendix Table [A-Z][0-9]+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
+grep -oE '\[Appendix Figure [A-Z][0-9]+ about here\]' "${OUTPUT_ROOT}/manuscript/"*.md | sort -u
 ```
 
 **In-text statistics:** Search for patterns like:
@@ -1513,10 +1514,10 @@ grep -oP '\[Appendix Figure [A-Z]\d+ about here\]' "${OUTPUT_ROOT}/manuscript/"*
 ```bash
 OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 # Extract in-text statistics
-grep -oP '(β|b|OR|HR|AME|RR)\s*=\s*[-−]?\d+\.\d+' "${OUTPUT_ROOT}/manuscript/"*.md
-grep -oP '[Nn]\s*=\s*[\d,]+' "${OUTPUT_ROOT}/manuscript/"*.md
-grep -oP 'p\s*[<=]\s*0\.\d+' "${OUTPUT_ROOT}/manuscript/"*.md
-grep -oP '\d+\.\d+%' "${OUTPUT_ROOT}/manuscript/"*.md
+grep -oE '(β|b|OR|HR|AME|RR)[[:space:]]*=[[:space:]]*[-−]?[0-9]+\.[0-9]+' "${OUTPUT_ROOT}/manuscript/"*.md
+grep -oE '[Nn][[:space:]]*=[[:space:]]*[0-9,]+' "${OUTPUT_ROOT}/manuscript/"*.md
+grep -oE 'p[[:space:]]*[<=][[:space:]]*0\.[0-9]+' "${OUTPUT_ROOT}/manuscript/"*.md
+grep -oE '[0-9]+\.[0-9]+%' "${OUTPUT_ROOT}/manuscript/"*.md
 ```
 
 Build a claims inventory table:

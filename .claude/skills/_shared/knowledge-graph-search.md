@@ -365,9 +365,17 @@ kg_format_papers() {
 
 ## Usage from Other Skills
 
-Load the knowledge graph search layer in any skill:
+Load the knowledge graph search layer in any skill.
 
-```bash
+> ⚠️ The fence below is `text`, NOT `bash`, **on purpose**. The function
+> definitions above are loaded with `eval "$(… sed -n '/^```bash/,/^```/p' …)"`,
+> which extracts EVERY ` ```bash ` block in this file. If this usage example
+> were a `bash` block it would be extracted and executed at load time too —
+> and its own `eval "$(cat "$KG_REF" …)"` line would recursively re-extract
+> and re-eval this same file, hanging the caller. Keep it `text` so the
+> extractor skips it; copy the lines into your own setup block to use them.
+
+```text
 # Load knowledge graph functions (if scholar-knowledge is installed)
 SKILL_DIR="${SCHOLAR_SKILL_DIR:-.}/.claude/skills"
 KG_REF="$SKILL_DIR/scholar-knowledge/references/knowledge-graph-search.md"

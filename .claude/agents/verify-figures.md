@@ -71,6 +71,34 @@ Include VLM inspection results in the final report under a dedicated **VISUAL IN
 
 ---
 
+### Phase 3b: Substantive Caption-Visual Match (MANDATORY)
+
+Phase 3 covers cosmetics. Phase 3b covers **whether the image actually shows what the caption claims it shows**. A regenerated figure can pass every cosmetic check and every numeric/reference check while silently displaying the wrong content (wrong ego centered, wrong count of nodes, missing or extra highlighted edges, wrong color mapping). This phase is non-skippable: if the image cannot be read via the Read tool, report the figure as UNVERIFIABLE (never PASS).
+
+**Procedure for each figure:**
+
+1. From the caption and any in-text description ("Figure N shows..."), extract every concrete, visually checkable claim. Typical claim types:
+   - **Counts** ("33 alters", "N=20", "three clusters")
+   - **Identity / centering** ("Sophia centered", "ego at origin", "panel A shows women")
+   - **Color-coded categories** ("blue = English-dominant", "single red edge to Jiahui", "grey alter-alter ties")
+   - **Presence / absence** ("no red edges", "single tie to X", "only one outlier above the line")
+   - **Spatial / structural** ("dense tangle", "sparse periphery", "monotonic rise")
+   - **Labels / annotations** ("Jiahui labeled at top", "coefficient value printed on bar")
+2. Read the image file via the Read tool (it renders images visually for inspection).
+3. For each extracted claim, confirm it against what is visible. Use explicit grounding — quote the caption claim, then describe what the image shows in a single line.
+4. Record the result:
+   ```
+   CAPTION-VISUAL MATCH — Figure [N]:
+   - Claim: "[exact caption phrase]" → Image shows: [what you see] → [MATCH / MISMATCH / UNVERIFIABLE]
+   - Claim: ...
+   - Overall: [MATCH / MISMATCH / PARTIAL]
+   ```
+5. A **MISMATCH** between any caption claim and the visible image content is **CRITICAL** (data misrepresentation, stale regeneration, wrong panel saved under right filename). **UNVERIFIABLE** (image unreadable, format unsupported, rendering failed) is always **CRITICAL** — never report it as PASS.
+
+This phase is especially important (a) after any figure regeneration, including relock workflows, and (b) for figures whose captions make specific categorical claims (edge colors, node identities, panel composition) that numeric/reference checks cannot detect.
+
+---
+
 ### Phase 4: Figure-Raw Data Consistency
 
 For each figure, verify against raw analysis outputs:
@@ -142,6 +170,17 @@ VLM-DETECTED ISSUES:
 1. [VLM-FIG-001] Figure [N] — [description of visual issue found by inspecting the image]
 2. ...
 
+CAPTION-VISUAL MATCH (substantive):
+
+| Figure | Caption Claim | Image Shows | Verdict |
+|--------|--------------|-------------|---------|
+| Fig 5  | "single Chinese-dominant tie (red) to Jiahui" | one red edge to node labeled Jiahui at top | MATCH |
+| Fig 4  | "34 alters" | ~28 nodes visible around Una | MISMATCH |
+
+CAPTION-VISUAL MISMATCHES (CRITICAL):
+1. [CRIT-FIG-VSM-001] Figure [N] — Caption says "[claim]"; image shows "[what is actually visible]". Likely cause: stale regeneration / wrong panel saved.
+2. ...
+
 CRITICAL DISCREPANCIES:
 
 1. [CRIT-FIG-001] Figure [N]
@@ -210,3 +249,5 @@ the same breath as its own parenthetical reporting `NA`, at `rc=0`, with every g
 - **VLM: data points clipped at axis boundary** — CRITICAL (potential data misrepresentation)
 - **VLM: missing panel tags in multi-panel figure** — WARNING
 - **VLM: low resolution / JPEG artifacts on text** — WARNING
+- **VLM: caption claim (count, identity, color-coded category, presence/absence) does not match what the image shows** — CRITICAL
+- **VLM: image could not be read / rendered for inspection** — CRITICAL. Never report as PASS.

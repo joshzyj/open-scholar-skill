@@ -25,8 +25,11 @@ theme_Publication <- function(base_size = 12, base_family = "Helvetica Neue") {
   tick_len <- -0.12 * base_size   # inward ticks scale proportionally
   tick_margin <- 0.15 * base_size # mm offset so labels clear the inward ticks
 
-  # Enforce minimum text size (Nature rejects < 5pt after scaling)
-  axis_text_rel <- max(rel(0.85), rel(5 / base_size))
+  # Enforce minimum text size (Nature rejects < 5pt after scaling).
+  # max() on two rel() objects strips the rel class (returns bare numeric),
+  # which element_text() then reads as an ABSOLUTE point size — near-invisible
+  # axis labels. Take max() on the plain numerics first, then wrap in rel().
+  axis_text_rel <- rel(max(0.85, 5 / base_size))
 
   theme_bw(base_size = base_size, base_family = base_family) %+replace%
     theme(

@@ -512,6 +512,42 @@ if cmd == "complete":
     for artifact in artifacts:
         if not artifact.exists():
             raise SystemExit(f"artifact missing: {artifact}")
+    # F9 (audit 2026-08-25 port): require a fresh verify-stamp minted by
+    # auto-research-verify.sh on PASS. NO env bypass — the legitimate escape
+    # from a blocked complete is route-back / cap-3 escalation, not a flag.
+    #   - missing stamp        => phase never verified (or route-back invalidated it)
+    #   - contract_sha256 drift => contract changed since verify; re-verify
+    #   - artifact-hash drift    => a verified output changed since verify; re-verify
+    stamp_path = state_dir / "verify-stamps" / (pid + ".json")
+    if not stamp_path.exists():
+        raise SystemExit(
+            f"VERIFY_STAMP_REQUIRED: Phase {pid} has no verify-stamp — run "
+            f"'auto-research-verify.sh {pid} {proj}' (must PASS) before completing it."
+        )
+    try:
+        stamp = json.loads(stamp_path.read_text())
+    except Exception as exc:
+        raise SystemExit(
+            f"VERIFY_STAMP_STALE: Phase {pid} verify-stamp is unreadable ({exc}); re-verify."
+        )
+    if stamp.get("contract_sha256") != contract_hash():
+        raise SystemExit(
+            f"VERIFY_STAMP_STALE: Phase {pid} was verified against a different "
+            f"phase-contract; re-run auto-research-verify.sh {pid}."
+        )
+    for rel, recorded in (stamp.get("artifact_hashes") or {}).items():
+        apath = proj / rel
+        if recorded == "DIR":
+            if not apath.is_dir():
+                raise SystemExit(
+                    f"VERIFY_STAMP_STALE: Phase {pid} verified directory '{rel}' is "
+                    f"missing since verify; re-verify."
+                )
+        elif not apath.is_file() or sha(apath) != recorded:
+            raise SystemExit(
+                f"VERIFY_STAMP_STALE: Phase {pid} artifact '{rel}' changed since "
+                f"verify; re-verify."
+            )
     record = {
         "phase_id": pid,
         "phase_name": phase_by_id[pid]["name"],

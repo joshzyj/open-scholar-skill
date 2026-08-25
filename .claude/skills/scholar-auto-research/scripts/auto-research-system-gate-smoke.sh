@@ -43,7 +43,18 @@ for phase_id, fields in required_schema.items():
 
 verify_text = (skill_dir / "scripts" / "auto-research-verify.sh").read_text()
 gate_dir = skill_dir / "scripts" / "gates"
-external_gates = sorted(set(re.findall(r'\("([A-Za-z0-9._-]+\.sh)",\s*"Phase', verify_text)))
+# External-gate extraction. TWO invocation shapes are recognized (F8, audit
+# 2026-08-25 port): the tuple form `("<name>.sh", "Phase ...")` used by the
+# panel lists, AND the direct form `GATE_DIR / "<name>.sh"` used for
+# phase-aware gates called outside a panel list. The tuple-only regex
+# silently missed the latter, so effect-size-narrative-check.sh could go
+# un-vendored without this smoke reporting it.
+_TUPLE_GATE_RE = r'\("([A-Za-z0-9._-]+\.sh)",\s*"Phase'
+_GATEDIR_GATE_RE = r'GATE_DIR\s*/\s*"([A-Za-z0-9._-]+\.sh)"'
+external_gates = sorted(
+    set(re.findall(_TUPLE_GATE_RE, verify_text))
+    | set(re.findall(_GATEDIR_GATE_RE, verify_text))
+)
 if not gate_dir.exists():
     errors.append("missing bundled auto-research scripts/gates directory")
 for gate_name in external_gates:

@@ -129,6 +129,8 @@ bash "$RAG_ASSETS/mcp-setup.sh" --print-only # just show the .mcp.json / config.
 
 Registers a stdio MCP server exposing **`rag_search`**, **`rag_get_document`**, **`rag_neighbors`**, **`rag_stats`**. Restart the Claude Code / Codex session to pick up the tools. In a lit-review session, call `rag_search` to ground every claim in cited passages from your own library.
 
+**Tool errors are outages, not counts.** If any `rag_*` call errors — `Connection closed`, tool not found, timeout — that is `TOOL_UNAVAILABLE`: the check did not run, and it says nothing about the library. Never report an MCP error as "0 documents" or "no local library". `rag_stats` returns an explicit `status` (`ok | ok-empty | corpus-missing | corpus-corrupt | server-error`) plus `corpus_path` and `on_disk_bytes`, so a zero is checkable against the file on disk. The no-venv, no-MCP fallback the operator can always run: `python3 "$SKILL_DIR/assets/store.py"` — a genuine "no local library" claim requires `corpus-missing` from that fallback, not an optimistic reading of a transport error.
+
 ---
 
 ## MODE 4 — GRAPH (GraphRAG)

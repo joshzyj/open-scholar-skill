@@ -1258,7 +1258,7 @@ OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
 OUTDIR="$(dirname "${OUTPUT_ROOT}/[slug]/preregistration-[slug]-[YYYY-MM-DD]")"
 STEM="$(basename "${OUTPUT_ROOT}/[slug]/preregistration-[slug]-[YYYY-MM-DD]")"
 mkdir -p "$OUTDIR"
-bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM"
+BASE=$(bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/version-check.sh" "$OUTDIR" "$STEM" | awk -F= '/^BASE=/{print $2; exit}')
 
 mkdir -p "$(dirname "$BASE")"
 

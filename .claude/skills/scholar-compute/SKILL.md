@@ -20,6 +20,9 @@ The user has provided: `$ARGUMENTS`
 **Step 1 — Detect causal intent (CRITICAL):**
 If the argument contains causal keywords — `effect of`, `impact of`, `causal`, `DiD`, `IV`, `RD`, `instrumental variable`, `matching`, `mediation` — and the method is NOT Double ML or Causal Forest being used to estimate that effect: **stop and invoke `/scholar-causal` first** to establish the identification strategy.
 
+**Step 1c — Detect ABM / agent-based-simulation intent (REDIRECT):**
+If the argument contains `abm`, `agent-based`, `agent based`, `simulation`, `simulate`, `schelling`, `mesa`, `netlogo`, `emergence`, `opinion dynamics`, or `generative agent`: **stop and invoke `/scholar-simulate`** instead of routing to MODULE 4 here. `scholar-simulate` absorbed agent-based modeling (mechanistic Mesa/NetLogo ABM and LLM-powered generative ABM) from this skill — it is self-contained and carries the **mandatory validate-against-human-data gate** (MODE 6 `validate`, `references/validation-fidelity.md`) before any ABM result may be reported as a publishable claim. Routing ABM here would bypass that gate.
+
 **Step 1d — Detect annotation-as-measurement intent (REDIRECT):**
 If the argument contains `llm annotation`, `annotate`, `annotation`, `label the corpus`, `labelled variable`, `labeled variable`, `codebook`, `gold set`, `devset`, `inter-coder`, `kappa`, `krippendorff`, `framing coding`, `stance coding`, `relevance filter`, `classify the corpus`, `measure X over the corpus`, or `distill labels`: **stop and invoke `/scholar-annotate`** instead of routing to MODULE 7 here. LLM-as-measurement is owned end to end by the self-contained `scholar-annotate` skill — codebook design, dev/gold construction, DSPy optimization, the **hard κ + coverage + construct-match gate**, Batch/local/HPC scale-out, and distillation — via a real execution engine (`assets/annotate_engine.py`).
 
@@ -34,7 +37,7 @@ MODULE 7 here retains only the **ad-hoc** LLM half: one-off structured extractio
 | `text`, `nlp`, `topic`, `bert`, `stm`, `embedding`, `corpus`, `tweets`, `news`, `interview` | MODULE 1 |
 | `ml`, `predict`, `classify`, `random forest`, `xgboost`, `dml`, `causal forest`, `double ml` | MODULE 2 |
 | `network`, `graph`, `ergm`, `siena`, `edge`, `node`, `tie`, `community`, `interaction sequence`, `relational event` | MODULE 3 |
-| `abm`, `simulation`, `agent`, `schelling`, `mesa`, `netlogo`, `emergence` | MODULE 4 |
+| `abm`, `simulation`, `agent`, `schelling`, `mesa`, `netlogo`, `emergence` | MODULE 4 (superseded — redirects to `/scholar-simulate`, Step 1c) |
 | `reproduce`, `replication`, `environment`, `docker`, `conda`, `pipeline` | MODULE 5 |
 | `image`, `video`, `photo`, `visual`, `clip`, `vit`, `convnet`, `street view`, `satellite`, `protest image`, `aerial`, `computer vision` | MODULE 6 |
 | `llm analysis`, `gpt analysis`, `claude analysis`, `agent workflow`, `structured extraction`, `grounded theory`, `document qa`, `llm pipeline` | MODULE 7 (ad-hoc only — measurement redirects to `/scholar-annotate`, Step 1d) |

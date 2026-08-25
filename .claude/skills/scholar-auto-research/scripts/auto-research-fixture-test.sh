@@ -18,6 +18,32 @@ progress() {
   printf '[fixture] %s\n' "$1"
 }
 
+# F9 (audit 2026-08-25 port): the state-machine tests below complete phases without a
+# full verify pass, so they mint a minimal verify-stamp (correct contract hash,
+# empty artifact_hashes -> the complete-time freshness check trivially passes)
+# to satisfy the verify-stamp requirement. Real verify->complete flows get their
+# stamp from auto-research-verify.sh itself.
+CONTRACT_JSON="$SKILL_DIR/references/phase-contract.json"
+mint_stamp() {  # mint_stamp <proj_dir> <phase_id>
+  mkdir -p "$1/.auto-research/verify-stamps"
+  python3 - "$CONTRACT_JSON" "$1/.auto-research/verify-stamps/$2.json" "$2" <<'PYS'
+import hashlib, json, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for chunk in iter(lambda: f.read(1 << 20), b""):
+        h.update(chunk)
+with open(sys.argv[2], "w") as out:
+    json.dump({"phase_id": sys.argv[3], "verdict": "PASS",
+               "contract_sha256": h.hexdigest(), "artifact_hashes": {},
+               "verified_at": "fixture"}, out, indent=2, sort_keys=True)
+PYS
+}
+complete_sm() {  # complete_sm <proj_dir> <phase_id> [artifact...] — mint stamp then complete
+  local proj="$1" phase="$2"; shift 2
+  mint_stamp "$proj" "$phase"
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$proj" "$phase" "$@" >/dev/null
+}
+
 bash "$SCRIPT_DIR/auto-research-contract-lint.sh"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$PROJ" >/dev/null
 bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$PROJ" autonomous "fixture autonomous" >/dev/null
@@ -6037,7 +6063,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_PROJ" autonomou
 mkdir -p "$ROUTE_STATE_PROJ/artifacts" "$ROUTE_STATE_PROJ/verify"
 for pid in $(seq 0 14); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_PROJ" "$pid" "$ROUTE_STATE_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_PROJ" "$pid" "$ROUTE_STATE_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_VERIFY_PROJ/verify/manuscript-verification.json" "$ROUTE_STATE_PROJ/verify/manuscript-verification.json"
 ROUTE_OUT="$(bash "$SCRIPT_DIR/auto-research-state.sh" route-back "$ROUTE_STATE_PROJ" "$ROUTE_STATE_PROJ/verify/manuscript-verification.json")"
@@ -6055,13 +6081,13 @@ case "$ROUTE_RETRY" in
   *"RETRY_MAX=2"* ) ;;
   *) echo "FAIL: repeated route-back should increment retry count, got $ROUTE_RETRY" >&2; exit 1 ;;
 esac
-bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_PROJ" 13 "$ROUTE_STATE_PROJ/artifacts/phase-13.txt" >/dev/null
+complete_sm "$ROUTE_STATE_PROJ" 13 "$ROUTE_STATE_PROJ/artifacts/phase-13.txt"
 ROUTE_NEXT_14="$(bash "$SCRIPT_DIR/auto-research-state.sh" next "$ROUTE_STATE_PROJ")"
 case "$ROUTE_NEXT_14" in
   *"NEXT_PHASE=14"*"REASON=stale"* ) ;;
   *) echo "FAIL: after completing route target, downstream Phase 14 should remain stale, got $ROUTE_NEXT_14" >&2; exit 1 ;;
 esac
-bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_PROJ" 14 "$ROUTE_STATE_PROJ/artifacts/phase-14.txt" >/dev/null
+complete_sm "$ROUTE_STATE_PROJ" 14 "$ROUTE_STATE_PROJ/artifacts/phase-14.txt"
 ROUTE_NEXT_CLEAR="$(bash "$SCRIPT_DIR/auto-research-state.sh" next "$ROUTE_STATE_PROJ")"
 case "$ROUTE_NEXT_CLEAR" in
   *"NEXT_PHASE=15"* ) ;;
@@ -6489,7 +6515,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_14_PROJ" autono
 mkdir -p "$ROUTE_STATE_14_PROJ/artifacts" "$ROUTE_STATE_14_PROJ/citation"
 for pid in $(seq 0 14); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_14_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_14_PROJ" "$pid" "$ROUTE_STATE_14_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_14_PROJ" "$pid" "$ROUTE_STATE_14_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_CITATION_PROJ/citation/citation-audit.json" "$ROUTE_STATE_14_PROJ/citation/citation-audit.json"
 ROUTE_14_OUT="$(bash "$SCRIPT_DIR/auto-research-state.sh" route-back "$ROUTE_STATE_14_PROJ" "$ROUTE_STATE_14_PROJ/citation/citation-audit.json")"
@@ -6839,7 +6865,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_15_PROJ" autono
 mkdir -p "$ROUTE_STATE_15_PROJ/artifacts" "$ROUTE_STATE_15_PROJ/ethics"
 for pid in $(seq 0 15); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_15_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_15_PROJ" "$pid" "$ROUTE_STATE_15_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_15_PROJ" "$pid" "$ROUTE_STATE_15_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_ETHICS_PROJ/ethics/ethics-open-science.json" "$ROUTE_STATE_15_PROJ/ethics/ethics-open-science.json"
 ROUTE_15_OUT="$(bash "$SCRIPT_DIR/auto-research-state.sh" route-back "$ROUTE_STATE_15_PROJ" "$ROUTE_STATE_15_PROJ/ethics/ethics-open-science.json")"
@@ -7438,7 +7464,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_16_PROJ" autono
 mkdir -p "$ROUTE_STATE_16_PROJ/artifacts" "$ROUTE_STATE_16_PROJ/replication-package"
 for pid in $(seq 0 16); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_16_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_16_PROJ" "$pid" "$ROUTE_STATE_16_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_16_PROJ" "$pid" "$ROUTE_STATE_16_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_REPLICATION_PROJ/replication-package/replication-report.json" "$ROUTE_STATE_16_PROJ/replication-package/replication-report.json"
 ROUTE_16_OUT="$(bash "$SCRIPT_DIR/auto-research-state.sh" route-back "$ROUTE_STATE_16_PROJ" "$ROUTE_STATE_16_PROJ/replication-package/replication-report.json")"
@@ -7887,7 +7913,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_17_PROJ" autono
 mkdir -p "$ROUTE_STATE_17_PROJ/artifacts" "$ROUTE_STATE_17_PROJ/quality"
 for pid in $(seq 0 17); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_17_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_17_PROJ" "$pid" "$ROUTE_STATE_17_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_17_PROJ" "$pid" "$ROUTE_STATE_17_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_QUALITY_PROJ/quality/manuscript-quality.json" "$ROUTE_STATE_17_PROJ/quality/manuscript-quality.json"
 ROUTE_17_OUT="$(bash "$SCRIPT_DIR/auto-research-state.sh" route-back "$ROUTE_STATE_17_PROJ" "$ROUTE_STATE_17_PROJ/quality/manuscript-quality.json")"
@@ -8408,7 +8434,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_18_PROJ" autono
 mkdir -p "$ROUTE_STATE_18_PROJ/artifacts" "$ROUTE_STATE_18_PROJ/final"
 for pid in $(seq 0 18); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_18_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_18_PROJ" "$pid" "$ROUTE_STATE_18_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_18_PROJ" "$pid" "$ROUTE_STATE_18_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_FINAL_PROJ/final/final-manifest.json" "$ROUTE_STATE_18_PROJ/final/final-manifest.json"
 python3 - "$ROUTE_STATE_18_PROJ/final/final-manifest.json" <<'PY'
@@ -9127,7 +9153,7 @@ bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$ROUTE_STATE_19_PROJ" autono
 mkdir -p "$ROUTE_STATE_19_PROJ/artifacts" "$ROUTE_STATE_19_PROJ/submission"
 for pid in $(seq 0 19); do
   printf 'phase %s artifact\n' "$pid" > "$ROUTE_STATE_19_PROJ/artifacts/phase-$pid.txt"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$ROUTE_STATE_19_PROJ" "$pid" "$ROUTE_STATE_19_PROJ/artifacts/phase-$pid.txt" >/dev/null
+  complete_sm "$ROUTE_STATE_19_PROJ" "$pid" "$ROUTE_STATE_19_PROJ/artifacts/phase-$pid.txt"
 done
 cp "$FAIL_SUBMISSION_PROJ/submission/submission-hygiene.json" "$ROUTE_STATE_19_PROJ/submission/submission-hygiene.json"
 python3 - "$ROUTE_STATE_19_PROJ/submission/submission-hygiene.json" <<'PY'

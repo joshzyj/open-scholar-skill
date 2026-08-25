@@ -73,6 +73,7 @@ import subprocess
 import sys
 import csv
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 contract_path = Path(sys.argv[1])
@@ -107,6 +108,16 @@ JOURNAL_PROFILE_TEMPLATE_PATH = (SCRIPT_DIR / ".." / "references" / "journal-pro
 _JOURNAL_PROFILE_TEMPLATE_CACHE = None
 
 
+NETWORK_GATES = {
+    # F4 (audit 2026-08-25 port): ONLY these gates make external network calls
+    # (CrossRef / local-library lookups). They alone may downgrade a crash or
+    # timeout to a non-fatal YELLOW "gate_unavailable"; every other gate is
+    # deterministic, so a crash/timeout for those is a hard RED "gate_crash" —
+    # a gate that never ran must not read as a pass.
+    "verify-citation-metadata.sh",
+    "verify-citation-local-library.sh",
+}
+
 
 def run_external_gate(gate_name, project, label):
     """Run a bundled scripts/gates/<name>.sh helper.
@@ -122,6 +133,7 @@ def run_external_gate(gate_name, project, label):
         return ("RED", f"missing_external_gate:{gate_name}", str(gate_path))
     if not os.access(gate_path, os.X_OK):
         return ("RED", f"external_gate_not_executable:{gate_name}", str(gate_path))
+    is_network = gate_name in NETWORK_GATES
     try:
         env = dict(os.environ)
         env["AUTO_RESEARCH_VERIFY_PHASE"] = str(phase_id)
@@ -129,8 +141,14 @@ def run_external_gate(gate_name, project, label):
             ["bash", str(gate_path), str(project)],
             capture_output=True, text=True, timeout=120, env=env,
         )
+    except subprocess.TimeoutExpired:
+        if is_network:
+            return ("YELLOW", "gate_unavailable:timeout_120s", "")
+        return ("RED", "gate_crash:timeout_120s", "")
     except Exception as exc:
-        return ("YELLOW", f"gate_invocation_error:{exc}", "")
+        if is_network:
+            return ("YELLOW", f"gate_unavailable:{exc}", "")
+        return ("RED", f"gate_crash:{exc}", "")
     text = (result.stdout or "") + "\n" + (result.stderr or "")
     status = ""
     reason = ""
@@ -1576,10 +1594,13 @@ def fail(message, items=None):
     sys.exit(1)
 
 missing = []
+verified_output_paths = []
 for rel in phase["required_outputs"]:
     matches = glob.glob(str(proj / rel))
     if not matches:
         missing.append(rel)
+    else:
+        verified_output_paths.extend(matches)
 
 if missing:
     fail(f"FAIL: Phase {phase_id} {phase['name']} missing required outputs", missing)
@@ -10277,6 +10298,14 @@ if phase_id == "18":
         ("survey-weights-check.sh", "Phase 18 survey weights"),
         ("composite-measure-validation-check.sh", "Phase 18 composite-measure validation"),
         ("interaction-joint-test-check.sh", "Phase 18 interaction joint test"),
+        # G5/F1 consolidation (audit 2026-08-25 port): effect-size-narrative-check
+        # is phase-aware (RED at 18, YELLOW at 13) via the PHASE_TAG env fallback
+        # (AUTO_RESEARCH_VERIFY_PHASE, exported by run_external_gate) — no extra
+        # positional needed since this call runs while phase_id == "18". As a
+        # normal tuple entry, missing / not-executable / crash are handled
+        # uniformly by run_external_gate; the old bespoke `if es_gate.exists()`
+        # block silently SKIPPED a missing gate instead of RED-failing it.
+        ("effect-size-narrative-check.sh", "Phase 18 effect-size narrative"),
     ]:
         gate_result = run_external_gate(gate_name, proj, label)
         if gate_result is None:
@@ -10284,34 +10313,6 @@ if phase_id == "18":
         status, reason, detail = gate_result
         if status == "RED":
             external_gate_failures.append(f"{label}: reason={reason} detail={detail}")
-    # G5 effect-size-narrative-check is phase-aware (RED at 11.5/18/19/20, YELLOW at 13).
-    # Run it explicitly with phase tag "18" so it RED-fails when small R² is unacknowledged.
-    if GATE_DIR is not None:
-        es_gate = GATE_DIR / "effect-size-narrative-check.sh"
-        if es_gate.exists():
-            try:
-                es_result = subprocess.run(
-                    ["bash", str(es_gate), str(proj), "18"],
-                    capture_output=True, text=True, timeout=120,
-                )
-                es_status = ""
-                es_reason = ""
-                es_detail = ""
-                for line in (es_result.stdout or "").splitlines():
-                    if line.startswith("STATUS="):
-                        es_status = line.split("=", 1)[1].strip()
-                    elif line.startswith("REASON="):
-                        es_reason = line.split("=", 1)[1].strip()
-                    elif line.startswith("DETAIL:"):
-                        es_detail = line.split(":", 1)[1].strip()
-                if es_status == "RED":
-                    external_gate_failures.append(
-                        f"Phase 18 effect-size narrative: reason={es_reason} detail={es_detail}"
-                    )
-            except Exception as exc:
-                external_gate_failures.append(
-                    f"Phase 18 effect-size narrative: gate_invocation_error={exc}"
-                )
     if external_gate_failures:
         fail("FAIL: Phase 18 external-gate panel reported RED", external_gate_failures)
 
@@ -11744,6 +11745,37 @@ if phase_id == "20":
         fail("FAIL: Phase 20 route_back_phase must be empty for PASS")
     if package_manifest.get("verdict") != "PASS":
         fail("FAIL: Phase 20 submission package manifest verdict must be PASS")
+
+# F9 (audit 2026-08-25 port): on PASS, mint an atomic verify-stamp so that
+# `auto-research-state.sh complete` can prove THIS phase was actually verified
+# against the current contract and unmodified artifacts. complete refuses
+# without a fresh stamp (no env bypass) — the legitimate escape from a
+# blocked complete is route-back / cap-3 escalation. Written tmp+replace to
+# match the state writer's atomicity.
+_stamp_dir = proj / ".auto-research" / "verify-stamps"
+_stamp_dir.mkdir(parents=True, exist_ok=True)
+_artifact_hashes = {}
+for _p in sorted(set(verified_output_paths)):
+    _pp = Path(_p)
+    try:
+        _rel = str(_pp.relative_to(proj))
+    except ValueError:
+        _rel = str(_pp)
+    if _pp.is_dir():
+        _artifact_hashes[_rel] = "DIR"
+    elif _pp.is_file():
+        _artifact_hashes[_rel] = sha256(_pp)
+_stamp = {
+    "phase_id": phase_id,
+    "verdict": "PASS",
+    "contract_sha256": sha256(contract_path),
+    "artifact_hashes": _artifact_hashes,
+    "verified_at": datetime.now(timezone.utc).isoformat(),
+}
+_stamp_path = _stamp_dir / (str(phase_id) + ".json")
+_stamp_tmp = _stamp_path.with_suffix(".json.tmp")
+_stamp_tmp.write_text(json.dumps(_stamp, indent=2, sort_keys=True) + "\n")
+_stamp_tmp.replace(_stamp_path)
 
 print(f"PASS: Phase {phase_id} {phase['name']} required outputs exist")
 print("Required verdict fields:")

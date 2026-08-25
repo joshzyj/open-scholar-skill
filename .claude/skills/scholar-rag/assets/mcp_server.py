@@ -122,11 +122,17 @@ def rag_neighbors(doc_id: str, k: int = 8) -> str:
 
 @mcp.tool()
 def rag_stats() -> str:
-    """Corpus coverage counts and index manifest (embed model, dims, sizes)."""
-    con = store.connect()
-    return json.dumps({"counts": store.counts(con),
-                       "manifest": store.read_manifest()},
-                      ensure_ascii=False, indent=1)
+    """Corpus coverage counts with corpus path, on-disk size, and an explicit
+    status — never a bare zero.
+
+    status: ok | ok-empty | corpus-missing | corpus-corrupt | server-error.
+    A zero count is only meaningful beside the corpus_path / on_disk_bytes it
+    was measured from. If this CALL errors (connection closed, tool not
+    found), that is a tool outage, not a count — never read a tool error as
+    evidence the library is empty. Fallback that needs no MCP and no venv:
+    `python3 <assets>/store.py`.
+    """
+    return json.dumps(store.stats_payload(), ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":

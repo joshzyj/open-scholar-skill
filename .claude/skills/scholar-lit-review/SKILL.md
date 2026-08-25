@@ -274,6 +274,8 @@ WHERE it.typeName IN ('journalArticle','book','bookSection','conferencePaper','p
   AND LOWER(col.collectionName) LIKE '$COLLECTION'
 ORDER BY SUBSTR(year.value,1,4) DESC;
 " 2>/dev/null
+
+fi  # end Zotero-only collection search
 ```
 
 ### 1e. Search by tags (Zotero only)
