@@ -261,7 +261,13 @@ str(df, list.len = ncol(df))
 head(df, 5)
 ```
 
-If `SAFETY_STATUS=LOCAL_MODE`, wrap the above in `Rscript -e "..."` via Bash and **omit the `head()` call** — only `str()` and `cat()` summary output enters context.
+If `SAFETY_STATUS=LOCAL_MODE`, wrap the above in `Rscript -e "..."` via Bash and **omit BOTH `head()` AND `str(df)`** — `str(df)` prints the first ~4-10 VALUES of every column, a row-level leak. Replace `str(df)` with the values-free structure dump so only names/classes/`cat()` summary enters context:
+
+```r
+print(data.frame(variable = names(df),
+                 class    = vapply(df, function(x) class(x)[1], character(1)),
+                 row.names = NULL))
+```
 
 **1b. Extract metadata:**
 - **Dataset name** (if identifiable)

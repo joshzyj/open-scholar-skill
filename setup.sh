@@ -456,6 +456,11 @@ unset _chmod_fixed
 #      return non-zero so the summary reflects the partial install.
 echo "▸ Registering PreToolUse data-safety hook in ~/.claude/settings.json..."
 
+# Track whether the hook actually landed: the safety hook is the single most
+# important automated control this setup installs, and a summary that prints
+# "Setup Complete" (exit 0) when it silently failed to register would leave
+# the user unprotected while telling them they are protected.
+HOOK_INSTALLED=0
 HOOK_SCRIPT="$SCRIPT_DIR/scripts/gates/pretooluse-data-guard.sh"
 SETTINGS_FILE="$HOME/.claude/settings.json"
 
@@ -534,6 +539,7 @@ else
 }
 HOOKJSON
     echo "  ✓ Created $SETTINGS_FILE with PreToolUse + PostToolUse hooks"
+    HOOK_INSTALLED=1
   else
     # Merge: drop any existing hook whose command matches this hook
     # script (so re-runs don't duplicate), then append a fresh entry.
@@ -569,6 +575,7 @@ HOOKJSON
         ' "$SETTINGS_FILE" > "$TMP_SETTINGS" 2>/dev/null; then
       mv "$TMP_SETTINGS" "$SETTINGS_FILE"
       echo "  ✓ Merged PreToolUse + PostToolUse hooks into $SETTINGS_FILE"
+      HOOK_INSTALLED=1
     else
       rm -f "$TMP_SETTINGS"
       echo "  ⚠ jq merge failed — $SETTINGS_FILE left unchanged."
@@ -617,7 +624,11 @@ echo ""
 
 # ── 7. Summary ────────────────────────────────────────────────────
 echo "═══════════════════════════════════════════════════"
-echo "  Setup Complete"
+if [ "$HOOK_INSTALLED" -eq 1 ]; then
+  echo "  Setup Complete"
+else
+  echo "  Setup Complete (WARNING: safety hook NOT installed)"
+fi
 echo "═══════════════════════════════════════════════════"
 echo ""
 echo "  SCHOLAR_SKILL_DIR=$SCRIPT_DIR"
@@ -629,3 +640,12 @@ echo "  Next steps:"
 echo "  1. Source your shell profile or open a new terminal"
 echo "  2. Try from any project: /scholar-idea \"your research question\""
 echo ""
+if [ "$HOOK_INSTALLED" -ne 1 ]; then
+  echo "  ⚠ The PreToolUse data-safety hook did NOT register (see the hook"
+  echo "    section above for the reason — usually missing jq, or a failed"
+  echo "    merge). Until it is installed, NOTHING mechanically prevents raw"
+  echo "    data files from being read into the AI context. Install jq and"
+  echo "    re-run setup.sh, or add the printed hook JSON to"
+  echo "    ~/.claude/settings.json manually."
+  exit 1
+fi

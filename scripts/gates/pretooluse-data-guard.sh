@@ -62,6 +62,33 @@ if [ -f "${HOOK_DIR}/sidecar-schema.sh" ]; then
   . "${HOOK_DIR}/sidecar-schema.sh"
 fi
 
+# ─── Fail-closed backstop on abnormal termination ───────────────────────
+# PreToolUse semantics treat any exit code outside {0,2} as NON-BLOCKING —
+# so a crash in this script (unbound var, runtime error) while evaluating a
+# data-risk target would let the Read proceed: the guard's own failure would
+# defeat the guard. The EXIT trap converts an abnormal exit into a block,
+# but ONLY when the target looked like data (`_DATA_RISK=1`), so a crash
+# while evaluating a harmless .md read does not brick the harness on
+# unrelated failures. `_DATA_RISK` is deliberately reset to 0 in the Bash
+# arm, which fails open by design (never brick the shell).
+_DATA_RISK=0
+_GUARD_RISK_TARGET=""
+_guard_on_exit() {
+  local rc=$?
+  rm -f "${SCAN_LOG:-}" 2>/dev/null || true
+  case "$rc" in
+    0|2) : ;;  # intended allow / block — leave the decision as-is
+    *)
+      if [ "${_DATA_RISK:-0}" = 1 ]; then
+        echo "SAFETY GUARD: data-guard terminated abnormally (rc=${rc}) while evaluating a data-risk target '${_GUARD_RISK_TARGET}'. Failing closed (block) rather than allowing the read." >&2
+        trap - EXIT
+        exit 2
+      fi
+      ;;
+  esac
+}
+trap _guard_on_exit EXIT
+
 # ─── Helper: canonicalize a path (follow symlinks, resolve `..`) ────────
 #
 # Returns the resolved absolute path on stdout.
@@ -466,6 +493,21 @@ else
   EDIT_NEW=""
   JQ_OK=0
 fi
+
+# Data-risk classification for the fail-closed EXIT trap — a cheap lexical
+# check performed IMMEDIATELY after parse, before the whole decision path.
+# No disk I/O, so it is set even if a later step crashes. Mirrors DATA_EXTS
+# + data-ish directories; conservative by design (a false positive only
+# fails closed ON A CRASH, never on the happy path).
+_GUARD_RISK_TARGET="${FILE_PATH:-}${GREP_PATH:-}${GLOB_PATTERN:-}"
+case "$(printf '%s' "$_GUARD_RISK_TARGET" | tr 'A-Z' 'a-z')" in
+  *.csv|*.tsv|*.dta|*.sav|*.rds|*.rdata|*.xlsx|*.xls|*.parquet|*.feather|*.arrow|*.db|*.sqlite|\
+  *.jsonl|*.ndjson|*.wav|*.mp3|*.flac|*.m4a|*.ogg|*.aac|*.aiff|\
+  *.mp4|*.mov|*.avi|*.mkv|*.webm|*.jpg|*.jpeg|*.png|*.tiff|*.tif|*.heic|*.heif|*.bmp|*.webp|*.gif|\
+  *.eaf|*.textgrid|*.trs|*.cha|*.praat|*.shp|*.geojson|*.kml|*.gpx|\
+  */data/*|*/raw/*|*/materials/*|*/transcripts/*|*/interviews/*|*/corpus/*|*/subjects/*|*/participants/*)
+    _DATA_RISK=1 ;;
+esac
 
 # ─── 2b. Fail-closed check when sed fallback couldn't extract FILE_PATH
 # If jq is missing AND the tool name matches a gated tool AND we failed
@@ -1267,6 +1309,7 @@ EOF
     # obvious content-dump commands on a sensitive data path; fails OPEN on any
     # ambiguity so the shell is never bricked. NOT a containment boundary —
     # that is the Lockdown OS sandbox.
+    _DATA_RISK=0          # Bash gate fails OPEN on crash — never brick the shell
     set -f                # noglob: an unquoted `$cmd` split must not glob-expand
     [ -n "${TOOL_CMD:-}" ] || exit 0
     _SENS="$(bash_first_sensitive_target "$TOOL_CMD")"
@@ -1735,7 +1778,9 @@ EOF
 fi
 
 SCAN_LOG="$(mktemp -t safety-guard.XXXXXX)"
-trap 'rm -f "$SCAN_LOG"' EXIT
+# $SCAN_LOG cleanup is handled by the _guard_on_exit EXIT trap set at top —
+# do NOT install a second EXIT trap here; bash keeps only one, and replacing
+# the fail-closed trap with a bare cleanup would re-open the crash-allows gap.
 
 bash "$GATE_SCRIPT" "$FILE_PATH" >"$SCAN_LOG" 2>&1
 LEVEL=$?

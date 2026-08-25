@@ -149,8 +149,43 @@ def analyze_file(file_path):
     return text, filtered
 
 
-def cmd_scan(file_path):
-    """Scan a file for PII and print a report."""
+def _write_pii_detail(out_dir, basename, detections, header):
+    """Write matched PII values to a 0600 human-review-only artifact.
+
+    C-01 privacy contract: matched values must never reach stdout/stderr
+    (which are returned to the model). A human coder still needs the values
+    to build the pseudonym key, so they are written to a private file that
+    MUST NOT be Read into model context. Returns the path, or None on error.
+    """
+    if not detections:
+        return None
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, basename)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(header + "\n")
+            f.write("HUMAN REVIEW ONLY — do NOT read this file into any AI/model context.\n\n")
+            by_type = defaultdict(list)
+            for d in detections:
+                by_type[d["entity_type"]].append(d)
+            for etype, items in sorted(by_type.items()):
+                f.write("== %s ==\n" % etype)
+                for val in sorted(set(d["text"] for d in items)):
+                    best = max(dd["score"] for dd in items if dd["text"] == val)
+                    f.write('  "%s" (confidence: %s)\n' % (val, best))
+                f.write("\n")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+        return path
+    except OSError:
+        return None
+
+
+def cmd_scan(file_path, out_dir):
+    """Scan a file for PII and print a COUNTS-ONLY report (never values)."""
     text, detections = analyze_file(file_path)
 
     if not detections:
@@ -164,18 +199,21 @@ def cmd_scan(file_path):
 
     total = len(detections)
     print(f"PII SCAN: {total} detection(s) in {os.path.basename(file_path)}")
+    print("  (counts only — matched values are NOT printed; see detail file below)")
     print()
 
     for etype, items in sorted(by_type.items()):
-        print(f"  {etype} ({len(items)} found):")
-        # Show unique values
-        unique_vals = sorted(set(d["text"] for d in items))
-        for val in unique_vals[:20]:
-            best_score = max(d["score"] for d in items if d["text"] == val)
-            print(f"    - \"{val}\" (confidence: {best_score})")
-        if len(unique_vals) > 20:
-            print(f"    ... and {len(unique_vals) - 20} more")
-        print()
+        unique_n = len(set(d["text"] for d in items))
+        scores = [d["score"] for d in items]
+        print(f"  {etype}: {len(items)} detection(s), {unique_n} unique "
+              f"(confidence {min(scores)}–{max(scores)})")
+    print()
+
+    detail = _write_pii_detail(
+        out_dir, "pii-scan-detail-DO-NOT-SHARE.txt", detections,
+        f"Presidio PII scan detail for: {file_path}")
+    if detail:
+        print(f"Matched values written (human review only, do NOT read into AI context): {detail}")
 
     return 1
 
@@ -339,8 +377,8 @@ def cmd_anonymize(file_path, out_dir):
     return 0
 
 
-def cmd_verify(file_path):
-    """Re-scan an anonymized file to verify it's clean."""
+def cmd_verify(file_path, out_dir):
+    """Re-scan an anonymized file to verify it's clean (COUNTS-ONLY output)."""
     text, detections = analyze_file(file_path)
 
     # Filter out our own replacement markers
@@ -358,9 +396,21 @@ def cmd_verify(file_path):
         print("  File is safe for AI processing.")
         return 0
 
-    print(f"WARNING: {len(real_detections)} potential PII detection(s) remain in anonymized file:")
+    by_type = defaultdict(list)
     for d in real_detections:
-        print(f"  {d['entity_type']}: \"{d['text']}\" (confidence: {d['score']})")
+        by_type[d["entity_type"]].append(d)
+
+    print(f"WARNING: {len(real_detections)} potential PII detection(s) remain in anonymized file "
+          f"(counts only — values are NOT printed):")
+    for etype, items in sorted(by_type.items()):
+        scores = [d["score"] for d in items]
+        print(f"  {etype}: {len(items)} detection(s) (confidence {min(scores)}–{max(scores)})")
+
+    detail = _write_pii_detail(
+        out_dir, "pii-verify-residual-DO-NOT-SHARE.txt", real_detections,
+        f"Residual PII after anonymization: {file_path}")
+    if detail:
+        print(f"Residual values written (human review only, do NOT read into AI context): {detail}")
 
     print()
     print("Update the pseudonym key and re-run anonymization, or confirm these are false positives.")
@@ -387,13 +437,13 @@ def main():
             out_dir = sys.argv[idx + 1]
 
     if command == "scan":
-        sys.exit(cmd_scan(file_path))
+        sys.exit(cmd_scan(file_path, out_dir))
     elif command == "keygen":
         sys.exit(cmd_keygen(file_path, out_dir))
     elif command == "anonymize":
         sys.exit(cmd_anonymize(file_path, out_dir))
     elif command == "verify":
-        sys.exit(cmd_verify(file_path))
+        sys.exit(cmd_verify(file_path, out_dir))
     else:
         print(f"Unknown command: {command}", file=sys.stderr)
         print(__doc__, file=sys.stderr)

@@ -89,13 +89,37 @@ scholar-verify reads raw analysis output files (CSVs, HTML tables, figure PDFs/P
 This step is a **no-op** when `.claude/safety-status.json` does not exist. The PreToolUse hook is the mechanical backstop either way.
 
 ```bash
-# ── Step 0a-safety: Tier B sidecar check ──
-# CANDIDATE_FILES = list of raw table/figure/script files assembled in 0a below
-# (run this check AFTER 0a has enumerated them, but BEFORE 0b reads them).
+# ── Step 0a-safety: Tier B sidecar check (discover-then-scan) ──
+# NOTE: the loop previously iterated `$CANDIDATE_FILES` — a variable the
+# comment said was "assembled in 0a below," but this gate runs BEFORE 0a, so
+# it was UNSET and the Tier B check scanned ZERO files and silently passed
+# even for HALTED/NEEDS_REVIEW artifacts under a mis-pointed --artifacts-dir.
+# Now the gate DISCOVERS the candidate files first (mirroring 0a's default
+# locations), via a NUL-safe find into a bash array so paths with spaces
+# survive.
 SIDECAR=".claude/safety-status.json"
 if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+  CANDIDATE_FILES=()
+  if [ -n "${ARTIFACTS_DIR:-}" ] && [ -d "${ARTIFACTS_DIR:-}" ]; then
+    _scan_dirs=("$ARTIFACTS_DIR/tables" "$ARTIFACTS_DIR/figures" "$ARTIFACTS_DIR/scripts")
+  else
+    _scan_dirs=("$OUTPUT_ROOT/tables" "$OUTPUT_ROOT/figures" "$OUTPUT_ROOT/scripts" "$OUTPUT_ROOT/eda")
+  fi
+  while IFS= read -r -d '' _f; do CANDIDATE_FILES+=("$_f"); done < <(
+    find "${_scan_dirs[@]}" -type f -print0 2>/dev/null
+  )
+  # Fail closed: sidecar present but nothing discovered to scan → do NOT
+  # silently pass (the artifacts may live under a path the scan didn't look
+  # at). A genuine no-artifacts run halts at 0a's "No analysis outputs
+  # found" anyway.
+  if [ "${#CANDIDATE_FILES[@]}" -eq 0 ]; then
+    echo "⛔ scholar-verify Tier B: safety sidecar present but no candidate artifact files were discovered under ${_scan_dirs[*]}." >&2
+    echo "   Confirm --artifacts-dir / lock / output paths before reading any input; do NOT skip the check." >&2
+    exit 1
+  fi
   UNSAFE=""
-  for F in $CANDIDATE_FILES; do
+  for F in "${CANDIDATE_FILES[@]}"; do
     [ -f "$F" ] || continue
     ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
           || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")

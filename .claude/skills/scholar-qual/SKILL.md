@@ -85,12 +85,31 @@ Before the anonymization gate below, consult `.claude/safety-status.json` if the
 
 ```bash
 # ── Step 0: scholar-init sidecar check (qualitative) ──
-# FILE_ARGS = space-separated list of transcript/data paths from $ARGUMENTS
+# Populate FILE_ARGS with the concrete transcript/data file path(s) parsed from
+# $ARGUMENTS. Use a bash ARRAY with each path quoted so a path containing spaces
+# (e.g. "My Drive/interview 01.txt") is preserved as ONE element. If the data
+# argument is 'paste below' (no file on disk), leave the array empty.
+# NOTE: the loop previously iterated `$FILE_ARGS`, which was NEVER assigned —
+# so the sidecar check inspected ZERO files and silently passed even for
+# HALTED/NEEDS_REVIEW transcripts. It is now a populated array + fail-closed.
+#   Example: FILE_ARGS=("/Users/me/My Drive/int 01.txt" "/Users/me/int 02.txt")
+FILE_ARGS=( )   # ← model: replace with the resolved transcript path(s) from $ARGUMENTS
 SIDECAR=".claude/safety-status.json"
 if [ -f "$SIDECAR" ] && command -v jq >/dev/null 2>&1; then
+  # Fail closed: a sidecar exists but no file path was resolved AND the request
+  # names a file (not a 'paste below'). Do NOT silently pass a zero-file scan.
+  if [ "${#FILE_ARGS[@]}" -eq 0 ]; then
+    case "$ARGUMENTS" in
+      *paste*) : ;;  # pasted text, no file input — sidecar scan is N/A
+      *)
+        echo "⛔ scholar-qual Step 0: safety sidecar present but no data-file path was resolved from the request." >&2
+        echo "   Populate FILE_ARGS with the concrete transcript path(s) before proceeding — do NOT skip the check." >&2
+        exit 1 ;;
+    esac
+  fi
   UNSAFE=""
   ANON_REDIRECT=""
-  for F in $FILE_ARGS; do
+  for F in "${FILE_ARGS[@]+"${FILE_ARGS[@]}"}"; do
     [ -f "$F" ] || continue
     ABS=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$F" 2>/dev/null \
           || realpath "$F" 2>/dev/null || readlink -f "$F" 2>/dev/null || echo "$F")
@@ -194,7 +213,7 @@ When Presidio is available, use `anonymize-presidio.py` for all steps. It provid
 python3 "$SCHOLAR_SKILL_DIR/scripts/gates/anonymize-presidio.py" scan "$DATA_FILE"
 ```
 
-This uses spaCy NER to detect person names, locations, institutions, emails, phones, SSNs, and research-specific entities (HIPAA, DOB). Reports each detection with confidence scores.
+This uses spaCy NER to detect person names, locations, institutions, emails, phones, SSNs, and research-specific entities (HIPAA, DOB). Stdout carries **only per-category detection counts and confidence ranges** — matched values are never printed (a shell command's stdout is returned to the model). The actual matched values are written to a `0600` `pii-scan-detail-DO-NOT-SHARE.txt` under `output/qual/anonymized/`; open it yourself for review, but do NOT `Read` it into the assistant.
 
 **Step B: Generate pseudonym key** from detections:
 
@@ -233,27 +252,15 @@ ls "$ANON_DATA_DIR"/ANON_* 2>/dev/null || echo "ERROR: No anonymized files found
 
 When Presidio is not installed, use the regex-based procedure below. Note: regex cannot detect person names or institutions by context — only by pattern (capitalized word pairs, known suffixes). Review results carefully.
 
-**Step A: Scan for identifiers.** Before reading any data file, run a local scan (does NOT send data to AI):
+**Step A: Scan for identifiers.** Before reading any data file, run a local scan. This prints **only category counts** to stdout — matched values are never echoed, because a shell command's stdout is returned to the model, which is exactly what this scan exists to prevent. The actual matched values you need to build the pseudonym key are written to a `0600` human-review-only detail file that must NOT be read into AI context.
 
 ```bash
-# Scan for common PII patterns in qualitative data files
-DATA_FILE="$1"  # user-provided path
-echo "=== PII SCAN: $DATA_FILE ==="
-echo "--- Potential person names (capitalized word pairs) ---"
-grep -oE '\b[A-Z][a-z]+\s+[A-Z][a-z]+\b' "$DATA_FILE" | sort | uniq -c | sort -rn | head -20
-echo "--- Potential emails ---"
-grep -oiE '[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}' "$DATA_FILE" | sort -u
-echo "--- Potential phone numbers ---"
-grep -oE '(\+?1[-.\s]?)?(\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}' "$DATA_FILE" | sort -u
-echo "--- Potential addresses (street patterns) ---"
-grep -oiE '\d+\s+[A-Z][a-z]+\s+(St|Street|Ave|Avenue|Blvd|Boulevard|Rd|Road|Dr|Drive|Ln|Lane|Ct|Court|Way|Pl|Place)\b' "$DATA_FILE" | sort -u
-echo "--- Potential dates of birth ---"
-grep -oiE '(born|DOB|date of birth|birthday)[:\s]+[^\n]{5,20}' "$DATA_FILE" | sort -u
-echo "--- Potential SSN/ID numbers ---"
-grep -oE '\b\d{3}-\d{2}-\d{4}\b' "$DATA_FILE" | sort -u
-echo "--- Institutional names ---"
-grep -oiE '(University|College|Hospital|Clinic|School|Church|Company|Inc\.|Corp\.|LLC) of [A-Z][a-z]+' "$DATA_FILE" | sort -u
-echo "=== END PII SCAN ==="
+DATA_FILE="$1"                              # user-provided path
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+ANON_DIR="${OUTPUT_ROOT}/qual/anonymized"; mkdir -p "$ANON_DIR"
+DETAIL="${ANON_DIR}/pii-scan-detail-DO-NOT-SHARE.txt"
+# qual-pii-scan.sh emits ONLY counts to stdout; values go to the 0600 DETAIL file.
+bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/qual-pii-scan.sh" "$DATA_FILE" "$DETAIL"
 ```
 
 **Step B: Build a pseudonym mapping table.** Create a de-identification key that maps real identifiers to pseudonyms:

@@ -178,7 +178,11 @@ df <- load_data("[DATA_FILE_PATH]")
 cat("N =", nrow(df), "\n")
 cat("Variables =", ncol(df), "\n")
 cat("Columns:\n", paste(names(df), collapse = ", "), "\n\n")
-str(df, list.len = ncol(df), give.attr = FALSE)
+# Variable classes only — NO values (str(df) prints the first ~4-10 VALUES
+# of every column, a row-level leak, despite give.attr=FALSE).
+print(data.frame(variable = names(df),
+                 class    = vapply(df, function(x) class(x)[1], character(1)),
+                 row.names = NULL))
 cat("\n---- Missingness (%) ----\n")
 print(round(colMeans(is.na(df)) * 100, 1))
 cat("\n---- skimr summary ----\n")

@@ -346,10 +346,12 @@ def scan_file(file_path, output_json=False):
         if severity is None:
             continue
 
-        snippet = text[r.start:r.end]
-        # Truncate long snippets
-        if len(snippet) > 60:
-            snippet = snippet[:57] + "..."
+        # Privacy contract: the matched substring IS the PII and must never
+        # reach stdout/stderr — a Bash-tool caller returns those streams
+        # straight into the model's context, which is exactly what this scan
+        # exists to prevent. Keep only the length so downstream consumers
+        # retain the schema shape without the value itself.
+        snippet_len = r.end - r.start
 
         issue = {
             "severity": severity,
@@ -357,7 +359,7 @@ def scan_file(file_path, output_json=False):
             "score": round(r.score, 2),
             "start": r.start,
             "end": r.end,
-            "snippet": snippet,
+            "snippet": f"[REDACTED len={snippet_len}]",
         }
 
         if severity == "RED":
@@ -379,12 +381,13 @@ def scan_file(file_path, output_json=False):
         if yellow_issues:
             print(f"YELLOW: {len(yellow_issues)} issue(s) found — review before transmitting")
 
+        # Print type + confidence only; never the matched value (see the
+        # redaction note above).
         for issue in red_issues + yellow_issues:
             label = issue["severity"]
             etype = issue["entity_type"]
             score = issue["score"]
-            snippet = issue["snippet"]
-            print(f"  {label}: {etype} (confidence: {score}) — \"{snippet}\"")
+            print(f"  {label}: {etype} (confidence: {score})")
 
         if not red_issues and not yellow_issues:
             print("GREEN: No sensitive data patterns detected")

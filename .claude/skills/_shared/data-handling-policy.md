@@ -260,8 +260,14 @@ df <- load_data("[DATA_FILE_PATH]")
 cat("N =", nrow(df), "\n")
 cat("Variables =", ncol(df), "\n")
 cat("Column names:\n", paste(names(df), collapse = ", "), "\n\n")
-str(df, list.len = ncol(df), give.attr = FALSE)   # classes only, no values
-# Do NOT call: head(df), print(df), View(df)
+# Variable classes only — NO values. (str(df) prints the first ~4-10 VALUES
+# of every column — a LOCAL_MODE row-level leak — so it is NOT classes-only
+# despite give.attr=FALSE. This names+classes frame is the safe equivalent
+# of Python's df.dtypes.)
+print(data.frame(variable = names(df),
+                 class    = vapply(df, function(x) class(x)[1], character(1)),
+                 row.names = NULL))
+# Do NOT call: str(df), head(df), print(df), View(df)
 ```
 
 ### 3b. LOCAL_MODE loader template (Python)
@@ -298,7 +304,7 @@ print(df.isna().mean().round(3)) # missingness per column
 
 | Task | Allowed under LOCAL_MODE | Forbidden |
 |------|--------------------------|-----------|
-| Inspect structure | `str(df)`, `df.dtypes`, `names(df)` | `head(df)`, `df.head()` |
+| Inspect structure | `df.dtypes`, `names(df)`, `sapply(df, class)` | `str(df)` (prints sample values), `head(df)`, `df.head()` |
 | Describe distributions | `summary(df)`, `skimr::skim(df)`, `df.describe()` | `print(df[1:10, ])` |
 | Crosstab | `table(df$x, df$y)` (suppress n<10) | Pivoting raw IDs |
 | Missingness | `colSums(is.na(df))`, `df.isna().sum()` | Listing which rows are missing |
