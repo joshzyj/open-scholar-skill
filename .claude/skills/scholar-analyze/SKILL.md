@@ -1122,6 +1122,7 @@ See [coding-decisions-log.md](coding-decisions-log.md) for the full decision rat
 - [ ] AME table saved (HTML + TeX + docx + **CSV as `ame-[model].csv`**) for every logit / probit / ordered-logit model (MANDATORY per results-registry-contract.md — do not hand-compute AMEs from coefficients; use `marginaleffects::avg_slopes()`)
 - [ ] **`results-registry.csv` saved** — one row per (hypothesis × model spec) mapping hypothesis_id → coefficient, AME, table_ref, figure_ref (see `../_shared/results-registry-contract.md`)
 - [ ] **`adjudication-log.csv` saved** — one row per hypothesis with `adjudication_code` computed by the coded rule in `references/adjudication-rule.md` (no prose-only adjudication)
+- [ ] **`verify/family-correction-<HID>.csv` saved for every K ≥ 3 hypothesis family** — verdicts derived from `p_adj`, never `p_raw` (see the multiple-testing rule and family-correction self-check in `references/adjudication-rule.md`; a family with no surviving corrected cell is `NOT_SUPPORTED`, never "partial support")
 - [ ] **`coefficients-[model].csv` saved** for every fitted model (raw β, SE, CI, p, n)
 - [ ] **Results prose cites adjudication-log.csv verbatim** — every hypothesis statement uses the `prose_verb` column from the log; no synonyms invented by the writer
 - [ ] Robustness table saved as HTML + TeX + docx

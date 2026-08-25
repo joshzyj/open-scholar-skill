@@ -19,7 +19,25 @@ For each hypothesis `H` with a hypothesized direction `d ∈ {+, −, ≠0, =0}`
 
 **Two-sided tests by default.** One-sided tests are only permitted if pre-registered in Phase 3 AND the direction `d` is specified before looking at results.
 
-**Multiple testing.** When `H` is part of a family tested with BH/Holm, `p` above is the **adjusted** p-value. Record both raw and adjusted in the log.
+**Multiple testing (MANDATORY when K ≥ 3).** When `H` is part of a pre-registered family of K ≥ 3 sub-hypotheses (heterogeneity panel of K modifiers, K-arm dose-response contrasts, K outcomes for the same treatment, etc.), the analysis script MUST:
+
+1. Call `p.adjust(p_raw_vector, method = ...)` with one of `holm`, `BH`, `BY`, or `bonferroni`. The choice (and α) is fixed at design time in the Phase 3 blueprint and cited in Methods.
+2. Record BOTH `p_raw` and `p_adj` in `adjudication-log.csv` (the schema below already includes both columns; `p_adj` is `NA` only when K = 1 or K = 2).
+3. Emit a per-family audit file `${PROJ}/verify/family-correction-<HID>.csv` (one file per family) with the schema:
+   ```
+   family_id, k, raw_p, adj_method, adj_p, alpha, n_survive
+   ```
+   - `k` = the number of sub-hypotheses in the family
+   - `n_survive` = count of cells where `adj_p < alpha`
+   - One row per sub-hypothesis (so the file has `k` rows)
+
+4. The hypothesis verdict (`adjudication_code` for the family) MUST be derived from `p_adj`, not `p_raw`. Specifically:
+   - `n_survive ≥ 1` AND sign matches → `SUPPORTED` (cite the surviving cell verbatim)
+   - `n_survive == 0` → `NOT_SUPPORTED` (any "PARTIAL support" or "directionally consistent" framing of an uncorrected single-cell `p_raw < α` is forbidden — review-code-statistics flags this as CRIT-STAT)
+
+5. Add a `family_id` column to `adjudication-log.csv` so family membership is groupable on the record. If a hypothesis is NOT part of a family (K = 1), set `family_id = hypothesis_id` (singleton family).
+
+**Family-correction self-check (MANDATORY before drafting).** Group `adjudication-log.csv` by `family_id`; for every group with K ≥ 3, `verify/family-correction-<family_id>.csv` must exist with the required columns BEFORE any Results prose is drafted. A missing or malformed file means the family's verdict rests on uncorrected p-values — stop and fix. (The motivating failure: a K = 9 moderator panel whose single uncorrected `p_raw < 0.05` cell shipped as "PARTIAL support"; under this rule that family adjudicates `NOT_SUPPORTED` unless a cell survives correction.)
 
 **Equivalence tests** (for `d = =0`): use TOST with pre-registered SESOI; `SUPPORTED_NULL` only if both one-sided tests reject at α.
 
@@ -30,10 +48,12 @@ For each hypothesis `H` with a hypothesized direction `d ∈ {+, −, ≠0, =0}`
 Every `scholar-analyze` run in DATA-AVAILABLE MODE must emit this file to `${PROJ}/tables/adjudication-log.csv`:
 
 ```
-hypothesis_id, statement, direction_hypothesized, model, focal_coef_name,
+hypothesis_id, family_id, statement, direction_hypothesized, model, focal_coef_name,
   beta, se, p_raw, p_adj, ci_low, ci_high, ame, alpha, adjudication_code,
   prose_verb, table_ref, figure_ref, script, notes
 ```
+
+`family_id`: mandatory column. Singleton hypotheses set `family_id = hypothesis_id`; multi-sub-hypothesis families share a `family_id` (e.g., all nine rows of an H3 moderator panel share `family_id = H3`). The family-correction self-check above groups by this column to detect K ≥ 3 families that need correction emission.
 
 - One row per hypothesis. Every `H` (or RQ + expected pattern in INTEGRATED-RQ mode) listed in PROJECT STATE Phase 2 must appear.
 - `adjudication_code` is computed by code, not prose. Any Results paragraph discussing hypothesis `H1` must cite `adjudication-log.csv` row `H1` and use its `prose_verb` — not a synonym chosen by the writer.
