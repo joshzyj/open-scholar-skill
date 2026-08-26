@@ -116,6 +116,38 @@ scholar_search "[ANGLE_3_KEYWORDS]" 25 keyword | scholar_format_citations
 
 **Record local hits** for each angle: count of results, key papers found, verification labels (e.g., `VERIFIED-LOCAL(zotero)`).
 
+#### 3a-ii. Tier 1b — Full-text semantic pass over the local library (`scholar-rag`, if built)
+
+Tier 1a searches **metadata** — titles, abstracts, keywords. Novelty is a
+NEGATIVE claim ("nobody has asked this"), and metadata is the weakest basis for
+one: an angle can look unexplored by every title and abstract while the finding
+sits in a results section, a robustness appendix, or a subgroup table of a paper
+already in the user's own library. That is precisely what a full-text pass sees
+and a metadata search cannot.
+
+> When the user has a `scholar-rag` index (`/scholar-rag status` shows
+> `embedded > 0`), query it for *full-text passages* before rating novelty.
+> Prefer the MCP tool `rag_search("<angle RQ>", k=6, hybrid=true)` (available if
+> the scholar-rag MCP server is registered); otherwise the CLI:
+> `"$SCHOLAR_RAG_DIR/.venv/bin/python" <scholar-rag-assets>/query.py "<angle RQ>" -k 6 --hybrid --json`.
+> Run one query per candidate angle, phrased as the angle's RQ rather than a bare
+> topic. Treat retrieved passages as **leads to verify**, not as citations
+> themselves — every reference still passes the Tier 0–2 verification above, and
+> `/scholar-citation` owns the bibliographic record. When a passage becomes the
+> basis of a finalized novelty/gap verdict, capture it as an anchor (`ev_capture`
+> with `EV_TOOL=rag_search`, carrying the hit's `doc_id`/`chunk_id`/`text_sha256`
+> — `_shared/evidence-ledger.md` §2) instead of letting it evaporate.
+
+**This tier is CONDITIONAL, and its absence is a fact about coverage, not about
+the literature.** If no index exists, or the tool errors or times out (a
+`{"status":"server-timeout"}` payload or any transport error), that is
+`TIER1B_UNAVAILABLE` — the full text was NOT consulted. A tool outage is never
+a finding: it says nothing about the literature and must never be recorded as
+"nothing found". Note which it was and carry it into the novelty verdict per
+Step 3's coverage rule. Do not build the index mid-scan: an idea-stage scan is
+meant to be quick, and `/scholar-rag build` is a long job the user opts into
+deliberately.
+
 #### 3b. Tier 2 — External API Search
 
 After local library results are collected, query external APIs to fill gaps. Use the `scholar_search` dispatcher (which queries CrossRef, Semantic Scholar, OpenAlex, and Google Scholar) or call individual API search functions.
@@ -186,6 +218,23 @@ Run 2-3 targeted WebSearch queries per under-covered angle using these templates
 **Minimum search requirement**: Run local library search (Tier 1) for ALL angles. Run ≥2 external API queries per angle (Tier 2). Use WebSearch (Tier 3) for any angle with < 5 total relevant papers after Tiers 1–2. If total hits > 50 for the exact RQ, rate as SATURATED.
 
 > If the search returns no relevant prior work, note this and flag whether the question may be outside current literature or whether search terms need refinement.
+
+**Coverage honesty — every novelty verdict states what was actually searched.**
+A rating is a claim about the literature; its strength is bounded by the tiers
+that ran. Each `UNEXPLORED` and `GAP` verdict MUST carry a coverage line naming
+the tiers consulted and, explicitly, any that were not:
+
+    UNEXPLORED — coverage: Tier 1a metadata (Zotero, 412 items), Tier 2
+    (CrossRef/S2/OpenAlex); Tier 1b full-text NOT RUN (no scholar-rag index)
+
+`UNEXPLORED (full text not searched)` and `UNEXPLORED (full text searched, none
+found)` are **different findings**, and the difference is the whole basis of the
+claim: the first says nobody indexed it under this description, the second says
+nobody wrote it. Never let an absent or unavailable tier read as evidence of
+novelty — a metadata-only scan cannot see inside the user's own PDFs. When
+Tier 1b was skipped and an angle rates `UNEXPLORED`, say so in one clause and
+offer the index build as the way to firm it up (`/scholar-rag build`), rather
+than presenting the rating as settled.
 
 **Evidence Ledger (MANDATORY):** load `.claude/skills/_shared/evidence-ledger.md` and capture anchors ONLY for sources behind finalized novelty/gap verdicts (`EV_PRODUCED_BY=scholar-idea`, `claim_kind: gap_claim`): each SATURATED/INCREMENTAL/GAP rating that names specific prior papers gets one tier-honest anchor per named paper (the abstract/snippet that grounded the rating — `abstract_verbatim`/`T3_abstract` is legal). Search hits that never ground a rating get NO anchors (two-stage rule — anchoring every hit would bloat the ledger). The output's log MUST include the row `Evidence anchors: N created / M reused`.
 
@@ -283,7 +332,10 @@ Use the Task tool to run all 5 evaluators **in parallel** (five simultaneous too
 RESEARCH QUESTIONS: [RQ1, RQ2, RQ3 from Step 4]
 HYPOTHESES: [H1, H2 per RQ from Step 6]
 VARIABLE MAPS: [X, Y, M, C, scope conditions from Step 5]
-LITERATURE SCAN: [per-angle tables + novelty threat ratings from Step 3]
+LITERATURE SCAN: [per-angle tables + novelty threat ratings from Step 3, EACH
+  with its coverage line — the tiers consulted and any NOT RUN. A reviewer
+  cannot weigh an UNEXPLORED rating without knowing whether full text was
+  searched.]
 DATA INVENTORY: [dataset tables from Step 7]
 TARGET JOURNAL: [journal name or "not yet determined"]
 ```

@@ -357,6 +357,7 @@ asserts nothing.
 ## Integration
 
 - **Lit review / writing:** once the MCP server is registered, `scholar-lit-review`, `scholar-write`, and `scholar-citation` can call `rag_search` as a full-text semantic tier (complements Tier-0 KG metadata and Tier-1 Zotero).
+- **Idea stage:** `scholar-idea` Step 3 and `scholar-brainstorm` Step 5 call it as **Tier 1b** before rating novelty. Novelty is a NEGATIVE claim ("nobody has asked this"), and a metadata-only scan cannot see a finding buried in a results section of a paper the user already owns — so an index materially changes what an `UNEXPLORED` rating is worth. Both are CONDITIONAL on the index existing and both must state coverage: an absent or timed-out Tier 1b is `TIER1B_UNAVAILABLE`, never evidence of novelty.
 - **Feedback to `scholar-knowledge`:** extracted full text can upgrade abstract-only nodes — run `/scholar-knowledge re-extract` after a build.
 - **Shared identity:** `doc_id` = sha256(normalized DOI or title), so a passage hit cross-links to the same paper's symbolic findings.
 

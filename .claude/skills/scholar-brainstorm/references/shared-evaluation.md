@@ -33,6 +33,29 @@ scholar_search "[RQ2_KEYWORDS]" 15 keyword | scholar_format_citations
 # ... repeat for each candidate RQ (use 2-3 keywords per RQ)
 ```
 
+#### 5a-ii. Tier 1b — Full-text semantic pass (`scholar-rag`, if built)
+
+Tier 1a is a **metadata** search. Novelty is a NEGATIVE claim, and an RQ can look
+unexplored by every title and abstract while the finding sits in a results
+section or appendix of a paper already in the user's library — which a full-text
+pass sees and a metadata search cannot. This matters most in PAPER mode, where
+every candidate is a follow-up to a seed paper whose neighbours the user likely
+owns.
+
+> When the user has a `scholar-rag` index (`/scholar-rag status` shows
+> `embedded > 0`), run `rag_search("<candidate RQ>", k=6, hybrid=true)` (MCP
+> tool) or the CLI
+> `"$SCHOLAR_RAG_DIR/.venv/bin/python" <scholar-rag-assets>/query.py "<candidate RQ>" -k 6 --hybrid --json`
+> for the candidates you are about to rate. Retrieved passages are **leads to
+> verify**, never citations themselves — Tier 0–2 verification still governs
+> every reference.
+
+**CONDITIONAL, and its absence is a coverage fact, not a literature fact.** No
+index, or a tool error/timeout (`{"status":"server-timeout"}` or any transport
+error), is `TIER1B_UNAVAILABLE` — the full text was NOT consulted. A tool outage
+is never a finding: it says nothing about the literature and must never be
+recorded as "nothing found". Carry that into 5d. Do not build an index mid-scan.
+
 #### 5b. Tier 2 — External API Batch Search
 
 For any RQ with <3 local hits, run external API searches. **Run in a SINGLE Bash block:**
@@ -69,6 +92,16 @@ For each of the 15-20 candidates, assign a **novelty threat rating** using the s
 - **INCREMENTAL**: 1-2 papers address the RQ but with different population, time, or weaker method → viable with clear contribution statement
 - **GAP**: Papers address parts but not the full X→M→Y chain → strong potential
 - **UNEXPLORED**: <1 paper addresses any component → high novelty, verify feasibility
+
+**Every rating states its coverage.** A novelty rating is a claim about the
+literature and is bounded by the tiers that actually ran. Each `UNEXPLORED` and
+`GAP` carries the tiers consulted and any that were not — e.g.
+`UNEXPLORED — coverage: Tier 1a metadata + Tier 2; Tier 1b full-text NOT RUN (no
+scholar-rag index)`. `UNEXPLORED (full text not searched)` and `UNEXPLORED (full
+text searched, none found)` are different findings; an absent or unavailable
+tier must never read as evidence of novelty. Since Novelty carries 20–25% of the
+scoring weight below, a rating inflated by an unsearched tier propagates
+straight into the Top-10 ranking.
 
 ### Step 6: Shortlist to Top 10
 
