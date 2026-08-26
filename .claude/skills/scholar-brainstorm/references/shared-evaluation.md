@@ -47,8 +47,13 @@ eval "$(cat "$SKILL_DIR/.claude/skills/_shared/refmanager-backends.md" | sed -n 
 
 # ── External API searches for under-covered RQs ──
 echo "=== EXTERNAL: RQ[N] ==="
-scholar_search_crossref "[KEYWORDS]" 10
-scholar_search_s2 "[KEYWORDS]" 10
+# Names carry the _keyword suffix (refmanager-backends.md defines
+# scholar_search_crossref_keyword / _semanticscholar_keyword, never bare
+# _crossref / _s2). A bare name is "command not found", swallowed by the
+# 2>/dev/null on the eval — the external tier then returns nothing and the
+# RQ silently reads as having no external coverage.
+scholar_search_crossref_keyword        "[KEYWORDS]" 10
+scholar_search_semanticscholar_keyword "[KEYWORDS]" 10
 # ... repeat for RQs with insufficient local coverage
 ```
 
