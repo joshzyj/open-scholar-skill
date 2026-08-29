@@ -62,13 +62,13 @@ expect "no infra (legacy)" YELLOW 2 "$R" --skill scholar-eda
 # dispatched agentId not in trace -> RED / 1
 R=$(mkroot)
 OUTPUT_ROOT="$R" bash "$EMIT" --skill scholar-code-review --phase 5.5 --step s --action a >/dev/null
-printf '{"agentId":"missingaidxxxx","phase":"5.5"}\n' > "$R/logs/dispatch-manifest.jsonl"
+printf '{"agentId":"missingaidxxxx","phase":"5.5","skill":"scholar-code-review","run_id":"cr-1","trace_mirror_status":"failed:emit-error"}\n' > "$R/logs/dispatch-manifest.jsonl"
 expect "dispatched aid missing from trace" RED 1 "$R" --skill scholar-code-review --phase 5.5
 
 # cross-link satisfied: trace event carries the dispatched agentId -> GREEN / 0
 R=$(mkroot)
 OUTPUT_ROOT="$R" bash "$EMIT" --skill scholar-code-review --phase 5.5 --agent review-code-correctness --agentId "boundaidxxxxxx" --step verdict --observation "1 crit" >/dev/null
-printf '{"agentId":"boundaidxxxxxx","phase":"5.5"}\n' > "$R/logs/dispatch-manifest.jsonl"
+printf '{"agentId":"boundaidxxxxxx","phase":"5.5","skill":"scholar-code-review","run_id":"cr-1","trace_mirror_status":"ok"}\n' > "$R/logs/dispatch-manifest.jsonl"
 expect "cross-link satisfied" GREEN 0 "$R" --skill scholar-code-review --phase 5.5
 
 echo ""

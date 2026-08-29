@@ -88,13 +88,15 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 2
 fi
 
-VERDICT=$(python3 - "$MANIFEST" "$PHASE" "${TARGET_TRACES[@]}" <<'PY'
+VERDICT=$(python3 - "$MANIFEST" "$PHASE" "$SKILL" "${SCHOLAR_TRACE_XLINK_ENFORCE:-0}" "${TARGET_TRACES[@]}" <<'PY'
 import json, sys
 manifest, phase = sys.argv[1], sys.argv[2]
-trace_files = sys.argv[3:]
+skill_arg, xlink_enforce = sys.argv[3], sys.argv[4] == "1"
+trace_files = sys.argv[5:]
 REQ = {"ts","seq","run_id","skill","phase","agent","agentId","step","reasoning","action","observation","refs","status"}
 
 seen_agent_ids = set()
+run_ids_seen = set()
 records = 0
 for tf in trace_files:
     ln = 0
@@ -121,17 +123,34 @@ for tf in trace_files:
         aid = r.get("agentId")
         if aid:
             seen_agent_ids.add(aid)
+        if r.get("run_id"):
+            run_ids_seen.add(r["run_id"])
         records += 1
 
 if records == 0:
     print("RED|trace file(s) present but contain zero records")
     sys.exit(0)
 
-# Agent-dispatch cross-link: every dispatched agentId for this phase must have a trace event.
-if phase and manifest and manifest != "" :
+# ── Agent-dispatch cross-link (trace plan D2, 2026-08-26) ───────────────────
+# Every dispatched agentId in scope must have a trace event. Two corrections
+# to the pre-2026-08-26 behaviour, both measured:
+#
+# 1. It was DORMANT for the skill it mattered most to. The whole block was
+#    gated on `if phase and ...`, and scholar-idea's own invocation
+#    (SKILL.md:52) passes --skill but never --phase — so a run with five real
+#    dispatches and zero agent events printed GREEN. Reproduced before fixing.
+# 2. The phase path cross-linked by phase ALONE while traces are filtered to
+#    one skill, so two skills both using phase "0" demanded each other's
+#    agentIds. Preserving that "unchanged" would have preserved a bug.
+#
+# Scope now = rows matching this skill (and phase too, when given). Rows that
+# predate the skill/run_id fields cannot be scoped: they are COUNTED and
+# reported, never silently passed — "could not check" is not "checked".
+unscoped = 0
+missing = []
+if manifest:
     import os
     if os.path.isfile(manifest):
-        missing = []
         for line in open(manifest):
             line = line.strip()
             if not line:
@@ -139,25 +158,73 @@ if phase and manifest and manifest != "" :
             try:
                 m = json.loads(line)
             except Exception:
-                continue
-            if str(m.get("phase")) != str(phase):
+                # A malformed row can HIDE a dispatch; never skip it silently.
+                unscoped += 1
                 continue
             aid = m.get("agentId")
-            if aid and aid not in seen_agent_ids:
-                missing.append(aid)
-        if missing:
-            uniq = sorted(set(missing))
-            print(f"RED|{len(uniq)} dispatched agentId(s) for phase {phase} have no trace event: {uniq[:5]}")
-            sys.exit(0)
+            if not aid:
+                continue
+            row_skill = m.get("skill")
+            row_run = m.get("run_id")
+            if phase and str(m.get("phase")) != str(phase):
+                continue
+            if not row_skill:
+                # legacy row: no identity to scope by
+                unscoped += 1
+                continue
+            if skill_arg and row_skill != skill_arg:
+                continue          # another skill's dispatch — not our business
+            # run_id REPORTS, it does not EXCLUDE. Filtering out rows whose
+            # run_id is absent from the trace would silently drop exactly the
+            # rows this gate exists to catch — a dispatch whose entire run
+            # left no trace, or one carrying a wrong/bogus run id, would read
+            # as "a different run" and vanish. (Caught by this gate's own
+            # suite: the missing-aid case flipped to GREEN.) Same-skill,
+            # same-day runs share one trace file, so scoping by skill alone
+            # does not create cross-run false positives.
+            if aid not in seen_agent_ids:
+                missing.append((aid, m.get("trace_mirror_status") or "unknown"))
+
+print(f"XLINK_CHECKED|{len(seen_agent_ids)}")
+print(f"XLINK_UNSCOPED|{unscoped}")
+
+if missing:
+    uniq = sorted({a for a, _ in missing})
+    fails = sorted({s for _, s in missing if str(s).startswith("failed")})
+    detail = f"{len(uniq)} dispatched agentId(s) have no trace event: {uniq[:5]}"
+    if fails:
+        detail += f" (mirror status: {fails[:3]})"
+    # A row carrying full identity (skill, and run_id when the skill uses one)
+    # is NOT legacy ambiguity — a real panel is indistinguishable from five
+    # inline personas without its trace events, so this REDs on sight. Legacy
+    # unscoped rows are reported above and cannot reach here.
+    print(f"RED|{detail}")
+    sys.exit(0)
+
+if unscoped:
+    # Bounded, not merely counted: unscoped rows could belong to this run, so
+    # the verdict is explicitly degraded rather than green.
+    lvl = "RED" if xlink_enforce else "YELLOW"
+    print(f"{lvl}|{unscoped} dispatch row(s) lack skill/run_id identity — cross-link could not scope them (legacy rows; re-emit with --skill to bind, or set SCHOLAR_TRACE_XLINK_ENFORCE=1 to fail on them)")
+    sys.exit(0)
 
 print(f"GREEN|{records} valid RAO record(s); {len(seen_agent_ids)} agent event(s)")
 PY
 )
 
-CODE="${VERDICT%%|*}"
-MSG="${VERDICT#*|}"
+# The validator emits diagnostic counters (XLINK_*) before its verdict, so the
+# VERDICT is the LAST line — not the first. Taking the first would read
+# "XLINK_CHECKED" as the code and fail closed on every run (caught by this
+# gate's own suite before it shipped).
+XLINK_INFO=$(printf '%s\n' "$VERDICT" | grep -E '^XLINK_' || true)
+VERDICT_LINE=$(printf '%s\n' "$VERDICT" | grep -E '^(GREEN|RED|YELLOW)\|' | tail -1)
+[ -z "$XLINK_INFO" ] || printf '%s\n' "$XLINK_INFO" | tr '|' '='
+
+CODE="${VERDICT_LINE%%|*}"
+MSG="${VERDICT_LINE#*|}"
 case "$CODE" in
-  GREEN) echo "STATUS=GREEN"; echo "PASS: $MSG"; exit 0 ;;
-  RED)   echo "STATUS=RED"; echo "FAIL: $MSG"; exit 1 ;;
-  *)     echo "STATUS=RED"; echo "FAIL: trace validation produced no verdict (fail closed): ${VERDICT:-<empty>}"; exit 1 ;;
+  GREEN)  echo "STATUS=GREEN";  echo "PASS: $MSG"; exit 0 ;;
+  YELLOW) echo "STATUS=YELLOW"; echo "WARN: $MSG"; exit 2 ;;
+  RED)    echo "STATUS=RED";    echo "FAIL: $MSG"; exit 1 ;;
+  *)      echo "STATUS=RED"; echo "FAIL: trace validation produced no verdict (fail closed): ${VERDICT:-<empty>}"; exit 1 ;;
 esac

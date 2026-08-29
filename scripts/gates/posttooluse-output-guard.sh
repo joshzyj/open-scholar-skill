@@ -77,15 +77,33 @@ jq -e 'to_entries | any(.value | type=="string" and test("^(LOCAL_MODE|HALTED|NE
 
 # ─── Detectors ─────────────────────────────────────────────────────────────
 # (a) PII via the canonical safety-scan.sh patterns, run on a temp text file.
+# PII_ENTITIES is set as a side effect: the entity TYPES safety-scan matched
+# (e.g. "PERSON", "US_SSN"). Types only — safety-scan prints the matched value
+# as "[REDACTED len=N]" and never the value itself, so surfacing the type
+# carries no data (C-01 holds). This exists because a guard that knows why it
+# acted and does not say so forces the reader to guess: the previous notice
+# said output matched "PII patterns OR a bulk row dump", and on 2026-08-27 two
+# independent investigators each picked the wrong disjunct and spent multiple
+# rounds chasing a threshold that does not exist. The real trigger was a
+# statistical eponym ("Holm") scoring as PERSON.
+PII_ENTITIES=""
 scan_pii() {
-  local text="$1" tmp rc
+  local text="$1" tmp rc out
+  PII_ENTITIES=""
   [ -n "$text" ] || return 1
   [ -f "$SAFETY_SCAN" ] || return 1
   tmp="$(mktemp -t pt-scan.XXXXXX)" || return 1
   printf '%s' "$text" > "$tmp"
-  bash "$SAFETY_SCAN" "$tmp" >/dev/null 2>&1; rc=$?
+  out="$(bash "$SAFETY_SCAN" "$tmp" 2>/dev/null)"; rc=$?
   rm -f "$tmp"
-  [ "$rc" = 1 ]        # 1 = RED (PII detected)
+  [ "$rc" = 1 ] || return 1        # 1 = RED (PII detected)
+  # Detail lines read "  RED: PERSON (confidence: 0.85)". The summary line
+  # "RED: 1 critical issue(s) found" must NOT match, so require >=1 letter.
+  PII_ENTITIES="$(printf '%s\n' "$out" \
+    | sed -n 's/^[[:space:]]*RED:[[:space:]]*\([A-Z_][A-Z_]*\).*/\1/p' \
+    | sort -u | tr '\n' ',' | sed 's/,$//')"
+  [ -n "$PII_ENTITIES" ] || PII_ENTITIES="unspecified"
+  return 0
 }
 # (b) Bulk row dump: many delimited lines (>200 lines with >=2 commas OR tabs).
 # Use awk (exits 0, prints a clean integer) rather than `grep -c ... || echo 0`
@@ -97,27 +115,40 @@ is_bulk_rows() {
   [ "${n:-0}" -gt 200 ]
 }
 
+# Record WHICH detector fired, not merely THAT one did.
 REDACT_OUT=0; REDACT_ERR=0
+WHY_OUT=""; WHY_ERR=""
 if [ -n "$OUT" ]; then
-  if scan_pii "$OUT" || is_bulk_rows "$OUT"; then REDACT_OUT=1; fi
+  if scan_pii "$OUT"; then
+    REDACT_OUT=1; WHY_OUT="PII scan matched entity type(s): ${PII_ENTITIES}"
+  elif is_bulk_rows "$OUT"; then
+    REDACT_OUT=1
+    WHY_OUT="bulk row dump ($(printf '%s\n' "$OUT" | awk '{c=gsub(/,/,","); t=gsub(/\t/,"\t"); if(c>=2||t>=2) n++} END{print n+0}') delimited lines, threshold 200)"
+  fi
 fi
 if [ -n "$ERR" ]; then
-  if scan_pii "$ERR"; then REDACT_ERR=1; fi
+  if scan_pii "$ERR"; then
+    REDACT_ERR=1; WHY_ERR="PII scan matched entity type(s): ${PII_ENTITIES}"
+  fi
 fi
 
 [ "$REDACT_OUT" = 1 ] || [ "$REDACT_ERR" = 1 ] || exit 0   # nothing to redact
 
 NOTICE="[SAFETY GUARD — Strict level] This Bash command's output was redacted
-because it matched sensitive-data patterns (PII) or a bulk row dump, and this
-project is at safety level '${LEVEL}' with restricted data. Row-level data must
+for the reason named in REDACTION_TRIGGER above — do not infer a different one.
+Project is at safety level '${LEVEL}' with restricted data. Row-level data must
 not enter context. Re-run as an aggregate-only Rscript -e / python3 -c summary
 (see _shared/data-handling-policy.md §3a/§3b), or 'wc -l' / 'grep -c' for counts.
 This redactor is accident-mitigation, not a wall — for a kernel-enforced
 boundary use the Lockdown level."
 
 NEW_OUT="$OUT"; NEW_ERR="$ERR"
-[ "$REDACT_OUT" = 1 ] && NEW_OUT="$NOTICE"
-[ "$REDACT_ERR" = 1 ] && NEW_ERR="[SAFETY GUARD] stderr redacted (matched PII patterns)."
+# Prepend the specific trigger. The generic NOTICE explains the policy; this
+# line explains THIS redaction, so the reader never has to guess which detector
+# fired or infer a mechanism that does not exist.
+[ "$REDACT_OUT" = 1 ] && NEW_OUT="[SAFETY GUARD] REDACTION_TRIGGER: ${WHY_OUT}
+$NOTICE"
+[ "$REDACT_ERR" = 1 ] && NEW_ERR="[SAFETY GUARD] stderr redacted. REDACTION_TRIGGER: ${WHY_ERR}"
 
 jq -n --arg out "$NEW_OUT" --arg err "$NEW_ERR" \
   '{hookSpecificOutput:{hookEventName:"PostToolUse",

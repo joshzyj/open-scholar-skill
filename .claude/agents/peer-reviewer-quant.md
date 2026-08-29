@@ -162,6 +162,20 @@ STRENGTHS:
 
 ## When invoked under scholar-auto-research Phase 18
 
+> **Also required under `scholar-full-paper` Phase 10.5b.** The heading above names only
+> auto-research because that is where the block is *defined*, not where it is *required*.
+> `manuscript-quality-gate.sh` parses the same schema under full-paper, and the 10.5b dispatch
+> prompt in `scholar-full-paper/references/phase-quality-gate.md` §Step 2 supplies it verbatim.
+> Reading this file alone suggests the schema is auto-research-only; it is not. (P20-A D4,
+> 2026-08-28 — a reviewer concluded from this heading that full-paper seats are never told to
+> emit scores, and hand-pasted the fields instead of using the documented dispatch block.)
+>
+> **The gate cannot warn you in time.** `panel_non_compliant` fires only when the 10.5b panel
+> check actually runs. In the 2026-08 case Phase 10.5a failed first, so 10.5b was never reached,
+> the schema error stayed silent, and it surfaced only after the quality artifact had already been
+> assembled by hand from the seats prose. Treat this block as required at dispatch time — do not
+> rely on the gate to tell you it was missing.
+
 Phase 18 is the manuscript quality gate downstream of blueprint, verification, citation audit, ethics review, and replication packaging. Beyond your standard review, append two structured blocks the orchestrator extracts into `quality/manuscript-quality.json`:
 
 **CONTRIBUTION LOCATOR.** Quote 1–3 verbatim sentences from the manuscript that constitute its contribution. Identify the section. Score `clarity_score` (0–10; can you find it?) and `specificity_score` (0–10; is it concrete or boilerplate?). Both must be at least 7 for the gate to PASS. Quote independently — the cross-reviewer Jaccard agreement on the sentences each reviewer quotes is the load-bearing signal that the contribution is genuinely locatable.
