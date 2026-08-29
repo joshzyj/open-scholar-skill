@@ -22,7 +22,8 @@ Phase 7 is mandatory under `scholar-auto-research`. Any standalone skip behavior
 ## Premortem Loop
 
 1. `invoke_specialist_premortem`: record the routed `premortem_engine.skill`, `mode: premortem`, and `skip_premortem_ignored: true`.
-2. `dispatch_premortem_reviewers`: run all four roles independently, using real peer-reviewer style agents/provenance rather than inline roleplay.
+2. `dispatch_premortem_reviewers`: begin the registered `premortem_panel` and
+   run all four reserved roles independently rather than inline roleplay.
 3. `traffic_light_review`: score the plan on identification, variable construction, sample restrictions, model specification, standard errors, missing data, robustness, power/effect-size realism, heterogeneity/multi-comparison policy, mechanism evidence, table/figure plan, preregistration/deviation alignment, and interpretive reach.
 4. `null_falsification_review`: for every hypothesis represented in `analysis/spec-registry.csv`, record the observable null pattern that would count against the claim, whether it was pre-committed, and whether planned interpretation concedes the null.
 5. `collect_risks`: build a risk register across identification, measurement, missing data, model fragility, robustness gaps, null/conflicting results, and overclaiming.
@@ -39,7 +40,13 @@ Phase 7 is mandatory under `scholar-auto-research`. Any standalone skip behavior
 - `premortem_engine`: object with the routed specialist skill, `mode: premortem`, `auto_research_contract: phase_7`, and `skip_premortem_ignored: true`
 - `iteration`: integer from 1 to 3; iteration 3 with any unresolved red/high/major/critical/blocker risk must halt for human decision
 - `source_hashes`: SHA-256 hashes for `identification_strategy`, `model_specs`, `measurement_plan`, `variable_dictionary`, `analysis_plan`, `spec_registry`, `scripts_inventory`, `pre_execution_review`, `pre_execution_fix_log`, and `pre_execution_rereview`
-- `reviewer_provenance`: list covering every reviewer, each with `reviewer_id`, `role`, `agent_name`, `task_invocation_id`, `dispatched_at_utc`, `model_id`, and `report_path`
+- `reviewer_provenance`: list covering every reviewer, each with `reviewer_id`,
+  `role`, a nonempty host-neutral `agent_name`, evidence-bound
+  `task_invocation_id`/`report_path`, dispatch time, and model identity when the
+  host reports one. This is a descriptive projection of `reviewers`, not a
+  second authority: derive it from `reviewers`, and keep `reviewer_id`, `role`,
+  `task_invocation_id`, and `report_path` exactly equal to the corresponding
+  evidence-bound reviewer record.
 - `reviewers`: list covering all required roles, each with `reviewer_id`, `role`, `agent_type`, `task_invocation_id`, `report_path`, `reviewed_inputs`, `risks`, and `verdict`
 - `traffic_light_summary`: list of analysis-premortem dimensions with `dimension`, `verdict`, `lead_reviewer`, and `evidence`; no `RED` may remain unresolved at pass
 - `null_falsification_table`: list covering every hypothesis id in `analysis/spec-registry.csv`, each with `hypothesis_id`, `null_pattern`, `precommitted`, `discussion_concedes_null`, and `status`

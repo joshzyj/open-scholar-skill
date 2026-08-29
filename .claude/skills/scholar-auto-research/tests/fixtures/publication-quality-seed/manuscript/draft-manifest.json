@@ -1,0 +1,459 @@
+{
+  "blueprint": {
+    "path": "manuscript/manuscript-blueprint.json",
+    "sha256": "9e252b75cbe65080c0f38c40ee57bf0e3c01f9c614b0f20b77319896da6f3ce7"
+  },
+  "blueprint_execution": {
+    "contribution_stack_rendered": true,
+    "demoted_results_not_overstated": true,
+    "headline_claim_rendered": true,
+    "headline_results_covered": true,
+    "null_result_framing_applied": true,
+    "section_obligation_checks": {
+      "status": "PASS"
+    },
+    "status": "PASS"
+  },
+  "budget_compliance": {
+    "abstract_within_cap": true,
+    "main_text_word_count": 2097,
+    "sections": {
+      "abstract": {
+        "min_words": 80,
+        "status": "PASS",
+        "words": 127
+      },
+      "background": {
+        "min_words": 320,
+        "status": "PASS",
+        "words": 365
+      },
+      "conclusion": {
+        "min_words": 120,
+        "status": "PASS",
+        "words": 158
+      },
+      "data and methods": {
+        "min_words": 520,
+        "status": "PASS",
+        "words": 580
+      },
+      "discussion": {
+        "min_words": 220,
+        "status": "PASS",
+        "words": 245
+      },
+      "introduction": {
+        "min_words": 280,
+        "status": "PASS",
+        "words": 280
+      },
+      "results": {
+        "min_words": 320,
+        "status": "PASS",
+        "words": 503
+      }
+    },
+    "status": "PASS",
+    "target_journal": "Journal of Marriage and Family",
+    "total_word_count": 2291,
+    "total_word_range": {
+      "max": 12000,
+      "min": 1300
+    }
+  },
+  "citation_plan": {
+    "all_citations_in_bib": true,
+    "bib_entry_count": 31,
+    "unique_citations_in_draft": 30,
+    "unresolved_citation_count": 0
+  },
+  "claim_discipline": {
+    "overclaim_count": 0,
+    "phase9_constraints_used": true,
+    "required_disclosures_present": [
+      "observational design",
+      "weaker robustness estimate"
+    ]
+  },
+  "content_alignment": {
+    "limitations_discussed": true,
+    "mechanism_integrated": true,
+    "research_question_answered": true
+  },
+  "degraded": false,
+  "display_evidence": {
+    "all_display_items_called_out_in_results": true,
+    "displayed_sources": [
+      "tables/regression-main.html",
+      "figures/event-study.png"
+    ],
+    "figure_display_count": 1,
+    "required_figure_display_min": 1,
+    "required_table_display_min": 1,
+    "results_figure_callouts": [
+      "Figure 1"
+    ],
+    "results_table_callouts": [
+      "Table 2"
+    ],
+    "status": "PASS",
+    "table_display_count": 1
+  },
+  "draft_quality_gate": {
+    "anti_stub_checked": true,
+    "journal_fit_checked": true,
+    "locked_evidence_integrated": true,
+    "max_repeated_sentence_count": 1,
+    "polish_applied": true,
+    "raw_variable_name_count": 0,
+    "reader_facing_translation_checked": true,
+    "repeated_sentence_limit": 2,
+    "repetition_checked": true,
+    "results_comparison_checked": true,
+    "results_prose_paragraph_count": 4,
+    "results_theory_link_checked": true,
+    "section_quality": {
+      "abstract": {
+        "evidence": "Abstract states the China panel setting, the parental job-loss mechanism, the negative association in the reviewed estimates, and the bounded observational claim without causal overstatement.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      },
+      "background": {
+        "evidence": "Background integrates family stress, status attainment, household economic insecurity, competing expectations about adaptation, and the hypothesis linking parental job loss to adolescents' educational planning in China.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      },
+      "conclusion": {
+        "evidence": "Conclusion restates the bounded contribution for research on family change in China, avoids causal escalation, and closes with the implications for adolescent educational stratification debates.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      },
+      "data and methods": {
+        "evidence": "Methods section names the CFPS analytic sample, outcome construction, focal predictor, household fixed-effects strategy, survey design treatment, missingness handling, model comparison, and observational limits for interpretation.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      },
+      "discussion": {
+        "evidence": "Discussion interprets the negative association through family stress and status attainment arguments, separates robustness from proof, and names measurement and unobserved-shock limits for future research.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      },
+      "introduction": {
+        "evidence": "Introduction develops the family-instability puzzle, explains why adolescent educational expectations are a consequential outcome, names the Social Forces style contribution, and previews robustness boundaries for empirical readers.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      },
+      "results": {
+        "evidence": "Results section presents Model 1, Model 2, and Model 3 in the original regression table format, reports uncertainty, and links the event-study figure to the interpretation.",
+        "not_stub": true,
+        "section_specific_evidence": true,
+        "status": "PASS"
+      }
+    },
+    "section_substance_checked": true,
+    "status": "PASS",
+    "substantive_paragraph_counts": {
+      "background": 4,
+      "conclusion": 1,
+      "data and methods": 6,
+      "discussion": 3,
+      "introduction": 4,
+      "results": 4
+    },
+    "theory_synthesis_checked": true
+  },
+  "drafting_engine": {
+    "auto_research_contract": "phase_13",
+    "input_artifacts": [
+      "manuscript/manuscript-blueprint.json",
+      "results-locked/manifest.json",
+      "verify/stage1-verify.json",
+      "literature/references.bib",
+      "manuscript/journal-spec.json"
+    ],
+    "invoked_at_utc": "2026-04-30T10:00:00Z",
+    "live_output_reads_forbidden": true,
+    "lock_enforced": true,
+    "mode": "draft",
+    "output_artifacts": [
+      "manuscript/manuscript-draft.md",
+      "manuscript/drafting-plan.json",
+      "manuscript/draft-self-critique.json",
+      "manuscript/draft-manifest.json"
+    ],
+    "section": "full paper",
+    "skill": "scholar-write",
+    "task_invocation_id": "phase13-write-001"
+  },
+  "drafting_plan": {
+    "path": "manuscript/drafting-plan.json",
+    "sha256": "7467a300d0c9e53cfcd473a23fc236bec552699eaa3e0420ff5a4c30019e35ed"
+  },
+  "journal_spec": {
+    "mode": "prepare",
+    "paper_type": "research note",
+    "path": "manuscript/journal-spec.json",
+    "sha256": "db668549921bd1fb762a3490bfef0febb895f2d001c63c566655485454939880",
+    "skill": "scholar-journal",
+    "target_journal": "Journal of Marriage and Family"
+  },
+  "lock_id": "LOCK-20260429-001",
+  "lock_manifest_sha256": "3e046cc64e69c53384991e654cfed6d33b3322ed34ef9c43fa9ea28d801d2e92",
+  "locked_result_claims": [
+    {
+      "binding_type": "mapped_structured_source",
+      "display_locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+      "display_source_path": "tables/regression-main.html",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+      "row_count": 3,
+      "rows": [
+        {
+          "claim_id": "lrc2:719e9179d1e82b6fe57b9b5aba7f871a963b9e441052f7bb7a3adbc00477e3ca",
+          "display_column": "Model 1",
+          "display_coordinate": "Model 1",
+          "display_coordinate_kind": "column",
+          "estimate": "-0.120",
+          "manuscript_anchor": "In Model 1, the primary specification",
+          "n": "1200",
+          "p_value": "0.003",
+          "row_index": 0,
+          "spec_id": "S1",
+          "std_error": "0.040"
+        },
+        {
+          "claim_id": "lrc2:0f0c662041d0e7e819cf383259d6bf106de69333d612e6fe47ef1c3f56450ce4",
+          "display_column": "Model 2",
+          "display_coordinate": "Model 2",
+          "display_coordinate_kind": "column",
+          "estimate": "-0.080",
+          "manuscript_anchor": "For Model 2, the timing-oriented specification",
+          "n": "1200",
+          "p_value": "0.110",
+          "row_index": 1,
+          "spec_id": "S2",
+          "std_error": "0.050"
+        },
+        {
+          "claim_id": "lrc2:9815451e730ea99584a98ef5f2a7e2b4209b6ae67838bb29eaffd5da3d3a1ab4",
+          "display_column": "Model 3",
+          "display_coordinate": "Model 3",
+          "display_coordinate_kind": "column",
+          "estimate": "-0.090",
+          "manuscript_anchor": "For Model 3, the attrition-weighted specification",
+          "n": "1200",
+          "p_value": "0.046",
+          "row_index": 2,
+          "spec_id": "S3",
+          "std_error": "0.045"
+        }
+      ],
+      "schema_version": 2,
+      "source_path": "tables/results-registry.csv"
+    }
+  ],
+  "locked_result_claims_schema_version": 2,
+  "locked_result_coverage": [
+    {
+      "artifact_role": "execution_report",
+      "locked_path": "results-locked/LOCK-20260429-001/analysis/execution-report.json",
+      "manuscript_anchor": "",
+      "source_path": "analysis/execution-report.json",
+      "used_in_manuscript": false
+    },
+    {
+      "artifact_role": "results_registry",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+      "manuscript_anchor": "",
+      "source_path": "tables/results-registry.csv",
+      "used_in_manuscript": false
+    },
+    {
+      "artifact_role": "diagnostic",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/model-results.csv",
+      "manuscript_anchor": "",
+      "source_path": "tables/model-results.csv",
+      "used_in_manuscript": false
+    },
+    {
+      "artifact_role": "main_regression_table",
+      "caption_text": "Table 2. Regression estimates for parental job loss and adolescent educational expectations.",
+      "claim_source": {
+        "binding_type": "mapped_structured_source",
+        "locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+        "rendered_table": {
+          "field_rows": {
+            "estimate_std_error": "Parental job loss",
+            "n": "N",
+            "p_value": "p-value"
+          },
+          "grammar": "markdown_pipe_v1",
+          "orientation": "models_as_columns",
+          "term_column": "Predictor"
+        },
+        "row_selector_field": "spec_id",
+        "schema_version": 2,
+        "selected_rows": [
+          {
+            "display_column": "Model 1",
+            "selector": "S1"
+          },
+          {
+            "display_column": "Model 2",
+            "selector": "S2"
+          },
+          {
+            "display_column": "Model 3",
+            "selector": "S3"
+          }
+        ],
+        "sha256": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+        "source_path": "tables/results-registry.csv"
+      },
+      "display_anchor": "<!-- DISPLAY_TABLE: tables/regression-main.html -->",
+      "display_label": "Table 2",
+      "display_status": "rendered_inline",
+      "display_type": "regression_table_html",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+      "manuscript_anchor": "<!-- LOCKED_ARTIFACT: tables/regression-main.html | LOCKED_PATH: results-locked/LOCK-20260429-001/tables/regression-main.html -->",
+      "results_callout": "Table 2 shows that the primary specification is negative and that weaker robustness evidence remains subordinate to the headline estimate.",
+      "source_path": "tables/regression-main.html",
+      "used_in_manuscript": true
+    },
+    {
+      "artifact_role": "figure_registry",
+      "locked_path": "results-locked/LOCK-20260429-001/figures/figure-registry.csv",
+      "manuscript_anchor": "",
+      "source_path": "figures/figure-registry.csv",
+      "used_in_manuscript": false
+    },
+    {
+      "artifact_role": "figure_file",
+      "caption_text": "Figure 1. Event-study diagnostic figure.",
+      "display_anchor": "<!-- DISPLAY_FIGURE: figures/event-study.png -->",
+      "display_label": "Figure 1",
+      "display_status": "rendered_inline",
+      "display_type": "markdown_image",
+      "locked_path": "results-locked/LOCK-20260429-001/figures/event-study.png",
+      "manuscript_anchor": "<!-- LOCKED_ARTIFACT: figures/event-study.png | LOCKED_PATH: results-locked/LOCK-20260429-001/figures/event-study.png -->",
+      "results_callout": "Figure 1 presents the event-study diagnostic and visually reinforces that the tabled pattern is negative but bounded.",
+      "source_path": "figures/event-study.png",
+      "used_in_manuscript": true
+    },
+    {
+      "artifact_role": "post_execution_review",
+      "locked_path": "results-locked/LOCK-20260429-001/review/post-execution-review.json",
+      "manuscript_anchor": "",
+      "source_path": "review/post-execution-review.json",
+      "used_in_manuscript": false
+    }
+  ],
+  "numeric_reporting_policy": {
+    "allow_scientific_notation": false,
+    "descriptive_digits": 2,
+    "inferential_digits": 3,
+    "p_value_rule": "Report exact p-values to 3 decimals and use p < .001 below the reporting floor.",
+    "policy_source": "default_auto_research_when_journal_silent"
+  },
+  "polish_report": {
+    "mode": "full",
+    "path": "manuscript/polish-report.json",
+    "ready_for_verification": true,
+    "sha256": "3bf63542a7a49b26d6701789d9812026e971374435dd951fc156d610f4ad5089",
+    "skill": "scholar-polish"
+  },
+  "reader_facing_language": {
+    "internal_spec_label_hits": 0,
+    "model_labels": [
+      "Model 1",
+      "Model 2",
+      "Model 3"
+    ],
+    "status": "PASS",
+    "workflow_jargon_hits": 0
+  },
+  "ready_for_phase_14": true,
+  "section_prose_word_counts": {
+    "abstract": 127,
+    "background": 365,
+    "conclusion": 158,
+    "data and methods": 580,
+    "discussion": 245,
+    "introduction": 280,
+    "references": 6,
+    "results": 342
+  },
+  "section_word_budget": {
+    "abstract": {
+      "max_words": 300,
+      "min_words": 80,
+      "target_words": 180
+    },
+    "background": {
+      "max_words": 1200,
+      "min_words": 320,
+      "target_words": 650
+    },
+    "conclusion": {
+      "max_words": 420,
+      "min_words": 120,
+      "target_words": 220
+    },
+    "data and methods": {
+      "max_words": 1500,
+      "min_words": 520,
+      "target_words": 850
+    },
+    "discussion": {
+      "max_words": 850,
+      "min_words": 220,
+      "target_words": 420
+    },
+    "introduction": {
+      "max_words": 850,
+      "min_words": 280,
+      "target_words": 500
+    },
+    "results": {
+      "max_words": 1100,
+      "min_words": 320,
+      "target_words": 700
+    }
+  },
+  "section_word_counts": {
+    "abstract": 127,
+    "background": 365,
+    "conclusion": 158,
+    "data and methods": 580,
+    "discussion": 245,
+    "introduction": 280,
+    "references": 6,
+    "results": 503
+  },
+  "selected_manuscript_hash": "c217da03962493579929597e6d5fe50694d8dd4e4e27d5ceadf6fb48fa7b6d28",
+  "self_critique": {
+    "path": "manuscript/draft-self-critique.json",
+    "ready_for_verification": true,
+    "sha256": "b7fe1b0a2bce76df22226f4900470bc867223167c055717ea4ac550eb36ad4f3"
+  },
+  "source_hashes": {
+    "analysis_plan": "3d758ac2a6f9df20779418ea708922b3726968dd0aea513494fc62d4de9b4cfb",
+    "design_blueprint": "59c76dfe56b34f982ccaa0c2b29ba8c4f1956f676316f3c345cec559b7940898",
+    "journal_fit": "b4d7e0edb65b9f53e9db6e9bb294235d86adf9a4231d55fa6c09a3d9ce2b7228",
+    "lit_theory": "d2c64d598935ed0619639824fa24462834a3c983ff89d203a69d271cf665d763",
+    "lock_manifest": "ffa20ce49b699c97a773b03b580bb4cd38fd246e43133be96aaedf989bb9b6d1",
+    "manuscript_blueprint": "9e252b75cbe65080c0f38c40ee57bf0e3c01f9c614b0f20b77319896da6f3ce7",
+    "post_execution_review": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc",
+    "references_bib": "41fe5320db7d6182be8353a99f5db3626b29f066f395d480114f62188be9e6fd",
+    "research_question": "312b76e06c768ab965b56d003d430fc41d42a5ba6f5504f5e33307e125a851e5",
+    "stage1_verify": "3c1fe0d70cda39bc73c7dd4d8a2d480a25b8075d879e819b971dce5353679aad",
+    "variable_dictionary": "14618069c33b3c0325677e0f746c563902566a6824e527747209a3d9246eafe8"
+  },
+  "verdict": "PASS"
+}

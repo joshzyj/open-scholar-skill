@@ -91,7 +91,7 @@ _dmp_main() {
   local ar_draft ar_final ar_submission
 
   # Find newest file under a directory matching a name pattern. Uses
-  # find -print0 to be safe with spaces in paths (Google Drive paths
+  # find -print0 to be safe with spaces in paths (including Dropbox paths
   # commonly have spaces).
   _dmp_newest_in() {
     local dir="$1" name_glob="$2"

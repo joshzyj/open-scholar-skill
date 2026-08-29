@@ -1,0 +1,54 @@
+{
+  "design_type": "observational panel design",
+  "claim_strength": "associational",
+  "estimand": "average within-household change in adolescent educational expectations after parental job loss",
+  "identification_strategy": "household fixed effects with event-time indicators around parental job loss",
+  "outcome_mechanism_alignment": "prevalence-stock",
+  "journal_method_bar": "Journal of Marriage and Family requires transparent observational identification, careful family-process theory linkage, and robustness checks for attrition and pretrends.",
+  "hypothesis_model_coverage": [
+    {
+      "hypothesis_id": "H1",
+      "model_ids": ["M1"],
+      "coverage": "primary model estimates the hypothesized association between parental job loss and adolescent expectations"
+    }
+  ],
+  "power_or_feasibility_assessment": {
+    "status": "feasible_existing_data",
+    "rationale": "The planned household panel has repeated measures around job loss and enough observed covariates to support feasibility screening before final power calculations."
+  },
+  "method_specialist_routing": {
+    "method_orientation": "observational panel analysis",
+    "primary_execution_skill": "scholar-analyze",
+    "premortem_skill": "scholar-analyze",
+    "supporting_skills": [],
+    "rationale": "This is a quantitative panel analysis with standard empirical execution rather than computational, qualitative, or linguistic methods."
+  },
+  "causal_gate": {
+    "required": true,
+    "invoked": true,
+    "skill": "scholar-causal",
+    "reason": "Fixed-effects event-time language requires causal-assumption auditing even though the paper will use associational wording."
+  },
+  "assumptions": [
+    "No unmeasured time-varying shocks simultaneously cause job loss and expectation change",
+    "Educational expectations are measured consistently before and after job loss"
+  ],
+  "measures": {
+    "x": {
+      "name": "parental job loss",
+      "operationalization": "indicator for transition from employed to unemployed between waves"
+    },
+    "y": {
+      "name": "adolescent educational expectations",
+      "operationalization": "expected highest degree reported by adolescent respondent"
+    }
+  },
+  "threats": [
+    "Anticipatory changes before job loss",
+    "Attrition after economic shocks"
+  ],
+  "robustness_plan": [
+    "event-study pretrend check",
+    "inverse probability attrition weights"
+  ]
+}

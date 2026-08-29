@@ -70,6 +70,24 @@ printf '{"/d/a.csv":"CLEARED","_unknown_meta":"x"}' > "$TMP/meta-bad.json"
 validate_sidecar_schema "$TMP/meta-bad.json" >/dev/null 2>&1
 [ $? -eq 1 ] && pass "unknown _meta key → rc 1 (typo-safe)" || fail "unknown meta key not caught"
 
+# ── _meta no-data declaration (system-fix P0.1, 2026-08-23) ──
+# phase-early-hardstops.sh has always PRINTED {"_meta":"no-data-project"} as
+# the way to assert a no-data project; the schema used to reject exactly that
+# form, so following the printed advice produced a RED (the P0.1
+# contradiction). The exact recommended value is now valid; anything else
+# under _meta stays rejected.
+printf '{"_meta":"no-data-project"}' > "$TMP/ndp-ok.json"
+validate_sidecar_schema "$TMP/ndp-ok.json" >/dev/null 2>&1
+[ $? -eq 0 ] && pass "_meta=no-data-project accepted (P0.1 contradiction resolved)" || fail "recommended no-data form still rejected"
+
+printf '{"_meta":"no-data"}' > "$TMP/ndp-bad.json"
+validate_sidecar_schema "$TMP/ndp-bad.json" >/dev/null 2>&1
+[ $? -eq 1 ] && pass "_meta with any other value → rc 1" || fail "wrong _meta value accepted"
+
+printf '{"_meta":42}' > "$TMP/ndp-num.json"
+validate_sidecar_schema "$TMP/ndp-num.json" >/dev/null 2>&1
+[ $? -eq 1 ] && pass "_meta non-string → rc 1" || fail "non-string _meta accepted"
+
 # ── resolve_safety_level: project key > env > default ──
 [ "$(resolve_safety_level "$TMP/lvl-ok.json")" = "strict" ] && pass "resolve: project _safety_level wins" || fail "resolve project level"
 printf '{}' > "$TMP/empty.json"

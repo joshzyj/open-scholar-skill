@@ -123,6 +123,36 @@ printf '{"schema":"claim-inventory/v1","rows":[{"row_id":"r1","claim_kind":"map_
 bash "$GATE" "$WORK/g6" --phase 2 >/dev/null 2>&1
 [ $? -eq 1 ] && pass "RED: unresolvable inventory anchor_id detected" || fail "negative fixture: ghost id NOT detected"
 
+
+# ── Real-project eval fixes (2026-08-22, finding 17 + CRITICAL) ──
+mkdir -p "$WORK/g7/drafts" "$WORK/g7/evidence"        # reader identity → GREEN
+echo x > "$WORK/g7/drafts/scholar-lrh-t-2026-08-12.md"
+printf '%s\n' '{"schema":"claim-anchor/v1","anchor_id":"autor2013-3f9a1c2e","cite_key":"autor2013","claim_kind":"map_cell","stance":"supports","evidence_quote":"reduces employment","evidence_form":"source_verbatim","access_tier":"T1_fulltext","produced_by":"reader-batch2","ts":"2026-08-22T00:00:00Z"}' > "$WORK/g7/evidence/claim-anchors.ndjson"
+printf '{"schema":"claim-inventory/v1","rows":[{"row_id":"r1","claim_kind":"map_cell","claim_text":"A","anchor_ids":["autor2013-3f9a1c2e"]}]}' > "$WORK/g7/evidence/claim-inventory.json"
+bash "$GATE" "$WORK/g7" --phase 2 >/dev/null 2>&1
+[ $? -eq 0 ] && pass "GREEN: reader-batchN produced_by is schema-valid (delegated Phase 2)" || fail "reader-batch identity rejected"
+
+mkdir -p "$WORK/g8/drafts" "$WORK/g8/evidence"        # live-line arbitrary produced_by → RED (alignment)
+echo x > "$WORK/g8/drafts/scholar-lrh-t-2026-08-12.md"
+printf '%s\n' '{"schema":"claim-anchor/v1","anchor_id":"autor2013-3f9a1c2e","cite_key":"autor2013","claim_kind":"map_cell","stance":"supports","evidence_quote":"q","evidence_form":"source_verbatim","access_tier":"T1_fulltext","produced_by":"some-rogue-writer","ts":"t"}' > "$WORK/g8/evidence/claim-anchors.ndjson"
+printf '{"schema":"claim-inventory/v1","rows":[{"row_id":"r1","claim_kind":"map_cell","claim_text":"A","anchor_ids":["autor2013-3f9a1c2e"]}]}' > "$WORK/g8/evidence/claim-inventory.json"
+bash "$GATE" "$WORK/g8" --phase 2 >/dev/null 2>&1
+[ $? -eq 1 ] && pass "RED: off-enum produced_by now fails (gate == schema; was any-non-empty)" || fail "off-enum produced_by still passes"
+
+mkdir -p "$WORK/g9/drafts" "$WORK/g9/evidence"        # superseded bad line + valid latest → YELLOW not RED
+echo x > "$WORK/g9/drafts/scholar-lrh-t-2026-08-12.md"
+printf '%s\n%s\n' \
+  '{"schema":"claim-anchor/v1","anchor_id":"autor2013-3f9a1c2e","cite_key":"autor2013","claim_kind":"nonsense","stance":"supports","evidence_form":"source_verbatim","access_tier":"T1_fulltext","produced_by":"scholar-lit-review","ts":"t"}' \
+  '{"schema":"claim-anchor/v1","anchor_id":"autor2013-3f9a1c2e","cite_key":"autor2013","claim_kind":"map_cell","stance":"supports","evidence_quote":"q","evidence_form":"source_verbatim","access_tier":"T1_fulltext","produced_by":"scholar-lit-review","ts":"t2"}' \
+  > "$WORK/g9/evidence/claim-anchors.ndjson"
+printf '{"schema":"claim-inventory/v1","rows":[{"row_id":"r1","claim_kind":"map_cell","claim_text":"A","anchor_ids":["autor2013-3f9a1c2e"]}]}' > "$WORK/g9/evidence/claim-inventory.json"
+OUT_G9=$(bash "$GATE" "$WORK/g9" --phase 2 2>&1); RC_G9=$?
+if [ "$RC_G9" -eq 2 ] && printf '%s' "$OUT_G9" | grep -q "superseded"; then
+  pass "YELLOW: superseded invalid line is history, latest valid line governs"
+else
+  fail "superseded-line handling (rc=$RC_G9)"
+fi
+
 # ── T4: renderer ─────────────────────────────────────────────────
 echo ""
 echo "Test 4: render-evidence-dossier.py"
@@ -268,6 +298,70 @@ grep -q 'Preserve all inline HTML comments' "$REPO_ROOT/.claude/skills/scholar-p
   || fail "scholar-polish preserve rule missing"
 
 echo ""
+# ── Phase-8 audit-existence is INDEPENDENT of ledger-emptiness (P17-A) ──────
+# Until 2026-08-27 the empty-ledger branch exited YELLOW before $AUDIT — which
+# had already been computed one line above — was ever consulted. So "was the
+# faithfulness audit produced?" was gated on "is the ledger non-empty?". Since
+# phase-verify maps exit 2 to WARNINGS++ and prints "PASS with N warning(s)",
+# the only check in the suite that reads a cited source's actual text could be
+# skipped end to end on a passing phase.
+EVG="$GATE"
+if [ ! -f "$EVG" ]; then
+  fail "evidence-anchor-check.sh not found — cannot assert Phase 8 audit wiring"
+else
+  _ev_case() {  # <name> <ledger:empty|full> <orchestrated:0|1> <audit:0|1> -> dir
+    local d="$WORK/ev-$1"; mkdir -p "$d/evidence" "$d/logs"
+    if [ "$2" = "full" ]; then
+      printf '%s\n' '{"schema":"claim-anchor/v1","anchor_id":"a1","cite_key":"k","doi":null,"source_title":"T","claim_kind":"theory_attribution","stance":"supports","claim_text":null,"claim_loc":null,"hypothesis_id":null,"evidence_quote":null,"evidence_context":null,"evidence_form":"metadata_only","quote_sha256":null,"source_loc":null,"locator_type":"none","access_tier":"T4_none","retrieval":{},"produced_by":"scholar-citation","phase":"8","ts":"2026-08-27T00:00:00Z","supersedes":null}' \
+        > "$d/evidence/claim-anchors.ndjson"
+    else
+      : > "$d/evidence/claim-anchors.ndjson"
+    fi
+    [ "$3" = "1" ] && printf 'state\n' > "$d/logs/project-state.md"
+    [ "$4" = "1" ] && printf '{"schema":"claim-audit-record/v1"}\n' > "$d/evidence/claim-faithfulness-audit-2026-08-27.ndjson"
+    printf '%s' "$d"
+  }
+  _ev_rc() { bash "$EVG" "$1" --phase 8 >/dev/null 2>&1; echo $?; }
+
+  # Pre-existing RED must be preserved exactly (the change is severity-additive).
+  RC=$(_ev_rc "$(_ev_case red full 1 0)")
+  [ "$RC" = "1" ] && pass "orchestrated + anchors + no audit still REDs (unchanged)" \
+                  || fail "orchestrated + anchors + no audit should RED, got rc=$RC"
+
+  # The newly-visible case: an empty ledger no longer HIDES the missing audit.
+  D_EMPTY="$(_ev_case empty empty 1 0)"
+  RC=$(_ev_rc "$D_EMPTY")
+  [ "$RC" = "2" ] && pass "orchestrated + empty ledger + no audit is advisory by default" \
+                  || fail "expected YELLOW(2) for empty-ledger missing audit, got rc=$RC"
+  OUT=$(bash "$EVG" "$D_EMPTY" --phase 8 2>&1 || true)
+  if printf '%s' "$OUT" | grep -q "no claim-faithfulness audit was produced on an orchestrated run"; then
+    pass "the missing audit is NAMED, not hidden behind 'coverage cannot be assessed'"
+  else
+    fail "empty-ledger path does not report the missing faithfulness audit"
+  fi
+  if printf '%s' "$OUT" | grep -q "audit COVERAGE cannot be assessed"; then
+    pass "coverage-unassessable is still reported as its own separate fact"
+  else
+    fail "coverage-unassessable fact was dropped"
+  fi
+  RC=$(SCHOLAR_FAITHFULNESS_ENFORCE=1 bash "$EVG" "$D_EMPTY" --phase 8 >/dev/null 2>&1; echo $?)
+  [ "$RC" = "1" ] && pass "SCHOLAR_FAITHFULNESS_ENFORCE=1 promotes it to RED" \
+                  || fail "enforce flag did not promote to RED, got rc=$RC"
+
+  # A standalone (non-orchestrated) run must NOT be newly failed.
+  RC=$(_ev_rc "$(_ev_case standalone empty 0 0)")
+  [ "$RC" = "2" ] && pass "standalone run unaffected (no retroactive failure)" \
+                  || fail "standalone run changed verdict, got rc=$RC"
+
+  # An audit with no ledger must report what it could not assess, never clean.
+  OUT=$(bash "$EVG" "$(_ev_case auditonly empty 1 1)" --phase 8 2>&1 || true)
+  if printf '%s' "$OUT" | grep -q "audit coverage cannot be assessed"; then
+    pass "audit-present + no ledger reports unassessed coverage rather than passing clean"
+  else
+    fail "audit-present + no ledger did not disclose unassessable coverage"
+  fi
+fi
+
 echo "════════════════════"
 echo "Results: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then

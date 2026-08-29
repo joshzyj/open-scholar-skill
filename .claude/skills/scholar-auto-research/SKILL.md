@@ -66,7 +66,7 @@ Do not infer completion from prose headings. A phase completes only when its req
 
 ## Context Management
 
-A full run spans 21 phases and accumulates many manifests, registries, reviewer reports, and locked artifacts. Because every decision is persisted to disk (state.json, manifests, locks), the conversation context can be cleared between phases without losing project state. After clearing, resume cold with `bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh next "$PROJ"`.
+A full run spans 21 phases and accumulates many manifests, registries, reviewer reports, and locked artifacts. Because every decision is persisted to disk (state.json, manifests, locks), the conversation context can be cleared between phases without losing project state. After clearing, resume cold with `bash "${_AR_SKILL}/scripts/auto-research-state.sh" next "$PROJ"` or `/scholar-resume <slug>`.
 
 The state machine emits an advisory when the most recently completed phase is a context-rot seam. After running `next`, look for these lines in addition to `NEXT_PHASE`:
 
@@ -115,6 +115,8 @@ The default route ends at Phase 20. Optional products must be requested explicit
 
 Phase 0 initializes or resumes the project, verifies local data-safety status, and records whether the run is autonomous or human-in-the-loop. Do not begin Phase 1 until Phase 0 verification passes.
 
+Before every Bash tool call in this workflow, set `_AR_SKILL` in that same call to the **absolute directory containing this loaded `SKILL.md`**. The skill host already resolved that file in order to load these instructions; use that resolved directory. Never infer it from the current working directory, `$HOME`, a marketplace symlink, or a parent plugin tree. The command examples below use `${_AR_SKILL}` only after this absolute, same-call assignment.
+
 1. Parse the user's idea, data paths, target journal, method orientation, constraints, and requested run mode.
 2. Create or locate a project directory under `output/<slug>/`.
 3. Initialize project state before setting run mode.
@@ -122,7 +124,7 @@ Phase 0 initializes or resumes the project, verifies local data-safety status, a
 If the project was initialized by `scholar-init`, import its safety sidecar:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh import-init "$PROJ"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" import-init "$PROJ"
 ```
 
 This reads `$PROJ/.claude/safety-status.json`, writes `$PROJ/safety/safety-status.json`, and initializes `.auto-research/state.json` if needed. If any file still has `NEEDS_REVIEW` or `HALTED`, stop and run `scholar-init review` before completing Phase 0.
@@ -132,23 +134,23 @@ Bare `OVERRIDE` does not pass. Overrides must retain the scholar-init rationale,
 If the project was not initialized by `scholar-init`, initialize state:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh init "$PROJ"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" init "$PROJ"
 ```
 
-Then produce `safety/safety-status.json` before attempting Phase 0 verification.
+Then **scan any input data before Phase 0 — do NOT hand-author `safety/safety-status.json`.** Run `/scholar-init` (its ingestion scans each file under `data/raw/**` with `scripts/gates/safety-scan.sh`, writes `.claude/safety-status.json`, and arms the PreToolUse data guard), then `import-init` exactly as in the scholar-init branch above. If the project genuinely has no input data, create `safety/safety-status.json` with `files_scanned: 0`, `no_data_declared: true`, `status_by_file: {}`. Either way, Phase 0 verification now **enumerates data-like files by filename** under `data/raw/`, `data/interim/`, `data/processed/`, `materials/`, `transcripts/`, `interviews/`, `corpus/`, `subjects/`, `participants/`, `respondents/`, and `field-notes/` and RED-fails if any exist but are absent from `status_by_file` — a hand-authored "no data" (or partial) artifact will not pass when data files are present on disk (F5, audit 2026-07-07).
 
 4. Before Phase 0 can be completed, set a persistent run mode. If the user has not already made the choice, ask: `Run scholar-auto-research in autonomous mode or human-in-the-loop step-by-step mode?`
 
 Use autonomous mode when the user asks to proceed, continue, or finish without step-by-step review:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh set-mode "$PROJ" autonomous "user requested autonomous run"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" set-mode "$PROJ" autonomous "user requested autonomous run"
 ```
 
 Use human-in-the-loop mode when the user asks for step-by-step review, explicit approval, or decisions between phases:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh set-mode "$PROJ" human-in-loop "user requested phase-by-phase approval"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" set-mode "$PROJ" human-in-loop "user requested phase-by-phase approval"
 ```
 
 If `next` returns `NEXT_PHASE=MODE_SELECTION`, stop and get this choice before completing any phase. Do not infer autonomous mode from silence.
@@ -156,55 +158,102 @@ If `next` returns `NEXT_PHASE=MODE_SELECTION`, stop and get this choice before c
 5. Refresh the project's auto-managed memory file (idempotent, non-destructive; auto-detects host AI tool):
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/setup-project-claudemd.sh "$PROJ"
+bash "${_AR_SKILL}/scripts/setup-project-claudemd.sh" "$PROJ"
 ```
 
-This writes (or refreshes) the workflow-contract block — principles (quality, no-fabrication, no-sycophancy) plus auto-research-specific operational rules (run mode persistence, self-contained vendoring, Phase 15 cross-check, prereq-chain integrity, JSON-shape strictness, codex defaults) — inside the marker block `<!-- scholar-auto-research:BEGIN/END auto-rules v1 -->`. User content OUTSIDE the markers is preserved verbatim. The setup is idempotent — running twice produces a byte-identical file.
+This writes (or refreshes) the workflow-contract block — principles (quality, no-fabrication, no-sycophancy) plus auto-research-specific operational rules (run mode persistence, self-contained vendoring, portable review evidence, Phase 15 cross-check, prereq-chain integrity, and JSON-shape strictness) — inside the marker block `<!-- scholar-auto-research:BEGIN/END auto-rules v1 -->`. User content OUTSIDE the markers is preserved verbatim. The setup is idempotent — running twice produces a byte-identical file.
 
 The target filename is chosen by the vendored `detect-host-agent.sh` helper (added 2026-05-28): Claude Code → `CLAUDE.md`; Codex → `AGENTS.md` ([agents.md](https://agents.md) cross-tool standard); unknown host → both files. Existing projects refresh whichever file is already present and do not backfill the other.
 
 The script prints a one-time user-facing notice on CREATE / APPEND (full banner with the file path, a summary of what's in it, the auto-managed content for review, and a reminder that the operator can add content outside the markers) and a short banner on REFRESH / MIGRATE. NO-OP runs are silent. **Do not redirect this script's stdout to `/dev/null`** — the notice is intended for the operator to see on first invocation.
 
-5b. Install the Codex data-safety hook when the host could be Codex (2026-07). The data guard (`pretooluse-data-guard.sh`) only fires under Claude Code (`~/.claude/settings.json`); a **Codex** host never reads that file. When the detected host is `codex` or `unknown` — the same rule that writes `AGENTS.md` — register the guard as a Codex PreToolUse hook in `<proj>/.codex/config.toml`. This matters because an auto-research project **not** initialized by `scholar-init` (the branch at step 3 above) would otherwise have no Codex-side enforcement. Harmless under Claude Code; activates once the user trusts the project in Codex.
+5b. Run the host-neutral runtime preflight. This verifies the copied skill's
+declared command and packaged-file closure for every host; it is not part of an
+optional Codex installer.
 
 ```bash
-_HOST="$(bash "${SCHOLAR_SKILL_DIR:-.}/scripts/detect-host-agent.sh" 2>/dev/null || echo unknown)"
-if [ "$_HOST" = "codex" ] || [ "$_HOST" = "unknown" ]; then
-  bash "${SCHOLAR_SKILL_DIR:-.}/scripts/phases/setup-codex-hooks.sh" "$PROJ" || true
-fi
-unset _HOST
+python3 "${_AR_SKILL}/scripts/runtime-preflight.py" --skill-dir "${_AR_SKILL}"
 ```
 
-Surface the installer's output verbatim (nothing to relay on NO-OP; on CREATE it prints the trust-onboarding reminder). If the project later opts into `lockdown` via `/scholar-safety level lockdown`, the OS-sandbox wall is generated then (not here).
+Then install the Codex data-safety hook only when the host is confirmed as Codex. The
+data guard (`pretooluse-data-guard.sh`) uses different host hook mechanisms;
+when the detected host is `codex`, register the guard in
+`<proj>/.codex/config.toml`. This host adapter is safety integration, not the
+review-evidence authority.
+
+```bash
+_HOST="$(bash "${_AR_SKILL}/scripts/detect-host-agent.sh" 2>/dev/null || echo unknown)"
+if [ "$_HOST" = "codex" ]; then
+  bash "${_AR_SKILL}/scripts/setup-codex-hooks.sh" "$PROJ"
+fi
+unset _AR_SKILL _HOST
+```
+
+Surface the installer's output verbatim when the confirmed Codex branch runs
+(denied nothing to relay on NO-OP; on CREATE it prints the trust-onboarding
+reminder). A nonzero installer result blocks that Codex branch. `unknown` and
+other hosts continue with the host-neutral packaged preflight and their own
+safety integration; they never receive a speculative `.codex/config.toml`.
+If the project later opts into `lockdown` via `/scholar-safety level lockdown`,
+the OS-sandbox wall is generated then (not here).
 
 6. At the start of each turn, read next phase:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh next "$PROJ"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" next "$PROJ"
 ```
 
 If `next` returns `APPROVAL_REQUIRED=1`, the project is in human-in-the-loop mode. Summarize the completed phase, name the proposed next phase, and ask the user for a decision before doing next-phase work. Valid decisions are `approve`, `revise`, `pause`, or `switch-autonomous`:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh decision "$PROJ" <next_phase> approve "user approved next phase"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" decision "$PROJ" <next_phase> approve "user approved next phase"
 ```
 
 Only `approve` or `switch-autonomous` clears the gate. `revise` and `pause` are recorded but keep the transition blocked.
 
-7. After producing a phase's artifacts, verify then complete:
+7. After producing a phase's artifacts, complete transactionally:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-verify.sh <phase_id> "$PROJ"
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh complete "$PROJ" <phase_id> <artifact-paths...>
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" complete "$PROJ" <phase_id>
 ```
 
-If verification fails or state completion fails, stop and report the blocker. Do not continue. In human-in-the-loop mode, successful completion of a phase creates a pending transition; do not start the next phase until `decision ... approve` has been recorded.
+Every state command holds the same project lock. `complete` snapshots the contract, verifier, exact contract-derived outputs, and dynamic inputs; invokes the vendored verifier internally; requires the post-semantic descriptor to match that entry generation; and rechecks all generations before and after atomic publication with rollback. Optional artifact paths are equality assertions only. Project-local verify stamps are post-commit audit receipts and never completion authority. If transactional verification or state publication fails, stop and report the blocker. Do not continue. In human-in-the-loop mode, successful completion of a phase creates a pending transition; do not start the next phase until `decision ... approve` has been recorded.
+
+### Portable reviewer evidence
+
+Phases 6, 7, 9, 14, 18, and 20 require registered review evidence. The layer
+exists because names and task IDs typed into phase JSON do not prove that any
+reviewer was dispatched. Before dispatch, call `review-begin` for the phase's
+declared round; it returns a host-neutral launch envelope with reserved roles,
+opaque dispatch IDs, exact reviewed-input hashes, and fixed report/trace paths.
+After a host terminally succeeds and those files exist, call `review-complete`
+for the role. Bind the selected session and evidence paths into the canonical
+phase JSON before verification. Abort failed/cancelled/timed-out work instead
+of recording completion.
+
+The default `normal` profile provides `process_recorded`: state-registered
+assignment, driver-observed success, and byte binding. It does not authenticate
+the host or prove review quality. `strict` requires claim-scoped host
+verification and blocks when the adapter cannot provide it. Claude, Codex, and
+generic hosts all use the same lifecycle; provider-specific IDs and model names
+are optional metadata with structured unavailability. Read
+`references/review-evidence-contract.md` for commands, assurance boundaries,
+migration, and host mappings.
+
+Claim-level evidence is a separate contract from reviewer evidence and is not
+satisfied by it. Phases that attach a citation to a claim must record the anchor
+per `_shared/evidence-ledger.md` (schema `claim-anchor/v1`), including the
+retrieval tier actually reached. Recording that a citation was *attached* is not
+recording that a source was *read*: a ledger of `metadata_only` anchors at tier
+`none` produces the appearance of evidence discipline while leaving the
+load-bearing question unasked, which is how four reversed-attribution defects
+reached a locked manuscript in the 2026-08 premarital-cohab run.
 
 If a phase emits a structured `FAIL` report with `route_back_phase`, apply it to state before continuing:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh route-back "$PROJ" <fail-report-json>
-bash .claude/skills/scholar-auto-research/scripts/auto-research-state.sh next "$PROJ"
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" route-back "$PROJ" <fail-report-json>
+bash "${_AR_SKILL}/scripts/auto-research-state.sh" next "$PROJ"
 ```
 
 Do not manually skip invalidated downstream phases. Rerun forward from the route-back target.
@@ -243,7 +292,7 @@ Workflow:
 4. Build `literature/literature-coverage-matrix.json` with `engine_handoff`, coverage categories, must-cite coverage, mechanism chain, hypotheses, journal calibration, and `ready_for_phase_3: true`. Treat the Phase 2 `hypotheses` array as the ex ante canonical hypothesis set for all downstream design, analysis, drafting, and interpretation.
 5. Export `literature/references.bib` with more than 30 verified BibTeX entries. Every must-cite work must be represented and marked covered.
 6. Invoke `scholar-write` to draft or revise the formal `literature/lit-theory.md` section from the integrated review output. The writing pass must preserve verified citations, Phase 1 claim strength, mechanism, hypotheses, and target-journal expectations.
-7. Write `literature/lit-theory-manifest.json` with `scholar-lit-review-hypothesis` and `scholar-write` engine metadata, protocol artifact paths, source hashes, output hashes, `ready_for_phase_3: true`, and the **evidence-ledger assertion** `"evidence_ledger": {"path": "evidence/claim-anchors.ndjson", "records": <N>}` — the delegated skills capture the anchors (`_shared/evidence-ledger.md`); this key is what lets `auto-research-verify.sh 2` enforce that the capture actually happened (path must exist, actual line count ≥ records).
+7. Write `literature/lit-theory-manifest.json` with `scholar-lit-review-hypothesis` and `scholar-write` engine metadata, protocol artifact paths, source hashes, output hashes, `ready_for_phase_3: true`, and the **evidence-ledger assertion** `"evidence_ledger": {"path": "evidence/claim-anchors.ndjson", "records": <N>}` — the delegated skills capture the anchors under their own evidence protocol; this packaged verifier uses the assertion to enforce that capture actually happened (path must exist, actual line count ≥ records).
 8. Run `auto-research-verify.sh 2 "$PROJ"`. Phase 3 may start only after the integrated review, protocol proof, writing handoff, coverage matrix, and bibliography pass.
 
 Do not hand-author a generic literature memo. Phase 2 must be both review-driven and write-polished. If the literature package cannot prove the named specialist workflow was followed, Phase 2 fails even if the prose and bibliography look plausible.
@@ -308,13 +357,16 @@ Workflow:
 
 1. Load `analysis/analysis-plan.md`, `analysis/analysis-plan-manifest.json`, `analysis/scripts-inventory.json`, `analysis/spec-registry.csv`, `design/identification-strategy.json`, `design/model-specs.json`, `data/variable-dictionary.csv`, and `data/data-measurement-manifest.json`.
 2. Invoke `scholar-code-review` in `pre_execution_planned` mode.
-3. Spawn independent reviewers for `correctness`, `robustness`, `statistical`, `reproducibility`, `style_ai_patterns`, and `data_handling`. Each reviewer must inspect every planned script, every planned test, every planned spec, the script DAG, Phase 5 coverage fields, and the upstream design/data artifacts.
-4. Save each reviewer report under `review/agents/` and record its `reviewer_id`, `agent_type`, `task_invocation_id`, reviewed scripts/specs/tests/upstream artifacts, findings, and verdict.
+3. Call `review-begin "$PROJ" 6 initial_panel <host-backend>`, then dispatch the reserved roles `correctness`, `robustness`, `statistical`, `reproducibility`, `style_ai_patterns`, and `data_handling`. Each reviewer must inspect every planned script, every planned test, every planned spec, the script DAG, Phase 5 coverage fields, and the upstream design/data artifacts.
+4. Persist each report and RAO sidecar at its reserved evidence path, call `review-complete` after driver-observed success, and bind the resulting report path and opaque dispatch/task identity into `review/pre-execution-review.json`.
 5. If any reviewer finds a blocker, critical issue, major issue, stale inventory, unreviewed script/test/spec, unsafe data handling, missing DAG coverage, missing robustness coverage, missing no-execution proof, or impossible execution path, fix it inside Phase 6. Do not defer it to Phase 7 or Phase 8.
 6. Record every same-phase fix in `review/pre-execution-fix-log.json` and `review/pre-execution-fix-log.md`.
-7. Run an independent re-review of every fixed finding. Re-review may reuse the same role but must produce a separate `review/pre-execution-rereview.json`.
+7. If fixed findings are nonempty, begin the conditional `fix_rereview` round and run the reserved independent `fix_verifier` role. It must produce separate registered evidence and `review/pre-execution-rereview.json`.
 8. Write the final `review/pre-execution-review.json` only after blockers are resolved. Its final verdict must be `PASS`, `degraded: false`, `review_engine.skill: scholar-code-review`, `review_engine.mode: pre_execution_planned`, `blocking_findings: []`, and `ready_for_phase_7: true`.
-9. Codex cross-model review (mandatory by default). The Phase 6 verifier runs `scripts/gates/codex-trigger-phase6.sh`, which requires Codex code-mode artifacts under `${PROJ}/reviews/codex/A[1-3]-*.md` whenever `SCHOLAR_CODEX_DEFAULT=true` (the default) AND the `codex` CLI is on PATH. Dispatch via `/scholar-openai code <manuscript-path> <scripts-dir>`. To opt out, either set `SCHOLAR_CODEX_DEFAULT=false` at the shell level OR add `[EXCUSED:codex-review: <reason>]` to `review/pre-execution-review.md` (or to a string field in the .json). If the `codex` CLI is missing, the gate emits YELLOW (cannot fire) rather than RED.
+9. Optional diversity enhancement: when the operator explicitly sets
+   `SCHOLAR_CODEX_REVIEW=1`, run the packaged Codex cross-model gate and supply
+   its artifacts or documented excuse. Merely installing Codex or placing it on
+   `PATH` never changes Phase 6 correctness.
 10. Run `auto-research-verify.sh 6 "$PROJ"`. Complete Phase 6 only if verification passes.
 
 If fixes require changing `analysis/scripts-inventory.json`, recompute and record the new inventory hash after the changes. If fixes change the research design, data plan, or analysis plan rather than just the planned scripts/tests, route back to the earliest affected phase instead of papering over the mismatch in Phase 6.
@@ -327,7 +379,7 @@ Workflow:
 
 1. Confirm Phase 6 final review and re-review both passed and `ready_for_phase_7` is true.
 2. Invoke the routed specialist premortem engine from Phase 3 `method_specialist_routing`. Default quantitative projects use `scholar-analyze`; computational projects use `scholar-compute`; qualitative projects use `scholar-qual`; linguistic projects use `scholar-ling`. Record the selected skill in `premortem_engine.skill`, `mode: premortem`, `auto_research_contract: phase_7`, and `skip_premortem_ignored: true`.
-3. Spawn independent premortem reviewers for `identification`, `measurement_missingness`, `model_robustness`, and `interpretation_claims`. Use real peer-reviewer style provenance: reviewer id, role, agent name, task invocation id, dispatch timestamp, model id, and report path.
+3. Begin the `premortem_panel` evidence round, then dispatch the reserved roles `identification`, `measurement_missingness`, `model_robustness`, and `interpretation_claims`. Persist each reserved report/trace and register completion. Provider task/model identity may be opaque or structurally unavailable.
 4. Each reviewer must stress-test Phase 3 design artifacts, Phase 4 measurement artifacts, `analysis/analysis-plan.md`, `analysis/spec-registry.csv`, `analysis/scripts-inventory.json`, and Phase 6 review artifacts.
 5. Build a traffic-light summary covering identification, variable construction, sample restrictions, model specification, standard errors, missing data, robustness, power/effect-size realism, heterogeneity/multi-comparison policy, mechanism evidence, table/figure plan, preregistration/deviation alignment, and interpretive reach.
 6. Build a null-falsification table for every hypothesis id represented in `analysis/spec-registry.csv`; every hypothesis needs an observable null pattern, precommitment status, and planned interpretation rule.
@@ -363,7 +415,7 @@ Workflow:
 
 1. Confirm Phase 8 execution passed and `ready_for_phase_9` is true.
 2. Invoke `scholar-verify` in Stage 1 pre-draft mode (`stage1_no_manuscript`) to compare raw tables/figures against `tables/results-registry.csv` and `figures/figure-registry.csv`.
-3. Spawn independent reviewers for `statistical_results`, `robustness_consistency`, `sample_data_integrity`, and `interpretation_claims`; record reviewer provenance with agent name, task id, dispatch time, model id, and report path.
+3. Begin the `post_execution_panel` evidence round, then dispatch the reserved roles `statistical_results`, `robustness_consistency`, `sample_data_integrity`, and `interpretation_claims`; persist their reserved reports/traces and register each successful completion.
 4. Review every planned `spec_id`, every result row, every figure registry row, execution warnings/errors, Phase 7 decision rules, Phase 7 null-falsification rules, and Phase 7 reporting-depth checklist.
 5. Bind reviewed numeric values to the actual result registry. Do not alter estimates, standard errors, p-values, or sample sizes in the review.
 6. Classify null, opposite-sign, weak, or conflicting results as substantive findings when technically valid. Do not rerun analysis just to force expected results.
@@ -440,7 +492,7 @@ Workflow:
 10. Invoke `scholar-polish` in `full` mode on `manuscript/manuscript-draft.md` before verification. It may remove generic AI writing patterns, hedging stacks, formulaic transitions, over-enumeration, em-dash overuse, and flat prose, but it must not alter citations, statistics, table/figure references, locked trace anchors, or argument structure.
 11. Write `manuscript/polish-report.json` with polish engine metadata, patterns checked, before/after manuscript hashes, factual-anchor preservation checks, generic marker counts, and `ready_for_verification: true`.
 12. Use Phase 9 interpretation constraints, the Phase 11 locked copies, and the Phase 12 blueprint. Every reader-facing locked result artifact must have a trace anchor, and every display-required artifact must have a visible display block.
-The Results prose must explicitly reference numbered evidence blocks. Do not leave displays as unlabeled dumps. Write sentences such as `Table 1 shows...` and `Figure 2 presents...`, keep reader-facing numerics rounded to the journal policy rather than raw registry precision or scientific notation, and honor the journal's actual table/figure rendering mode rather than flattening all venues into the same display style. For ASR/JMF-style quantitative manuscripts, Table 1 should normally be descriptive statistics for all modeled variables, with regression tables split by outcome or model family rather than collapsed into a sparse omnibus matrix.
+The Results prose must explicitly reference numbered evidence blocks. Do not leave displays as unlabeled dumps. Write sentences such as `Table 1 shows...` and `Figure 2 presents...`, keep reader-facing numerics rounded to the journal policy rather than raw registry precision, use scientific notation only when `numeric_reporting_policy.allow_scientific_notation` is `true`, and honor the journal's actual table/figure rendering mode rather than flattening all venues into the same display style. For ASR/JMF-style quantitative manuscripts, Table 1 should normally be descriptive statistics for all modeled variables, with regression tables split by outcome or model family rather than collapsed into a sparse omnibus matrix.
 For quantitative empirical work, the main Results table must be a canonical regression table with model columns and predictor rows. Do not present `results-registry.csv`, a model ladder, or a focal-coefficient extract as the original regression table.
 13. Write `manuscript/draft-manifest.json` with drafting engine metadata, blueprint metadata, drafting-plan metadata, self-critique metadata, polish report metadata, journal spec metadata, manuscript hash, source hashes, blueprint execution checks, display evidence, row-level locked result claims, citation plan, claim discipline, content alignment, and `ready_for_phase_14: true`.
 14. Run `auto-research-verify.sh 13 "$PROJ"`. Phase 14 may start only after the journal-calibrated polished draft manifest and manuscript pass.
@@ -453,13 +505,15 @@ Workflow:
 
 1. Rerun `auto-research-verify.sh 13 "$PROJ"`; do not verify a stale or invalid draft.
 2. Invoke `scholar-verify` in `full` mode against `manuscript/manuscript-draft.md`, `manuscript/manuscript-blueprint.json`, and the active lock from `results-locked/LATEST.txt`.
-3. Run four independent verifier roles with unique task IDs, unique report paths, and role-specific scopes: `verify-numerics`, `verify-figures`, `verify-logic`, and `verify-completeness`.
+3. Begin the `verification_panel` evidence round and run four independent reserved roles with unique evidence paths and role-specific scopes: `verify-numerics`, `verify-figures`, `verify-logic`, and `verify-completeness`. Register each successful completion; task/model identities may be opaque or structurally unavailable.
 4. Stage 1 must compare every Phase 13 reader-facing locked artifact against the manuscript anchors/displays. Figure checks must record visual inspection proof.
 5. Stage 2 must compare the blueprint and every Phase 13 row-level locked result claim against prose claims, direction, uncertainty, and claim constraints.
 6. Save individual agent reports under `verify/agents/`.
 7. If any issue is found, write a structured `FAIL` report with `findings[]`, `owner_phase`, `route_back_phase`, affected artifacts, and required fixes. Stop and rerun from the earliest affected phase.
 8. Write `verify/manuscript-verification.json` and `verify/manuscript-verification.md` with `ready_for_phase_15: true` only if no critical, stale, partial, unverified, or live-read issue remains.
-9. Codex cross-model review (mandatory by default). The Phase 14 verifier runs `scripts/gates/codex-trigger-phase14.sh`, which requires Codex full-mode artifacts under `${PROJ}/reviews/codex/codex-review-consolidated-*.md` (or `A[4-5]-*.md`) whenever `SCHOLAR_CODEX_DEFAULT=true` (the default) AND the `codex` CLI is on PATH. Dispatch via `/scholar-openai full <manuscript-path>`. To opt out, either set `SCHOLAR_CODEX_DEFAULT=false` at the shell level OR add `[EXCUSED:codex-review: <reason>]` to `verify/manuscript-verification.md` (or to a string field in the .json). If the `codex` CLI is missing, the gate emits YELLOW (cannot fire) rather than RED.
+9. Optional diversity enhancement: `SCHOLAR_CODEX_REVIEW=1` explicitly enables
+   the packaged Codex cross-model gate. Ambient `PATH` never changes Phase 14's
+   portable evidence requirement.
 10. Run `auto-research-verify.sh 14 "$PROJ"`. Phase 15 may start only after the four-agent verification passes.
 
 ## Phase 15 Citation And Claim Support
@@ -468,10 +522,10 @@ Phase 15 uses `scholar-citation` as the citation and claim-support engine. Read 
 
 Workflow:
 
-1. Rerun `auto-research-verify.sh 13 "$PROJ"`; do not audit citations on an unverified manuscript.
+1. Rerun `auto-research-verify.sh 14 "$PROJ"`; do not audit citations on an unverified manuscript.
 2. Invoke `scholar-citation` in `verify` mode against `manuscript/manuscript-draft.md`, `manuscript/draft-manifest.json`, `literature/references.bib`, and `verify/manuscript-verification.json`.
 3. Build a manuscript citation inventory from every cited BibTeX key in the draft and reconcile it against the project BibTeX.
-4. Verify every cited key exists in the project BibTeX, every exported citation remains in `citation/references.bib`, and no fabricated or unresolved reference is present. Record bibliography provenance explicitly: the active source bibliography must be the project `literature/references.bib`, and any cross-project imports or hand-added entries must be declared and justified.
+4. Verify every cited key exists in the project BibTeX, every exported citation remains in the canonical `citation/references.bib`, and no fabricated or unresolved reference is present. The vendored gates receive the exact canonical bibliography and `manuscript/manuscript-draft.md`; legacy/newer discovery under `citations/` cannot override them. Rendered-reference reconciliation must be GREEN, and every cited key needs keyed coverage from CrossRef or the local library. Provider unavailability is explicit, but all-authority-unavailable or partially covered citation sets cannot pass. There is no production skip flag. Record bibliography provenance explicitly: the active source bibliography must be the project `literature/references.bib`, and any cross-project imports or hand-added entries must be declared and justified.
 5. Build `citation/claim-source-map.json` for cite-bearing claims. Each claim must list manuscript location, manuscript anchor, claim type, cited keys, source locator, support verdict, and contradiction status.
 6. Run retraction/status checks for every cited key and record the result.
 7. Write `citation/citation-audit.json`, `citation/claim-source-map.json`, and `citation/references.bib`.
@@ -520,8 +574,8 @@ Workflow:
 
 1. Rerun `auto-research-verify.sh 17 "$PROJ"`; do not evaluate quality until verification, citation support, ethics, and replication have all passed.
 2. Invoke `scholar-respond simulate` against `manuscript/manuscript-draft.md`, using the active results lock, Phase 14 verification, Phase 15 citation/claim map, Phase 16 ethics/open-science report, and Phase 17 replication report as locked context.
-3. Spawn independent reviewers for `methods-evidence`, `theory-contribution`, `senior-editor`, and `interpretive-skeptic`. Add a computational, qualitative, demographic, linguistic, or journal-specific reviewer when the manuscript type or target journal requires it.
-4. Use the good `scholar-full-paper` practice of journal-aware reviewer panels and a severity-confidence matrix, but do not inherit its loose pass behavior. Every reviewer must write an individual report under `quality/agents/` with role, agent name (must start with `peer-reviewer-`), task id (must be a real dispatched id, not a placeholder), reviewed inputs, score vector, decision, and findings. Each reviewer must additionally produce two structured fields that probe intellectual quality directly: `contribution_locator` (verbatim sentences from the manuscript that constitute the contribution, plus clarity and specificity scores) and `rival_adjudication` (rivals named in the lit review, rivals adjudicated in the discussion, missing adjudications, and an adjudication-quality score). Reviewers must produce these locators independently — do not show one reviewer another reviewer's locator while drafting; cross-reviewer Jaccard consensus on the contribution sentences is what tests panel agreement on what the contribution IS.
+3. Read the authoritative Phase 1 `idea/research-question.json.method_orientation`, then begin the `adversarial_panel` evidence round and dispatch the reserved roles `methods-evidence`, `theory-contribution`, `senior-editor`, and `interpretive-skeptic`. Add the family-matched optional specialist role when required: `computational-methods`, `qualitative-methods`, `linguistic-methods`, `mixed-methods`, `demographic-family-methods`, `survey-methods`/`quantitative-family-methods` for structured secondary data, or `domain-methods` for other explicitly journal-specialized work. Record the same derived family in `method_specialist_review.method_family`. The research-question file is a required reviewed input, so later metadata cannot suppress or substitute this fifth-reviewer condition. Persist and register every reserved report/trace.
+4. Use journal-aware reviewer panels and a severity-confidence matrix, but do not inherit loose pass behavior. Every reviewer record must carry its role, a nonempty host-neutral agent label, evidence-bound task identity and report path, reviewed inputs, score vector, decision, and findings. Each reviewer must additionally produce `contribution_locator` with full verbatim visible-prose sentences, the exact manuscript section, the paragraph's one-based `line_start`, and clarity/specificity scores. References, comments, tables, captions, metadata, and reviewer prose cannot establish membership; Unicode/whitespace/typographic normalization is the only permitted equivalence. `rival_adjudication` records rivals named and adjudicated. Reviewers produce locators independently; cross-reviewer Jaccard consensus remains a secondary agreement check after exact manuscript membership.
 5. Invoke `scholar-polish` in `scan` mode as a final prose-pattern audit. Phase 18 must not rewrite the manuscript. If the scan finds unresolved high-severity AI writing patterns, route back to Phase 13 for polish/reverification.
 6. For quantitative empirical work, audit table architecture explicitly. `quality/manuscript-quality.json.regression_table_audit` must confirm that the main empirical display is a canonical regression table, not a registry/model-ladder extract, and that reader-facing labels and design notes are present.
 7. Score contribution, research-question answer, argument coherence, theory-results integration, limitation candor, journal fit, abstract/introduction/discussion consistency, substantive conclusion support, prose quality, and reviewer consensus.
@@ -541,7 +595,7 @@ Workflow:
 2. Use `manuscript/manuscript-draft.md` as the only prose source. Do not assemble from live tables, live figures, old drafts, reviewer memos, or manually edited final files.
 3. Copy or transform that source into `final/manuscript-final.md`, adding only final front matter, references, declarations, and formatting metadata that are already supported by Phase 15-18 artifacts.
    - Normalize visible front matter during this transformation: title, `## Abstract`, abstract text, `Keywords: ...`, then `## Introduction`. Do not carry a draft prefix where `Keywords:` sits above `## Abstract`.
-4. Generate `final/manuscript-final.docx`, `final/manuscript-final.tex`, and `final/manuscript-final.pdf` from the same `final/manuscript-final.md` source. Prefer Pandoc for conversion. If conversion tooling is unavailable, Phase 19 must fail with a structured route-back to Phase 19 rather than emitting placeholders.
+4. Generate `final/manuscript-final.docx`, `final/manuscript-final.tex`, and `final/manuscript-final.pdf` from the same `final/manuscript-final.md` source. Prefer Pandoc for conversion. Verification independently parses DOCX OPC/body text, parses TeX while rejecting shell escape and outside-tree inputs, and runs Poppler PDF metadata/text/raster checks; each format must contain substantive sections and materially correspond bidirectionally to the immediate Markdown source. Missing tooling blocks Phase 19 rather than allowing signatures, caller-authored commands, or placeholders to pass.
 5. Create a version id in UTC timestamp form, e.g. `2026-04-30T153012Z-v001`. Save immutable versioned copies under `final/versions/<version_id>/` using filenames that include the version id, and write `final/LATEST.txt` containing exactly the active version id.
 6. Write `final/final-manifest.json` with `version_id`, `created_at_utc`, canonical paths, versioned paths, source hashes, output hashes, generation commands/status, same-source proof, section/declaration checks, citation/bibliography checks, and route-back fields.
 7. The stable canonical outputs must remain `final/manuscript-final.{md,docx,tex,pdf}` for Phase 20 automation. The versioned copies are for audit/history and must have byte-identical hashes to the canonical files.
@@ -564,7 +618,7 @@ Workflow:
 3. Generate `submission/manuscript-submission.docx`, `submission/manuscript-submission.tex`, and `submission/manuscript-submission.pdf` from `submission/manuscript-submission.md`. The submission package must therefore include all four reviewer-facing formats: `md`, `docx`, `tex`, and `pdf`.
 4. Preserve substantive prose, references, declarations, tables, and figure placement markers. If a figure embed uses a local file path, replace it with a reviewer-safe figure placement marker rather than leaking the path. Submission hygiene should be structural first and regex cleanup only as a backstop, not the primary assembly strategy.
 5. Run Stage A deterministic hygiene before dispatching Stage B. The manuscript must have zero known machinery-prose leaks: `[VERIFIED-*]` citation markers, pipeline-jargon headers such as `Robustness Ladder` or `BH Correction Summary`, "we carry N accepted limitations" / "pre-registered families" enumeration prose, 3+ consecutive bulleted spec-ID lines, and proposal-style hypothesis bullet/list blocks.
-6. After Stage A clears, dispatch an independent semantic body-prose reader subagent. It must read `submission/manuscript-submission.md` top-to-bottom for novel structural prose that reads as pipeline output rather than social-science article prose, including leftover `H1/H2` hypothesis lists that read like a proposal or PAP rather than a journal article. Save its report to `submission/semantic-body-prose-read.md` with `STATUS: GREEN`, `REVIEWED_ARTIFACT: submission/manuscript-submission.md`, `MANUSCRIPT_SHA256: <current sha>`, `BLOCKING_ISSUES: 0`, and `STRUCTURAL_PATTERN_COUNT: 0`. Missing, stale, YELLOW, or RED reports block Phase 20.
+6. After Stage A clears, begin the `semantic_body_reader` evidence round and dispatch its reserved `semantic_body_prose_reader` role. It must read `submission/manuscript-submission.md` top-to-bottom for novel structural prose that reads as pipeline output rather than social-science article prose, including leftover `H1/H2` hypothesis lists that read like a proposal or PAP rather than a journal article. Persist/register the reserved report and bind `semantic_body_prose_read` to its evidence path and dispatch identity. Its substantive report remains `submission/semantic-body-prose-read.md`-compatible in content: `STATUS: GREEN`, current manuscript hash, zero blocking issues, and zero structural patterns. The verifier reads the evidence-bound report itself and requires those decision-bearing fields to match the stable package report; a locally authored stable GREEN file cannot override registered YELLOW/RED reviewer evidence. Missing, stale, YELLOW, or RED evidence blocks Phase 20.
 7. Normalize the References section so entries are not rendered as a Markdown bullet list. Confirm no unresolved citation markers, missing citekeys, `SOURCE NEEDED`, or `UNVERIFIED` text remains.
 8. Write `submission/submission-hygiene.json` with final-version binding, source hashes, Stage A checks, Stage B semantic-body-prose metadata, citation rendering checks, placeholder scan, internal metadata scan, format-generation checks, findings, route-back fields, and `pipeline_complete`.
 9. Write `submission/submission-package-manifest.json` with canonical submission outputs in all four formats, the semantic body-prose report, timestamped versioned copies, hashes, final version id, package inventory, and completion status.
@@ -572,33 +626,6 @@ Workflow:
 11. If hygiene defects are found, write a structured `FAIL` report and route back to the earliest affected phase: Phase 13 for body-prose machinery introduced during drafting, Phase 19 for final assembly/source defects, Phase 15 for citation/reference defects, Phase 16 for declaration defects, Phase 17 for replication disclosure contradictions, and Phase 20 for scrub/manifest/versioning/format-generation defects.
 12. Mark `pipeline_complete: true` only when the reviewer-facing manuscript is clean, Stage A is GREEN, Stage B is GREEN and current-hash-bound, all four submission formats exist, manifests are complete, canonical and versioned hashes match, and no open finding remains.
 13. Run `auto-research-verify.sh 20 "$PROJ"`. The auto-research default route is complete only after this gate passes.
-
-## Process Logging (REQUIRED)
-
-**Process Logging (REQUIRED) — Reasoning · Action · Observation trace:**
-
-This skill emits an append-only RAO trace at `${OUTPUT_ROOT}/logs/trace-scholar-auto-research-<date>.ndjson` — the source of truth. The human-readable `process-log-scholar-auto-research-<date>.md` is *rendered* from it. Full protocol + privacy rule: `_shared/process-logger.md`.
-
-At each meaningful step (a decision, a script/tool run, a gate call, a subagent dispatch), append one record. `emit-trace.sh` derives `seq` from the file, so no state is tracked across the stateless Bash blocks:
-
-```bash
-bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/emit-trace.sh" --skill scholar-auto-research --step "<label>" \
-  --reasoning "<the WHY — stated rationale, 1–2 lines>" \
-  --action "<the WHAT — tool/script/gate call + key args>" \
-  --observation "<the RESULT — verdict/metric/count/error/file ref>" --status ok    # ok|fail|skipped
-```
-
-At the end (Save Output), render the human-readable log and self-check:
-
-```bash
-OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
-bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/render-trace.sh" "${OUTPUT_ROOT}/logs/trace-scholar-auto-research-$(date +%Y-%m-%d).ndjson"
-bash "${SCHOLAR_SKILL_DIR:-.}/scripts/gates/trace-coverage-check.sh" "${OUTPUT_ROOT}" --skill scholar-auto-research
-```
-
-Privacy (C-01 / LOCAL_MODE): the trace carries aggregate metrics, verdicts, counts, and file refs ONLY — never raw data rows, verbatim quotes, or PII.
-
----
 
 ## Hard Rules
 
@@ -629,8 +656,98 @@ Privacy (C-01 / LOCAL_MODE): the trace carries aggregate metrics, verdicts, coun
 Before using or modifying this skill, run:
 
 ```bash
-bash .claude/skills/scholar-auto-research/scripts/auto-research-contract-lint.sh
-bash .claude/skills/scholar-auto-research/scripts/auto-research-fixture-test.sh
+bash "${_AR_SKILL}/scripts/auto-research-contract-lint.sh"
+bash "${_AR_SKILL}/scripts/auto-research-system-gate-smoke.sh"
+bash "${_AR_SKILL}/scripts/auto-research-fixture-test.sh"
 ```
 
-These tests validate the contract shape, default route, state behavior, positive fixture, and selected negative fixtures.
+These tests validate the contract shape, default route, state behavior, positive fixture, and selected negative fixtures. The repo-level `tests/smoke/run-all.sh` sweep also exercises the skill's own checks through the `tests/smoke/test-auto-research-suite.sh` forwarder, including the portable review-evidence, migration, and isolated-runtime suites; the full 21-phase (`0`–`20`) `auto-research-fixture-test.sh` runs behind `SCHOLAR_SMOKE_HEAVY=1`.
+
+### Vendored scripts & gates inventory
+
+This skill is self-contained — every helper it invokes is vendored under `scripts/`, so it never reaches into the parent plugin at runtime. Top-level helpers:
+
+- `auto-research-state.sh` — project state machine (`init` / `import-init` / `set-mode` / `decision` / `next` / `complete` / `route-back` / `hash-check` / `status`); enforces run-mode, contract drift, safety inventory freshness, transactional verification/completion, and cap-3 route-back escalation.
+- `review_evidence.py` — packaged host-neutral reservation/completion ledger,
+  exact input/report/trace binding, assurance evaluation, and replay defense.
+- `runtime-preflight.py` — validates the declared commands and packaged runtime
+  closure for every host before optional host-specific setup.
+- `auto-research-verify.sh` — per-phase exit gate; runs each phase's structural checks plus the bundled `scripts/gates/` panel. Its disk receipt is audit-only; `complete` obtains authority from an internal verifier process while holding the project lock.
+- `safety_inventory.py` — approved local helper that normalizes copy-mode identities and emits only inventory/content digests, never research-data contents.
+- `auto-research-contract-lint.sh` / `auto-research-system-gate-smoke.sh` — contract-shape lint and the packaging/gate-coverage smoke (asserts every bundled external gate the verifier names exists, is executable, and is git-tracked).
+- `auto-research-fixture-test.sh` / `auto-research-publication-quality-fixture-test.sh` — end-to-end and publication-quality fixtures.
+- `setup-project-claudemd.sh` — writes the host-aware workflow-contract memory block (`CLAUDE.md` / `AGENTS.md`).
+- `setup-codex-hooks.sh` — installs the vendored Codex data-safety hook without a parent bootstrap.
+- `detect-host-agent.sh` — host detection (Claude Code / Codex / unknown) for the memory-file and Codex-hook decisions.
+- `emit-journal-profile-resolution.py` — journal-profile resolution templater.
+- `references/runtime-dependencies.json` — versioned boundary manifest for required packaged safety files, optional packaged run-view files, commands, and explicit external providers.
+- `references/review-evidence-contract.md` — purpose, authority boundary,
+  lifecycle, assurance levels, host mappings, locking, and migration.
+
+The `scripts/gates/` directory bundles the phase-specific quality gates the verifier's external-gate panels call — including the Phase 15 citation-verification trio: `verify-citation-metadata.sh` (bib ↔ CrossRef), `verify-citation-local-library.sh` (bib ↔ local Zotero), and `verify-rendered-references-against-bib.sh` (manuscript ↔ bib) — plus the phase-aware `effect-size-narrative-check.sh` and the `_phase5-skill-resolver.sh` / `_section-role-helper.py` helpers. It also contains the complete safety-hook chain, RAO trace helpers, and run-view renderer used by this skill. Their protocols live locally at `references/process-logger.md` and `references/agent-trace-contract.md`. `auto-research-system-gate-smoke.sh` asserts the panel-named gates and helpers are all present, executable, and tracked; `tests/smoke/test-self-contained-runtime.sh` exercises the recursive helper boundary in an isolated copy.
+
+## Process Logging (REQUIRED)
+
+**Process Logging (REQUIRED) — Reasoning · Action · Observation trace:**
+
+This skill emits an append-only RAO trace at `${OUTPUT_ROOT}/logs/trace-scholar-auto-research-<date>.ndjson` — the source of truth. The human-readable `process-log-scholar-auto-research-<date>.md` is *rendered* from it. Full protocol + privacy rule: `references/process-logger.md`; dispatched-agent sidecar requirements: `references/agent-trace-contract.md`.
+
+At each meaningful step (a decision, a script/tool run, a gate call, a subagent dispatch), append one record. `emit-trace.sh` derives `seq` from the file, so no state is tracked across the stateless Bash blocks:
+
+```bash
+_AR_GATES="${_AR_SKILL}/scripts/gates"
+bash "${_AR_GATES}/emit-trace.sh" --skill scholar-auto-research --step "<label>" \
+  --reasoning "<the WHY — stated rationale, 1–2 lines>" \
+  --action "<the WHAT — tool/script/gate call + key args>" \
+  --observation "<the RESULT — verdict/metric/count/error/file ref>" --status ok    # ok|fail|skipped
+unset _AR_GATES
+```
+
+At the end (Save Output), render the human-readable log and self-check:
+
+```bash
+_AR_GATES="${_AR_SKILL}/scripts/gates"
+OUTPUT_ROOT="${OUTPUT_ROOT:-output}"
+bash "${_AR_GATES}/render-trace.sh" "${OUTPUT_ROOT}/logs/trace-scholar-auto-research-$(date +%Y-%m-%d).ndjson"
+bash "${_AR_GATES}/trace-coverage-check.sh" "${OUTPUT_ROOT}" --skill scholar-auto-research
+unset _AR_GATES
+```
+
+Privacy (C-01 / LOCAL_MODE): the trace carries aggregate metrics, verdicts, counts, and file refs ONLY — never raw data rows, verbatim quotes, or PII.
+
+## Save Output
+
+This skill is an autonomous orchestrator: it does not write output files directly — every
+phase persists through its vendored state machine (`auto-research-state.sh`) and per-phase
+verifier (`auto-research-verify.sh`), with transactional completion records and audit-only receipts. The project lives at
+`$PROJ` (== `output/[slug]/`):
+
+| Artifact | Path |
+|---|---|
+| Run state machine (phase pointer, mode, decisions, transactional output/input hashes) | `$PROJ/.auto-research/state.json` |
+| Safety provenance | `$PROJ/safety/safety-status.json` |
+| Review artifacts (Phases 6, 7, and 9) | `$PROJ/review/` |
+| Manuscript verification artifacts (Phase 14) | `$PROJ/verify/` |
+| Manuscript quality-review artifacts (Phase 18) | `$PROJ/quality/` |
+| Other per-phase artifacts (design, analysis, locks, manifests, registries) | `$PROJ/{design,analysis,logs,verify,...}/` |
+| Results lock (Phase 11) | `$PROJ/results-locked/` + lock manifest |
+| Canonical final manuscript, all four formats (Phase 19) | `$PROJ/final/manuscript-final.{md,docx,tex,pdf}` |
+| Canonical submission manuscript, all four formats (Phase 20) | `$PROJ/submission/manuscript-submission.{md,docx,tex,pdf}` |
+| Replication package (Phase 17) | `$PROJ/replication-package/` |
+| Process logs | `$PROJ/logs/` |
+
+Required artifact paths are derived from `phase-contract.json`, verified internally, and recorded in `state.json` with nonempty digests. Any paths supplied to `complete` are exact-set assertions only.
+
+## Quality Checklist
+
+The default route is complete only when `auto-research-verify.sh 20 "$PROJ"` passes. Before
+declaring `pipeline_complete: true`, confirm:
+
+- [ ] Every phase (1–20) passed its `auto-research-verify.sh <phase>` gate — no file-exists-only passes for phases 11–20.
+- [ ] Reviewer-facing manuscript is clean: Stage A GREEN, Stage B GREEN and bound to the current manuscript hash, no leaked internal phase/lock/manifest/provenance vocabulary.
+- [ ] All four submission formats (`md`, `docx`, `tex`, `pdf`) exist from the same source, and canonical vs. versioned hashes match.
+- [ ] Results were locked (Phase 11) with current hashes; drafting used only the active lock; every reader-facing locked artifact is traceable from the manuscript.
+- [ ] Citations verified via the Phase 15 trio (`/scholar-citation`) — no fabricated, unverified, or unsupported references overridden.
+- [ ] No unresolved ethics / privacy / IRB / COI / data-availability blocker deferred into replication or final assembly.
+- [ ] Replication mode declared (`public-data-full` / `restricted-data-code-only` / `synthetic-demo` / `no-data-conceptual`) with clean-room reproduction (or an explicit justification when full reproduction is impossible).
+- [ ] All required real Task-agent panels (Phase 6 code review, Phase 7 pre-mortem, Phase 18 peer review) dispatched — no hand-authored summaries substituting for agent runs.

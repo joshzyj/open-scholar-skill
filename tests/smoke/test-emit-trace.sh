@@ -67,6 +67,18 @@ run --step s --action a --status bogus >/dev/null 2>&1; [ $? -eq 1 ] && ok "bad 
 OUT=$(run --step s --observation "contact a@b.edu" 2>&1); rc=$?
 { [ $rc -eq 0 ] && printf '%s' "$OUT" | grep -q WARN; } && ok "PII-looking observation -> non-blocking WARN" || bad "PII warn missing (rc=$rc)"
 
+# 7. Provenance (P7-A correction, 2026-08-25): default live; --reconstructed
+# labels a post-hoc record honestly (three real records sharing one timestamp
+# across three script executions was reconstruction with no way to say so).
+run --step s7 --action "live step" >/dev/null 2>&1
+run --step s7b --action "backfilled step" --reconstructed >/dev/null 2>&1
+TRACE=$(ls "$OR"/logs/trace-scholar-analyze-*.ndjson | head -1)
+L7=$(grep '"step":"s7"' "$TRACE" | python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['provenance'])")
+L7B=$(grep '"step":"s7b"' "$TRACE" | python3 -c "import json,sys; print(json.loads(sys.stdin.readline())['provenance'])")
+{ [ "$L7" = "live" ] && [ "$L7B" = "reconstructed" ]; } \
+  && ok "provenance: live by default, reconstructed under --reconstructed" \
+  || bad "provenance wrong (s7=$L7 s7b=$L7B)"
+
 echo ""
 if [ "$FAILS" -eq 0 ]; then echo "ALL emit-trace checks passed"; exit 0
 else echo "$FAILS emit-trace check(s) FAILED"; exit 1; fi

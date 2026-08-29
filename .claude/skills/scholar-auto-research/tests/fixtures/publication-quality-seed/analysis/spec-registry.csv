@@ -1,0 +1,4 @@
+spec_id,model_id,hypothesis_ids,outcome,predictors,covariates,estimator,purpose,robustness_type,missing_data_strategy,status
+S1,M1,H1,adolescent educational expectations,parental job loss,child age;wave;household income,household fixed effects linear model,primary estimate,primary,complete-case plus missingness indicators aligned with Phase 4 plan,planned
+S2,M1,H1,adolescent educational expectations,parental job loss,child age;wave;household income,event-study fixed effects model,pretrend and timing robustness,event-study pretrend robustness check,complete-case plus missingness indicators aligned with Phase 4 plan,planned
+S3,M1,H1,adolescent educational expectations,parental job loss,child age;wave;household income,weighted household fixed effects model,attrition robustness,inverse probability attrition robustness weights,complete-case plus missingness indicators aligned with Phase 4 plan,planned

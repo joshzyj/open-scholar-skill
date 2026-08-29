@@ -65,6 +65,8 @@ evalues.OLS(est = coef(focal)[spec$treatment_variable],
 
 For IPW, entropy-balancing, or matching variants of the same adjustment set, add `DAG:focal:<variant>` rows to `spec-registry.csv` — still one conceptual focal estimand, just different estimators of it.
 
+**Machine contracts these ids must satisfy (P2-7, 2026-08-24).** `model-spec-check.sh` accepts BOTH id conventions — legacy `^[MR][0-9]+$` and the namespaced ids this ladder prescribes (`DAG:focal`, `DAG:focal:<variant>`, `DAG:sensitivity:<method>`); until 2026-08-24 it accepted only the legacy form, so following this ladder RED-ed the Phase 3 gate and pushed causal designs into `M1..R5` names that then read as descriptive-design evidence. And in `design/model-specs.json`, **`predictors` is the FULL right-hand side (focal term and controls together); `required_controls` must be a subset of it** — a focal-only `predictors` array with controls listed separately REDs, and previously that rule existed only in the failure message.
+
 ---
 
 ## Adjudication

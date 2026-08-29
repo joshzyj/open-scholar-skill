@@ -1,0 +1,2 @@
+figure_id,path,source_script,status,description
+F1,figures/event-study.png,analysis/scripts/04_plan_models.R,completed,event-study diagnostic figure

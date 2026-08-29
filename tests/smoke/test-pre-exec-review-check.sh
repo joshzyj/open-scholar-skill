@@ -205,6 +205,49 @@ OUT="$TMPDIR_BASE/t16.out"
 rc=$(run_gate "$P" --manifest "$P/code-review/reviewed-scripts-${RID}.json" "${GATE_ARGS[@]}" "$OUT")
 if [ "$rc" = "1" ] && grep -q "pair mismatch" "$OUT"; then pass "RED on report/manifest id mismatch"; else fail "expected RED pair mismatch, got rc=$rc" "$OUT"; fi
 
+
+echo "Test 17: R6b — fixed_finding_ids FIXED-never-VERIFIED → YELLOW (DC-03)"
+P="$TMPDIR_BASE/p17"; build_proj "$P"
+M="$P/code-review/reviewed-scripts-${RID}.json"
+jq '.fixed_finding_ids = ["CRIT-STAT-301", "CRIT-CORR-101"]' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+mkdir -p "$P/logs"
+cat > "$P/logs/findings.ndjson" <<'EOF'
+{"id": "CRIT-STAT-301", "ts": "2026-08-22T10:00:00Z", "status": "OPEN", "locus": "scripts/04-models.R:10", "report": "r.md"}
+{"id": "CRIT-STAT-301", "ts": "2026-08-22T11:00:00Z", "status": "FIXED", "locus": "scripts/04-models.R:10", "report": "r.md"}
+{"id": "CRIT-CORR-101", "ts": "2026-08-22T10:00:00Z", "status": "OPEN", "locus": "scripts/05-margins.R:4", "report": "r.md"}
+{"id": "CRIT-CORR-101", "ts": "2026-08-22T11:00:00Z", "status": "FIXED", "locus": "scripts/05-margins.R:4", "report": "r.md"}
+{"id": "CRIT-CORR-101", "ts": "2026-08-22T12:00:00Z", "status": "VERIFIED", "locus": "scripts/05-margins.R:4", "report": "r.md"}
+EOF
+OUT="$TMPDIR_BASE/t17.out"
+rc=$(run_gate "$P" --manifest "$M" "${GATE_ARGS[@]}" "$OUT")
+if [ "$rc" = "2" ] && grep -q "CRIT-STAT-301" "$OUT" && ! grep -q "CRIT-CORR-101 " "$OUT" && grep -q "closure authority" "$OUT"; then
+  pass "YELLOW names only the FIXED-unverified id"
+else fail "expected YELLOW naming CRIT-STAT-301 only, got rc=$rc" "$OUT"; fi
+
+echo "Test 18: R6b — all fixed ids VERIFIED → GREEN"
+P="$TMPDIR_BASE/p18"; build_proj "$P"
+M="$P/code-review/reviewed-scripts-${RID}.json"
+jq '.fixed_finding_ids = ["CRIT-CORR-101"]' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+mkdir -p "$P/logs"
+cat > "$P/logs/findings.ndjson" <<'EOF'
+{"id": "CRIT-CORR-101", "ts": "2026-08-22T11:00:00Z", "status": "FIXED", "locus": "scripts/05-margins.R:4", "report": "r.md"}
+{"id": "CRIT-CORR-101", "ts": "2026-08-22T12:00:00Z", "status": "VERIFIED", "locus": "scripts/05-margins.R:4", "report": "r.md"}
+EOF
+OUT="$TMPDIR_BASE/t18.out"
+rc=$(run_gate "$P" --manifest "$M" "${GATE_ARGS[@]}" "$OUT")
+if [ "$rc" = "0" ] && grep -q "STATUS=GREEN" "$OUT"; then pass "GREEN when every fixed id has a VERIFIED line"; else fail "expected GREEN, got rc=$rc" "$OUT"; fi
+
+echo "Test 19: R4 RED text names the §7b acceptance lane"
+P="$TMPDIR_BASE/p19"; build_proj "$P"
+R="$P/code-review/code-review-report-2026-08-13.md"
+grep -v "Overall Verdict" "$R" > "$R.tmp" && mv "$R.tmp" "$R"
+printf 'Overall Verdict: CRITICAL\n' >> "$R"
+OUT="$TMPDIR_BASE/t19.out"
+rc=$(run_gate "$P" --manifest "$P/code-review/reviewed-scripts-${RID}.json" "${GATE_ARGS[@]}" "$OUT")
+if [ "$rc" = "1" ] && grep -q "PROPOSED-ACCEPTANCE" "$OUT" && grep -q "gate-acceptances.md" "$OUT"; then
+  pass "RED text routes acceptance through the §7b lane"
+else fail "expected RED naming the acceptance lane, got rc=$rc" "$OUT"; fi
+
 echo "════════════════════"
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -gt 0 ] && exit 1

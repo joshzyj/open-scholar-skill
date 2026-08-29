@@ -3,6 +3,21 @@
 All notable changes to open-scholar-skill are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] - 2026-08-28
+
+### Added: scholar-auto-research F20/L4 — production completion authority (ported from dev)
+
+- `.claude/skills/scholar-auto-research/` is now **byte-exact with the development tree** (81 -> 227 files, no deletions — the prior contents were a strict subset). Completion authority is production-driven across Phases 0-20 and the terminal `DONE` transition, with the coverage manifest and its bidirectional lint packaged inside the skill.
+- `_AR_SKILL` absolute skill-directory resolution replaces hardcoded `.claude/skills/...` paths. The skill dir is resolved from the loaded `SKILL.md`, never inferred from the working directory, `$HOME`, a marketplace symlink, or a parent plugin tree — so an installed copy no longer depends on repository layout.
+- **Why the whole subtree, not a patch:** `tests/helpers/coverage_lint.py` pins `scripts/auto-research-fixture-test.sh` by SHA-256 and parses it for exactly 90 call stanzas. Any local adaptation of a pinned file breaks the pin, so this feature cannot be ported file-by-file.
+- Verified in this repository after the port: `test-coverage-manifest.sh` PASS — findings=20, phases=21, phase_invariants=705, external_gates=69, cases=427; all 6 coverage probes PASS.
+- Also ported: `_shared/agent-trace-contract.md`, evidence/receipt gates, and assorted `scripts/gates/` and `tests/smoke/` additions reached by dependency closure.
+
+### Not included
+
+- Repo-level files whose local versions have diverged too far from the development tree to accept the change safely — notably `scripts/gates/phase-verify.sh`, `tests/smoke/test-phase-verify.sh`, the `scholar-rag` assets, and the `review-code-*` / `verify-*` agent definitions. These remain at their previous versions and are unaffected by this change.
+- Gates and suites this repository intentionally does not ship are unchanged; references to them in ported comments are design provenance, not instructions to run.
+
 ## [5.21.0] - 2026-08-14
 
 ### Added: Traceability section in project CLAUDE.md auto-rules (§F)

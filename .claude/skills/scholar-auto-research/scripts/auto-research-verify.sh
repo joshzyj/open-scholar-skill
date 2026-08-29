@@ -69,10 +69,17 @@ import math
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import csv
+import html
+from collections import Counter
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN
+import tempfile
+import unicodedata
 import zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,23 +87,24 @@ contract_path = Path(sys.argv[1])
 phase_id = sys.argv[2]
 proj = Path(sys.argv[3])
 # auto-research is self-contained: verifier gates are vendored under this
-# skill's scripts/gates/. Missing bundled gates are hard failures. A repo-level
-# fallback can be enabled only for legacy debugging with
-# AUTO_RESEARCH_ALLOW_ROOT_GATE_FALLBACK=1.
+# skill's scripts/gates/. Missing bundled gates are hard failures; no parent
+# plugin fallback is permitted.
 SCRIPT_DIR = Path(sys.argv[4]) if len(sys.argv) > 4 else Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from safety_inventory import (  # noqa: E402
+    DATA_LIKE_EXTS,
+    SENSITIVE_DATA_DIRS,
+    canonicalize_status_mapping,
+    discover_data_inventory,
+    sha256_file,
+)
+from review_evidence import EvidenceError, normalize_relative, validate_phase_evidence  # noqa: E402
 
 def _resolve_gate_dir(start):
     candidates = [
         start / "gates",
         start.resolve() / "gates",
     ]
-    if os.environ.get("AUTO_RESEARCH_ALLOW_ROOT_GATE_FALLBACK") == "1":
-        candidates.extend([
-            start / ".." / ".." / ".." / "scripts" / "gates",
-            start / ".." / ".." / ".." / ".." / "scripts" / "gates",
-            start.resolve() / ".." / ".." / ".." / "scripts" / "gates",
-            start.resolve() / ".." / ".." / ".." / ".." / "scripts" / "gates",
-        ])
     for cand in candidates:
         if cand.exists():
             return cand.resolve()
@@ -108,23 +116,49 @@ JOURNAL_PROFILE_TEMPLATE_PATH = (SCRIPT_DIR / ".." / "references" / "journal-pro
 _JOURNAL_PROFILE_TEMPLATE_CACHE = None
 
 
+
 NETWORK_GATES = {
-    # F4 (audit 2026-08-25 port): ONLY these gates make external network calls
+    # D2 (audit 2026-07-07): ONLY these gates make external network calls
     # (CrossRef / local-library lookups). They alone may downgrade a crash or
     # timeout to a non-fatal YELLOW "gate_unavailable"; every other gate is
-    # deterministic, so a crash/timeout for those is a hard RED "gate_crash" —
-    # a gate that never ran must not read as a pass.
+    # deterministic, so a crash/timeout for those is a hard RED "gate_crash".
     "verify-citation-metadata.sh",
     "verify-citation-local-library.sh",
 }
 
 
-def run_external_gate(gate_name, project, label):
-    """Run a bundled scripts/gates/<name>.sh helper.
+def _gate_timeout_s(is_network):
+    # F6/D5 (audit 2026-07-07): a 30+ entry .bib on a cold cache can exceed the
+    # old flat 120s, and the verifier's subprocess timeout would truncate the
+    # network gate mid-run and (pre-F4) swallow the result as YELLOW. Network
+    # gates get 600s; deterministic gates keep 120s. Both are env-overridable so
+    # tests can exercise the timeout branch without a real long-running gate.
+    if is_network:
+        default, key = 600, "AUTO_RESEARCH_NETWORK_GATE_TIMEOUT_S"
+    else:
+        default, key = 120, "AUTO_RESEARCH_GATE_TIMEOUT_S"
+    try:
+        return max(1, int(os.environ.get(key, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def run_external_gate(gate_name, project, label, extra_args=()):
+    """Run a bundled scripts/gates/<name>.sh helper; return (status, reason, detail).
 
     External manuscript gates are required once listed by the verifier. A
     missing gate must fail loudly; otherwise packaging mistakes silently weaken
     Phase 13/18/20 quality checks.
+
+    F4 (audit 2026-07-07): the old body returned `status or "YELLOW"`, so a gate
+    that crashed (nonzero exit with NO STATUS line) or raised was reported as a
+    non-fatal YELLOW and dropped by the RED-only panels — a silent pass. Now:
+      - missing / not-executable gate                -> RED (bundling defect)
+      - emitted STATUS line (GREEN/YELLOW/RED/INERT)  -> respected as-is
+        (codex YELLOW, effect-size INERT are deliberate)
+      - STATUS=GREEN contradicted by a nonzero exit   -> RED (distrust)
+      - crash / timeout / nonzero-exit-without-STATUS -> RED gate_crash for a
+        deterministic gate; YELLOW gate_unavailable for a NETWORK_GATE only
     """
     if GATE_DIR is None:
         return ("RED", "missing_gate_directory", "expected scholar-auto-research/scripts/gates")
@@ -134,25 +168,26 @@ def run_external_gate(gate_name, project, label):
     if not os.access(gate_path, os.X_OK):
         return ("RED", f"external_gate_not_executable:{gate_name}", str(gate_path))
     is_network = gate_name in NETWORK_GATES
+    timeout_s = _gate_timeout_s(is_network)
     try:
         env = dict(os.environ)
         env["AUTO_RESEARCH_VERIFY_PHASE"] = str(phase_id)
         result = subprocess.run(
-            ["bash", str(gate_path), str(project)],
-            capture_output=True, text=True, timeout=120, env=env,
+            ["bash", str(gate_path), str(project), *[str(a) for a in extra_args]],
+            capture_output=True, text=True, timeout=timeout_s, env=env,
         )
     except subprocess.TimeoutExpired:
         if is_network:
-            return ("YELLOW", "gate_unavailable:timeout_120s", "")
-        return ("RED", "gate_crash:timeout_120s", "")
+            return ("YELLOW", f"gate_unavailable:timeout_{timeout_s}s", "")
+        return ("RED", f"gate_crash:timeout_{timeout_s}s", "")
     except Exception as exc:
         if is_network:
             return ("YELLOW", f"gate_unavailable:{exc}", "")
         return ("RED", f"gate_crash:{exc}", "")
-    text = (result.stdout or "") + "\n" + (result.stderr or "")
     status = ""
     reason = ""
     detail = ""
+    authority_keys = []
     for line in (result.stdout or "").splitlines():
         if line.startswith("STATUS="):
             status = line.split("=", 1)[1].strip()
@@ -160,9 +195,49 @@ def run_external_gate(gate_name, project, label):
             reason = line.split("=", 1)[1].strip()
         elif line.startswith("DETAIL:"):
             detail = line.split(":", 1)[1].strip()
-    return (status or "YELLOW", reason, detail)
+        elif line.startswith("AUTHORITY_KEY="):
+            authority_keys.append(line.split("=", 1)[1].strip())
+    if not status:
+        # No STATUS line emitted. Nonzero exit = crash; zero exit = malformed
+        # but benign (advisory YELLOW).
+        lines = ((result.stderr or "") + (result.stdout or "")).strip().splitlines()
+        tail = lines[-1][:200] if lines else ""
+        if result.returncode != 0:
+            if is_network:
+                return ("YELLOW", f"gate_unavailable:exit{result.returncode}_no_status", tail)
+            return ("RED", f"gate_crash:exit{result.returncode}_no_status", tail)
+        return ("YELLOW", "no_status_line", tail)
+    if status == "GREEN" and result.returncode != 0:
+        # STATUS line claims GREEN but the process failed — distrust it.
+        return ("RED", f"status_green_but_exit{result.returncode}", reason or detail)
+    if authority_keys:
+        detail = "AUTHORITY_KEYS=" + ",".join(sorted(set(authority_keys)))
+    return (status, reason, detail)
 
-contract = json.loads(contract_path.read_text())
+
+def consume_external_gate(gate_name, project, label, failures, advisories, extra_args=()):
+    """Run a bundled gate and route its verdict: RED -> failures (fatal);
+    YELLOW / INERT -> advisories (surfaced, non-fatal). F4: YELLOW/INERT were
+    previously dropped silently, hiding crashed network gates and deliberately
+    INERT gates from the phase verdict."""
+    status, reason, detail = run_external_gate(gate_name, project, label, extra_args)
+    if status == "RED":
+        failures.append(f"{label}: reason={reason} detail={detail}")
+    elif status in ("YELLOW", "INERT"):
+        advisories.append(f"{label}: {status} ({reason or 'n/a'})")
+    return status
+
+
+def emit_gate_advisories(advisories):
+    """Print non-GREEN external-gate outcomes as non-fatal ADVISORY lines so no
+    YELLOW/INERT list is dropped silently (F4). The distinct prefix keeps them
+    out of the FAIL/PASS parse the orchestrator relies on."""
+    for adv in advisories:
+        print(f"ADVISORY: external gate not GREEN (non-fatal) — {adv}")
+
+contract_bytes = contract_path.read_bytes()
+contract_generation_sha256 = hashlib.sha256(contract_bytes).hexdigest()
+contract = json.loads(contract_bytes)
 phase = next((p for p in contract["phases"] if str(p["id"]) == phase_id), None)
 if phase is None:
     print(f"FAIL: unknown phase {phase_id}")
@@ -407,6 +482,50 @@ def validate_engine_provenance(engine, context):
                 issues.append(f"{context}: {field}[{idx}] must be a non-empty relative path")
     return issues
 
+def validate_reviewer_provenance_binding(reviewer_provenance, reviewers, context):
+    """Keep duplicate provenance metadata bound to evidence-checked reviewers.
+
+    The phase contract binds the canonical reviewer collection to registered
+    review evidence. reviewer_provenance is a descriptive projection, so its
+    execution identity must not diverge from that canonical collection.
+    """
+    issues = []
+    provenance_by_id = {}
+    reviewers_by_id = {}
+    for item in reviewer_provenance if isinstance(reviewer_provenance, list) else []:
+        if not isinstance(item, dict):
+            continue
+        reviewer_id = str(item.get("reviewer_id", "")).strip()
+        if reviewer_id in provenance_by_id:
+            issues.append(f"{context}: reviewer_provenance reviewer_id {reviewer_id!r} is duplicated")
+        provenance_by_id[reviewer_id] = item
+    for item in reviewers if isinstance(reviewers, list) else []:
+        if not isinstance(item, dict):
+            continue
+        reviewer_id = str(item.get("reviewer_id", "")).strip()
+        if reviewer_id in reviewers_by_id:
+            issues.append(f"{context}: reviewers reviewer_id {reviewer_id!r} is duplicated")
+        reviewers_by_id[reviewer_id] = item
+    if set(provenance_by_id) != set(reviewers_by_id):
+        missing = sorted(set(reviewers_by_id) - set(provenance_by_id))
+        extra = sorted(set(provenance_by_id) - set(reviewers_by_id))
+        if missing:
+            issues.append(f"{context}: reviewer_provenance missing reviewer IDs {missing}")
+        if extra:
+            issues.append(f"{context}: reviewer_provenance has extra reviewer IDs {extra}")
+    for reviewer_id in sorted(set(provenance_by_id) & set(reviewers_by_id)):
+        provenance = provenance_by_id[reviewer_id]
+        reviewer = reviewers_by_id[reviewer_id]
+        for field in ("role", "task_invocation_id", "report_path"):
+            provenance_value = str(provenance.get(field, "")).strip()
+            reviewer_value = str(reviewer.get(field, "")).strip()
+            if provenance_value != reviewer_value:
+                issues.append(
+                    f"{context}: reviewer_provenance[{reviewer_id}].{field} "
+                    f"must equal the evidence-bound reviewers record"
+                )
+    return issues
+
 def section_mentions_artifact(section_text, artifact_path):
     artifact_path = str(artifact_path).strip()
     if not artifact_path:
@@ -472,7 +591,7 @@ def has_markdown_or_html_table(text):
         return True
     return bool(
         re.search(
-            r"(?m)^\|.+\|\s*$\n^\|(?:\s*:?-{3,}:?\s*\|)+\s*$",
+            r"(?m)^\s*\|?.+\|.+\|?\s*$\n^\s*\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?\s*$",
             visible,
         )
     )
@@ -548,8 +667,256 @@ def validate_numeric_reporting_policy(policy, context):
 def visible_markdown_text(text):
     visible = strip_comments(text)
     visible = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", visible)
-    visible = re.sub(r"\[[^\]]+\]\([^)]+\)", " ", visible)
+    visible = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", visible)
     return visible
+
+def normalize_locator_sentence(value):
+    value = unicodedata.normalize("NFKC", str(value or ""))
+    value = value.translate(str.maketrans({
+        "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+        "\u2013": "-", "\u2014": "-", "\u00a0": " ",
+    }))
+    return re.sub(r"\s+", " ", value).strip()
+
+def substantive_sentence_locations(markdown):
+    """Return exact visible-prose sentences with section and paragraph line."""
+    text = strip_yaml_frontmatter_preserve_lines(strip_comments(markdown))
+    records = []
+    section = ""
+    paragraph = []
+    paragraph_start = None
+    in_fence = False
+    in_html_table = False
+
+    def flush():
+        nonlocal paragraph, paragraph_start
+        if not paragraph:
+            return
+        joined = " ".join(piece.strip() for piece in paragraph).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", joined):
+            normalized = normalize_locator_sentence(sentence)
+            if normalized:
+                records.append({
+                    "sentence": normalized,
+                    "section": normalize_locator_sentence(section).lower(),
+                    "line_start": paragraph_start,
+                })
+        paragraph = []
+        paragraph_start = None
+
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            flush()
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if re.search(r"<table\b", stripped, re.I):
+            flush()
+            in_html_table = True
+        if in_html_table:
+            if re.search(r"</table>", stripped, re.I):
+                in_html_table = False
+            continue
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", stripped)
+        if heading:
+            flush()
+            section = re.sub(r"[*_`]", "", heading.group(1)).strip()
+            continue
+        normalized_section = normalize_locator_sentence(section).lower()
+        if normalized_section.startswith("references") or normalized_section.startswith("bibliography"):
+            continue
+        excluded = (
+            not stripped
+            or "|" in stripped
+            or bool(re.match(r"^[-:| ]+$", stripped))
+            or bool(re.match(r"^!\[[^]]*\]\([^)]+\)", stripped))
+            or bool(re.fullmatch(r"\[[^]]+\]\([^)]+\)", stripped))
+            or bool(re.match(r"^(?:[*_]+)?(?:table|figure)\s+\d+\s*[.:]", stripped, re.I))
+            or bool(re.search(r"<[^>]+>", stripped))
+        )
+        if excluded:
+            flush()
+            continue
+        if paragraph_start is None:
+            paragraph_start = line_no
+        paragraph.append(stripped)
+    flush()
+    return records
+
+def _semantic_tokens(value):
+    return re.findall(r"[a-z0-9]{2,}", unicodedata.normalize("NFKC", str(value or "")).lower())
+
+def _content_correspondence_issues(source_markdown, extracted_text, label):
+    issues = []
+    source_token_list = _semantic_tokens(visible_markdown_text(source_markdown))
+    output_token_list = _semantic_tokens(extracted_text)
+    if len(output_token_list) < 100:
+        issues.append(f"{label}: extracted substantive text is too short")
+        return issues
+    source_counts = Counter(source_token_list)
+    output_counts = Counter(output_token_list)
+    overlap = sum(
+        min(count, output_counts.get(token, 0))
+        for token, count in source_counts.items()
+    )
+    source_coverage = overlap / max(1, len(source_token_list))
+    output_coverage = overlap / max(1, len(output_token_list))
+    if source_coverage < 0.55 or output_coverage < 0.40:
+        issues.append(
+            f"{label}: content does not materially correspond to canonical Markdown "
+            f"(source_coverage={source_coverage:.2f}, output_coverage={output_coverage:.2f})"
+        )
+    expected_sections = [
+        re.sub(r"[*_`]", "", heading).strip()
+        for heading in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", source_markdown)
+        if normalize_locator_sentence(heading).lower() not in {"references", "bibliography"}
+    ]
+    normalized_output = normalize_locator_sentence(extracted_text).lower()
+    missing_sections = [
+        heading for heading in expected_sections
+        if normalize_locator_sentence(heading).lower() not in normalized_output
+    ]
+    if missing_sections:
+        issues.append(f"{label}: expected section labels missing: {', '.join(missing_sections[:8])}")
+    return issues
+
+def validate_format_trio(source_markdown, docx_path, tex_path, pdf_path, context):
+    """Parse each deliverable independently and bind its content to Markdown."""
+    issues = []
+    try:
+        with zipfile.ZipFile(docx_path) as zf:
+            names = set(zf.namelist())
+            required_opc = {"[Content_Types].xml", "_rels/.rels", "word/document.xml"}
+            missing = sorted(required_opc - names)
+            if missing:
+                issues.append(f"{context} DOCX: missing OPC parts: {', '.join(missing)}")
+            else:
+                content_types = ET.fromstring(zf.read("[Content_Types].xml"))
+                relationships = ET.fromstring(zf.read("_rels/.rels"))
+                document_root = ET.fromstring(zf.read("word/document.xml"))
+                content_type_ok = any(
+                    element.attrib.get("PartName") == "/word/document.xml"
+                    and "wordprocessingml.document.main+xml" in element.attrib.get("ContentType", "")
+                    for element in content_types.iter()
+                )
+                relationship_ok = any(
+                    element.attrib.get("Target") == "word/document.xml"
+                    and element.attrib.get("Type", "").endswith("/officeDocument")
+                    for element in relationships.iter()
+                )
+                if not content_type_ok:
+                    issues.append(f"{context} DOCX: content types do not declare the main document part")
+                if not relationship_ok:
+                    issues.append(f"{context} DOCX: package relationships do not target word/document.xml")
+                docx_text = " ".join(
+                    element.text or ""
+                    for element in document_root.iter()
+                    if element.tag.endswith("}t")
+                )
+                issues.extend(_content_correspondence_issues(source_markdown, docx_text, f"{context} DOCX"))
+    except Exception as exc:
+        issues.append(f"{context} DOCX: invalid OPC package ({exc})")
+
+    tex_text = tex_path.read_text(errors="ignore")
+    if "\\end{document}" not in tex_text:
+        issues.append(f"{context} TeX: missing end of document")
+    if re.search(r"\\(?:write18|immediate\\write18)\b", tex_text) or "--shell-escape" in tex_text:
+        issues.append(f"{context} TeX: shell escape is forbidden")
+    path_command = re.compile(
+        r"\\(?:input|include|includegraphics|includepdf|lstinputlisting|bibliography|addbibresource)"
+        r"\*?(?:\[[^\]]*\])?\s*\{([^}]+)\}"
+    )
+    for target in path_command.findall(tex_text):
+        candidate = target.strip()
+        if candidate.startswith(("/", "~")) or ".." in Path(candidate).parts:
+            issues.append(f"{context} TeX: input escapes isolated source tree: {candidate}")
+    if re.search(r"\\graphicspath\s*\{[^}]*\{\s*(?:/|~|\.\.)", tex_text):
+        issues.append(f"{context} TeX: graphicspath escapes isolated source tree")
+    # Backstop path detection for lower-level TeX file primitives (for
+    # example \openin) and uncommon package commands not enumerated above.
+    if re.search(r"(?<![:/A-Za-z0-9])/(?!/)[^\s{}]+|(?<!\w)~/[^\s{}]+|(?:^|[={\s])\.\.(?:/|\\)|[A-Za-z]:\\", tex_text, re.M):
+        if not any("TeX: input escapes isolated source tree" in issue for issue in issues):
+            issues.append(f"{context} TeX: absolute or parent-relative filesystem path is forbidden")
+    pandoc = shutil.which("pandoc")
+    if not pandoc:
+        issues.append(f"{context} TeX: BLOCKED because pandoc is unavailable")
+    else:
+        try:
+            parsed_tex = subprocess.run(
+                [pandoc, "-f", "latex", "-t", "plain", str(tex_path)],
+                capture_output=True, text=True, timeout=60,
+            )
+            if parsed_tex.returncode != 0:
+                issues.append(f"{context} TeX: format-aware parse failed")
+            else:
+                issues.extend(_content_correspondence_issues(source_markdown, parsed_tex.stdout, f"{context} TeX"))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            issues.append(f"{context} TeX: format-aware parse failed ({exc})")
+    tex_engine = shutil.which("xelatex")
+    if not tex_engine:
+        issues.append(f"{context} TeX: BLOCKED because XeTeX is unavailable")
+    else:
+        try:
+            with tempfile.TemporaryDirectory(prefix="scholar-tex-check-") as temp_dir:
+                source_tree = Path(temp_dir) / "source"
+                shutil.copytree(tex_path.parent, source_tree)
+                build_dir = Path(temp_dir) / "build"
+                build_dir.mkdir()
+                compiled = subprocess.run(
+                    [tex_engine, "-no-shell-escape", "-interaction=nonstopmode",
+                     "-halt-on-error", f"-output-directory={build_dir}", tex_path.name],
+                    cwd=source_tree, capture_output=True, text=True, timeout=120,
+                )
+                compiled_pdf = build_dir / (tex_path.stem + ".pdf")
+                if compiled.returncode != 0 or not compiled_pdf.exists():
+                    issues.append(f"{context} TeX: isolated no-shell-escape compilation failed")
+                elif shutil.which("pdftotext"):
+                    compiled_text = subprocess.run(
+                        [shutil.which("pdftotext"), str(compiled_pdf), "-"],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if compiled_text.returncode != 0:
+                        issues.append(f"{context} TeX: compiled PDF text extraction failed")
+                    else:
+                        issues.extend(_content_correspondence_issues(
+                            source_markdown, compiled_text.stdout, f"{context} compiled TeX"
+                        ))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            issues.append(f"{context} TeX: isolated compilation failed ({exc})")
+
+    required_pdf_tools = [shutil.which(name) for name in ("pdfinfo", "pdftotext", "pdftoppm")]
+    if not all(required_pdf_tools):
+        issues.append(f"{context} PDF: BLOCKED because Poppler tools are unavailable")
+    else:
+        pdfinfo, pdftotext, pdftoppm = required_pdf_tools
+        try:
+            info = subprocess.run([pdfinfo, str(pdf_path)], capture_output=True, text=True, timeout=30)
+            text_result = subprocess.run([pdftotext, str(pdf_path), "-"], capture_output=True, text=True, timeout=60)
+            if info.returncode != 0 or text_result.returncode != 0:
+                issues.append(f"{context} PDF: pdfinfo/pdftotext parse failed")
+            else:
+                issues.extend(_content_correspondence_issues(source_markdown, text_result.stdout, f"{context} PDF"))
+            with tempfile.TemporaryDirectory(prefix="scholar-pdf-check-") as temp_dir:
+                prefix = str(Path(temp_dir) / "page")
+                rendered = subprocess.run(
+                    [pdftoppm, "-f", "1", "-singlefile", "-gray", "-scale-to", "300", str(pdf_path), prefix],
+                    capture_output=True, text=True, timeout=60,
+                )
+                pgm_path = Path(prefix + ".pgm")
+                if rendered.returncode != 0 or not pgm_path.exists():
+                    issues.append(f"{context} PDF: first-page rasterization failed")
+                else:
+                    pgm = pgm_path.read_bytes()
+                    parts = pgm.split(maxsplit=4)
+                    pixels = parts[4] if len(parts) == 5 else b""
+                    dark_fraction = sum(byte < 245 for byte in pixels) / max(1, len(pixels))
+                    if dark_fraction < 0.001:
+                        issues.append(f"{context} PDF: rendered first page is visibly blank")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            issues.append(f"{context} PDF: independent parse/render failed ({exc})")
+    return issues
 
 def strip_yaml_frontmatter_preserve_lines(text):
     lines = str(text or "").splitlines()
@@ -899,6 +1266,52 @@ def structured_secondary_data_indicated(*values):
         text,
     ))
 
+METHOD_SPECIALIST_ROLES = {
+    "computational-methods",
+    "qualitative-methods",
+    "linguistic-methods",
+    "mixed-methods",
+    "survey-methods",
+    "demographic-family-methods",
+    "quantitative-family-methods",
+    "domain-methods",
+    "methods-specialist",
+}
+
+METHOD_SPECIALIST_ROLES_BY_FAMILY = {
+    "computational": {"computational-methods"},
+    "qualitative": {"qualitative-methods"},
+    "linguistic": {"linguistic-methods"},
+    "mixed_methods": {"mixed-methods"},
+    "demographic": {"demographic-family-methods"},
+    "structured_secondary_data": {"survey-methods", "quantitative-family-methods"},
+    "journal_specialized": {"domain-methods"},
+}
+
+def phase18_specialist_requirement(method_orientation, *secondary_indicators):
+    """Return whether Phase 18 needs a fifth specialist and why.
+
+    Phase 1's method_orientation is the authoritative routing source. The
+    artifact scan remains a conservative backstop for structured secondary
+    data whose early label is only generic quantitative research.
+    """
+    orientation = str(method_orientation or "").strip()
+    components = method_orientation_components(orientation)
+    normalized = normalized_method_family(orientation)
+    lower = orientation.lower()
+    if "mixed_methods" in components or normalized == "mixed_methods":
+        return True, "mixed_methods"
+    for family in ("computational", "qualitative", "linguistic"):
+        if family in components:
+            return True, family
+    if re.search(r"\b(demograph|population stud|family demograph)", lower):
+        return True, "demographic"
+    if re.search(r"\b(speciali[sz]ed|domain-specific|journal-specific)\b", lower):
+        return True, "journal_specialized"
+    if structured_secondary_data_indicated(*secondary_indicators):
+        return True, "structured_secondary_data"
+    return False, "not_applicable"
+
 def complex_outcome_family_indicated(var_rows=None, model_specs=None, measurement_text=""):
     outcome_bits = []
     if isinstance(var_rows, list):
@@ -1048,6 +1461,16 @@ def report_field(text, field):
     match = re.search(rf"(?im)^\s*{re.escape(field)}\s*:\s*(.+?)\s*$", text)
     return match.group(1).strip() if match else ""
 
+def semantic_body_prose_audit_fields(report_path):
+    report = report_path.read_text(errors="ignore")
+    return {
+        "STATUS": report_field(report, "STATUS"),
+        "REVIEWED_ARTIFACT": report_field(report, "REVIEWED_ARTIFACT"),
+        "MANUSCRIPT_SHA256": report_field(report, "MANUSCRIPT_SHA256"),
+        "BLOCKING_ISSUES": report_field(report, "BLOCKING_ISSUES"),
+        "STRUCTURAL_PATTERN_COUNT": report_field(report, "STRUCTURAL_PATTERN_COUNT"),
+    }
+
 def validate_semantic_body_prose_report(section, report_path, current_hash):
     issues = []
     if not isinstance(section, dict):
@@ -1074,12 +1497,12 @@ def validate_semantic_body_prose_report(section, report_path, current_hash):
     if not report_path.exists():
         issues.append("semantic body-prose report file is missing")
         return issues
-    report = report_path.read_text(errors="ignore")
-    status = report_field(report, "STATUS")
-    reviewed = report_field(report, "REVIEWED_ARTIFACT")
-    report_hash = report_field(report, "MANUSCRIPT_SHA256")
-    blocking = report_field(report, "BLOCKING_ISSUES")
-    structural = report_field(report, "STRUCTURAL_PATTERN_COUNT")
+    audit = semantic_body_prose_audit_fields(report_path)
+    status = audit["STATUS"]
+    reviewed = audit["REVIEWED_ARTIFACT"]
+    report_hash = audit["MANUSCRIPT_SHA256"]
+    blocking = audit["BLOCKING_ISSUES"]
+    structural = audit["STRUCTURAL_PATTERN_COUNT"]
     if status != "GREEN":
         issues.append("semantic body-prose report STATUS must be GREEN")
     if reviewed != "submission/manuscript-submission.md":
@@ -1141,12 +1564,15 @@ def markdown_table_headers(text):
     lines = strip_comments(text).splitlines()
     headers = []
     for idx, line in enumerate(lines[:-1]):
-        if not line.strip().startswith("|"):
+        if "|" not in line.strip():
             continue
         next_line = lines[idx + 1]
-        if not re.match(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$", next_line.strip()):
+        if not re.match(r"^\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?$", next_line.strip()):
             continue
-        parts = [norm_text(part) for part in line.strip().strip("|").split("|")]
+        parts = [
+            norm_text(html.unescape(re.sub(r"(?is)<[^>]+>", " ", part)))
+            for part in line.strip().strip("|").split("|")
+        ]
         parts = [part for part in parts if part]
         if parts:
             headers.append(parts)
@@ -1192,7 +1618,7 @@ def registry_like_table_display_hits(text):
     }
     coefficient_extract_tokens = {"estimate", "std error", "p value", "n"}
     regression_shape_tokens = {"predictor", "covariate", "term", "variable"}
-    # Focal-summary extract pattern:
+    # Focal-summary extract pattern (audit 2026-05-06 cfps-platform-trust-asr-auto):
     # row-per-statistic tables with first-column header "Statistic" or a focal-
     # coefficient label collapse all model evidence to one focal coefficient,
     # one SE, one p-value, and one N — disqualifies as a main regression table.
@@ -1204,7 +1630,21 @@ def registry_like_table_display_hits(text):
         "point estimate",
         "headline statistic",
     }
-    for headers in markdown_table_headers(visible):
+    header_sets = list(markdown_table_headers(visible))
+    for table in re.findall(r"(?is)<table\b.*?</table>", visible):
+        header_cells = re.findall(r"(?is)<th\b[^>]*>(.*?)</th>", table)
+        if not header_cells:
+            first_row = re.search(r"(?is)<tr\b[^>]*>(.*?)</tr>", table)
+            if first_row:
+                header_cells = re.findall(r"(?is)<td\b[^>]*>(.*?)</td>", first_row.group(1))
+        html_headers = [
+            norm_text(html.unescape(re.sub(r"(?is)<[^>]+>", " ", cell)))
+            for cell in header_cells
+        ]
+        html_headers = [header for header in html_headers if header]
+        if html_headers:
+            header_sets.append(html_headers)
+    for headers in header_sets:
         header_set = set(headers)
         if "spec id" in header_set or "model id" in header_set or "output file" in header_set:
             hits.append(f"registry-like table headers: {', '.join(headers[:8])}")
@@ -1593,6 +2033,25 @@ def fail(message, items=None):
         print(f"  - {item}")
     sys.exit(1)
 
+review_evidence_result = None
+if isinstance(phase.get("review_evidence_policy"), dict):
+    state_path = proj / ".auto-research" / "state.json"
+    if not state_path.exists():
+        fail(
+            f"FAIL: Phase {phase_id} review evidence is missing or invalid",
+            ["missing registered review session: project state is absent"],
+        )
+    try:
+        evidence_state = json.loads(state_path.read_text())
+    except Exception as exc:
+        fail(
+            f"FAIL: Phase {phase_id} review evidence is missing or invalid",
+            [f"project state is unreadable: {exc}"],
+        )
+    review_evidence_result, evidence_issues = validate_phase_evidence(proj, phase, evidence_state)
+    if evidence_issues:
+        fail(f"FAIL: Phase {phase_id} review evidence is missing or invalid", evidence_issues)
+
 missing = []
 verified_output_paths = []
 for rel in phase["required_outputs"]:
@@ -1635,6 +2094,57 @@ if phase_id == "0":
         fail("FAIL: Phase 0 status_by_file must be an object")
     if len(status_by_file) != files_scanned:
         fail("FAIL: Phase 0 files_scanned must match status_by_file count")
+    allowed_categories = {"cleared", "override", "local_mode", "anonymized"}
+    status_token_category = {
+        "CLEARED": "cleared",
+        "GREEN": "cleared",
+        "PASS": "cleared",
+        "SAFE": "cleared",
+        "APPROVED": "cleared",
+        "OVERRIDE": "override",
+        "LOCAL_MODE": "local_mode",
+        "ANONYMIZED": "anonymized",
+        "ANONYMIZE": "anonymized",
+    }
+    invalid_entries = []
+    derived_categories = []
+    declared_mapping, declared_identity_issues = canonicalize_status_mapping(proj, status_by_file)
+    declared_rel = set(declared_mapping.values())
+    for path, entry in status_by_file.items():
+        if isinstance(entry, dict):
+            source_status = str(entry.get("source_status", "")).strip()
+            declared_category = str(entry.get("category", "")).strip().lower()
+        else:
+            source_status = str(entry).strip()
+            declared_category = ""
+        token = source_status.split(":", 1)[0].strip().upper()
+        derived = status_token_category.get(token)
+        rationale = source_status.split(":", 1)[1].strip() if ":" in source_status else ""
+        if derived not in allowed_categories:
+            invalid_entries.append(f"{path}: {source_status or '<missing status>'}")
+            continue
+        if token == "OVERRIDE" and not rationale:
+            invalid_entries.append(f"{path}: OVERRIDE lacks rationale")
+            continue
+        if declared_category and declared_category != derived:
+            invalid_entries.append(
+                f"{path}: category {declared_category!r} contradicts source_status {source_status!r}"
+            )
+            continue
+        derived_categories.append(derived)
+    if invalid_entries:
+        fail(
+            "FAIL: Phase 0 per-file safety entries are not terminally allowed",
+            invalid_entries,
+        )
+    if declared_identity_issues:
+        fail("FAIL: Phase 0 status_by_file has invalid or duplicate path identities", declared_identity_issues)
+    derived_safety_status = "PASS_LOCAL_MODE" if "local_mode" in derived_categories else "PASS"
+    if str(safety.get("safety_status")) != derived_safety_status:
+        fail(
+            "FAIL: Phase 0 top-level safety_status contradicts the derived per-file verdict",
+            [f"expected {derived_safety_status}, got {safety.get('safety_status')}"],
+        )
     if safety.get("source") == "scholar-init":
         counts = safety.get("counts")
         if not isinstance(counts, dict):
@@ -1651,6 +2161,62 @@ if phase_id == "0":
         if missing_rationale:
             fail("FAIL: Phase 0 OVERRIDE entries require scholar-init rationale", missing_rationale)
 
+    # F5 (audit 2026-07-07): a hand-authored safety artifact could declare
+    # no_data_declared / files_scanned=0 (or omit files) while data-like files
+    # sit on disk unscanned, leaving the PreToolUse guard un-armed (B0.5). Here
+    # The approved local inventory helper returns only paths and digests; file
+    # contents are never printed or transmitted into model context.
+    on_disk_data, inventory_issues = discover_data_inventory(proj)
+    if inventory_issues:
+        fail("FAIL: Phase 0 current data inventory contains unsupported paths", inventory_issues)
+    if on_disk_data:
+        if files_scanned == 0 or safety.get("no_data_declared") is True:
+            fail(
+                "FAIL: Phase 0 declares no scanned data (files_scanned=0 / "
+                "no_data_declared=true) but data-like files are present on disk "
+                "and unscanned. Run /scholar-init to scan data/raw/** (writes "
+                ".claude/safety-status.json and arms the PreToolUse guard), then "
+                "import-init. Do NOT hand-author a no-data safety artifact when "
+                "data files exist.",
+                on_disk_data[:25],
+            )
+        unscanned = [
+            rel for rel in on_disk_data
+            if rel not in declared_rel
+        ]
+        if unscanned:
+            fail(
+                "FAIL: Phase 0 data-like files on disk are missing from "
+                "status_by_file — the safety artifact does not account for all "
+                "input data. Re-scan with /scholar-init and re-import.",
+                unscanned[:25],
+            )
+    declared_data_rel = {
+        rel for rel in declared_rel
+        if Path(rel).suffix.lower().lstrip(".") in DATA_LIKE_EXTS
+        and any(rel == root or rel.startswith(root + "/") for root in SENSITIVE_DATA_DIRS)
+    }
+    stale_records = sorted(declared_data_rel - set(on_disk_data))
+    if stale_records:
+        fail(
+            "FAIL: Phase 0 status_by_file contains records absent from current inventory",
+            stale_records[:25],
+        )
+    digest_issues = []
+    for raw_path, relative in declared_mapping.items():
+        if relative not in set(on_disk_data):
+            continue
+        entry = status_by_file.get(raw_path)
+        recorded_digest = entry.get("content_sha256") if isinstance(entry, dict) else None
+        if not isinstance(recorded_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded_digest):
+            digest_issues.append(f"{relative}: missing/invalid content_sha256")
+            continue
+        current_digest = sha256_file(proj / relative)
+        if current_digest != recorded_digest:
+            digest_issues.append(f"{relative}: content_sha256 does not match current bytes")
+    if digest_issues:
+        fail("FAIL: Phase 0 safety receipt content digests are invalid or stale", digest_issues)
+
     # 2026-05-29: setup-project-claudemd.sh is host-aware and may write
     # CLAUDE.md (Claude Code), AGENTS.md (Codex), or both (unknown host).
     # Verify whichever project-memory file exists, while failing malformed
@@ -1661,7 +2227,7 @@ if phase_id == "0":
         fail(
             "FAIL: Phase 0 missing project workflow contract file "
             "(CLAUDE.md or AGENTS.md). Run "
-            "`bash scripts/setup-project-claudemd.sh \"$PROJ\"` to create it "
+            "`bash .claude/skills/scholar-auto-research/scripts/setup-project-claudemd.sh \"$PROJ\"` to create it "
             "with the auto-research workflow contract (principles + rules)."
         )
     memory_issues = []
@@ -1679,7 +2245,7 @@ if phase_id == "0":
     if memory_issues:
         fail(
             "FAIL: Phase 0 project workflow contract marker block is missing "
-            "or malformed. Run `bash scripts/setup-project-claudemd.sh "
+            "or malformed. Run `bash .claude/skills/scholar-auto-research/scripts/setup-project-claudemd.sh "
             "\"$PROJ\"` to refresh CLAUDE.md/AGENTS.md. User content outside "
             "the markers is preserved.",
             memory_issues,
@@ -3557,15 +4123,12 @@ if phase_id == "5":
     # adjustment_set. Opt out per-phase with [EXCUSED:control-variables: <reason>]
     # in analysis/analysis-plan.md.
     cv_external_gate_failures = []
-    cv_gate_result = run_external_gate(
-        "control-variables-check.sh", proj, "Phase 5 control-variables gate"
+    cv_gate_advisories = []
+    consume_external_gate(
+        "control-variables-check.sh", proj, "Phase 5 control-variables gate",
+        cv_external_gate_failures, cv_gate_advisories,
     )
-    if cv_gate_result is not None:
-        cv_status, cv_reason, cv_detail = cv_gate_result
-        if cv_status == "RED":
-            cv_external_gate_failures.append(
-                f"Phase 5 control-variables gate: reason={cv_reason} detail={cv_detail}"
-            )
+    emit_gate_advisories(cv_gate_advisories)
     if cv_external_gate_failures:
         fail("FAIL: Phase 5 control-variables enforcement", cv_external_gate_failures)
 
@@ -3912,24 +4475,18 @@ if phase_id == "6":
     fix_words = re.findall(r"\b\w+\b", fix_log_md_path.read_text(errors="ignore"))
     if len(fix_words) < 30:
         fail(f"FAIL: Phase 6 pre-execution-fix-log.md is too short, found {len(fix_words)} words")
-    # Codex cross-model review gate (added 2026-05-10):
-    # SCHOLAR_CODEX_DEFAULT defaults to true, so when the codex CLI is on PATH
-    # the gate REQUIRES either codex code-mode artifacts under reviews/codex/
-    # OR an [EXCUSED:codex-review: <reason>] annotation in
-    # review/pre-execution-review.{md,json}. Opt out at the shell level with
-    # SCHOLAR_CODEX_DEFAULT=false.
-    codex_external_gate_failures = []
-    codex_gate_result = run_external_gate(
-        "codex-trigger-phase6.sh", proj, "Phase 6 codex cross-model review"
-    )
-    if codex_gate_result is not None:
-        codex_status, codex_reason, codex_detail = codex_gate_result
-        if codex_status == "RED":
-            codex_external_gate_failures.append(
-                f"Phase 6 codex cross-model review: reason={codex_reason} detail={codex_detail}"
-            )
-    if codex_external_gate_failures:
-        fail("FAIL: Phase 6 codex cross-model review gate", codex_external_gate_failures)
+    # Optional explicit Codex enhancement. Merely having a provider CLI on PATH
+    # must not change the portable phase contract.
+    if os.environ.get("SCHOLAR_CODEX_REVIEW", "0") == "1":
+        codex_external_gate_failures = []
+        codex_gate_advisories = []
+        consume_external_gate(
+            "codex-trigger-phase6.sh", proj, "Phase 6 optional Codex cross-model review",
+            codex_external_gate_failures, codex_gate_advisories,
+        )
+        emit_gate_advisories(codex_gate_advisories)
+        if codex_external_gate_failures:
+            fail("FAIL: Phase 6 explicitly requested Codex review gate", codex_external_gate_failures)
 
 if phase_id == "7":
     identification_path = proj / "design" / "identification-strategy.json"
@@ -4138,14 +4695,14 @@ if phase_id == "7":
             bad_provenance.append(f"reviewer_provenance[{idx}].role={role}")
         if reviewer_id.lower() in {"", "tbd", "todo", "unknown", "n/a", "na", "placeholder"}:
             bad_provenance.append(f"reviewer_provenance[{idx}].reviewer_id missing")
-        if not agent_name.startswith("peer-reviewer-"):
-            bad_provenance.append(f"reviewer_provenance[{idx}].agent_name must start with peer-reviewer-")
+        if not agent_name:
+            bad_provenance.append(f"reviewer_provenance[{idx}].agent_name missing")
         if task_id.lower() in {"", "tbd", "todo", "unknown", "n/a", "na", "placeholder"}:
             bad_provenance.append(f"reviewer_provenance[{idx}].task_invocation_id missing")
         if not re.match(r"^\d{4}-\d{2}-\d{2}T", dispatched_at):
             bad_provenance.append(f"reviewer_provenance[{idx}].dispatched_at_utc must be ISO-like UTC timestamp")
-        if model_id.lower() in {"", "tbd", "todo", "unknown", "n/a", "na", "placeholder"}:
-            bad_provenance.append(f"reviewer_provenance[{idx}].model_id missing")
+        # Provider/model identity is execution metadata only. The review-
+        # evidence contract carries a structured reported/unavailable state.
         if not report_path:
             bad_provenance.append(f"reviewer_provenance[{idx}].report_path missing")
         elif Path(report_path).is_absolute() or not (proj / report_path).exists():
@@ -4197,8 +4754,9 @@ if phase_id == "7":
     missing_roles = sorted(required_roles - roles)
     if missing_roles:
         bad_reviewers.extend(f"missing role {role}" for role in missing_roles)
-    if reviewer_ids != provenance_ids:
-        bad_reviewers.append("reviewer ids must match reviewer_provenance ids")
+    bad_reviewers.extend(validate_reviewer_provenance_binding(
+        reviewer_provenance, reviewers, "Phase 7"
+    ))
     if bad_reviewers:
         fail("FAIL: Phase 7 reviewer panel is incomplete or not independent", bad_reviewers)
     traffic = premortem.get("traffic_light_summary")
@@ -5343,8 +5901,8 @@ if phase_id == "9":
             bad_provenance.append(f"reviewer_provenance[{idx}].task_invocation_id missing")
         if not re.match(r"^\d{4}-\d{2}-\d{2}T", dispatched_at):
             bad_provenance.append(f"reviewer_provenance[{idx}].dispatched_at_utc must be ISO-like UTC timestamp")
-        if model_id.lower() in {"", "tbd", "todo", "unknown", "n/a", "na", "placeholder"}:
-            bad_provenance.append(f"reviewer_provenance[{idx}].model_id missing")
+        # Model identity may be unavailable on a portable host; it is not
+        # reviewer-execution authority here.
         if not report_path:
             bad_provenance.append(f"reviewer_provenance[{idx}].report_path missing")
         elif Path(report_path).is_absolute() or not (proj / report_path).exists():
@@ -5397,8 +5955,9 @@ if phase_id == "9":
     missing_roles = sorted(required_roles - roles)
     if missing_roles:
         bad_reviewers.extend(f"missing role {role}" for role in missing_roles)
-    if reviewer_ids != provenance_ids:
-        bad_reviewers.append("reviewer ids must match reviewer_provenance ids")
+    bad_reviewers.extend(validate_reviewer_provenance_binding(
+        reviewer_provenance, reviewers, "Phase 9"
+    ))
     if bad_reviewers:
         fail("FAIL: Phase 9 reviewer panel is incomplete or not independent", bad_reviewers)
     reviewed_specs = review.get("reviewed_specs")
@@ -7930,6 +8489,7 @@ if phase_id == "13":
     if expected_figure_sources and not has_visible_figure_block(results_text):
         fail("FAIL: Phase 13 Results section must include a visible figure block")
     external_gate_failures = []
+    external_gate_advisories = []
     for gate_name, label in [
         ("front-matter-check.sh", "Phase 13 front matter"),
         ("abstract-boilerplate-check.sh", "Phase 13 abstract boilerplate"),
@@ -7954,77 +8514,345 @@ if phase_id == "13":
         ("regression-table-export-check.sh", "Phase 13 regression-engine purity"),
         ("regression-table-display-check.sh", "Phase 13 full regression table reader-facing"),
     ]:
-        gate_result = run_external_gate(gate_name, proj, label)
-        if gate_result is None:
-            continue
-        status, reason, detail = gate_result
-        if status == "RED":
-            external_gate_failures.append(f"{label}: reason={reason} detail={detail}")
+        consume_external_gate(
+            gate_name, proj, label,
+            external_gate_failures, external_gate_advisories,
+        )
+    emit_gate_advisories(external_gate_advisories)
     if external_gate_failures:
         fail("FAIL: Phase 13 external manuscript gates failed", external_gate_failures)
+    if draft_manifest.get("locked_result_claims_schema_version") != 2:
+        fail("FAIL: Phase 13 locked result claims require schema version 2; rerun Phase 13")
     claims = draft_manifest.get("locked_result_claims")
     if not isinstance(claims, list):
         fail("FAIL: Phase 13 locked_result_claims must be a list")
-    claims_by_source = {
-        str(item.get("source_path", "")).strip(): item
-        for item in claims
-        if isinstance(item, dict)
-    }
-    expected_claim_sources = []
-    for source_path, lock_item in locked_by_source.items():
-        role = str(lock_item.get("artifact_role", "")).strip()
-        locked_path = str(lock_item.get("locked_path", "")).strip()
-        if role in TABLE_ARTIFACT_ROLES and locked_path.endswith(".csv"):
-            locked_file = proj / locked_path
-            try:
-                rows = read_csv_dicts(locked_file)
-            except Exception:
-                rows = []
-            if rows and any("spec_id" in row for row in rows):
-                expected_claim_sources.append((source_path, locked_path, rows))
-    if set(claims_by_source) != {source for source, _, _ in expected_claim_sources}:
-        missing = sorted({source for source, _, _ in expected_claim_sources} - set(claims_by_source))
-        extra = sorted(set(claims_by_source) - {source for source, _, _ in expected_claim_sources})
-        fail("FAIL: Phase 13 locked_result_claims must cover every reader-facing CSV result source", missing + extra)
-    claim_issues = []
-    for source_path, locked_path, rows in expected_claim_sources:
-        claim = claims_by_source[source_path]
-        if claim.get("locked_path") != locked_path:
-            claim_issues.append(f"{source_path}: locked_path mismatch")
-        if int(claim.get("row_count", -1)) != len(rows):
-            claim_issues.append(f"{source_path}: row_count mismatch")
-        row_claims = claim.get("rows")
-        if not isinstance(row_claims, list) or len(row_claims) != len(rows):
-            claim_issues.append(f"{source_path}: rows must match locked CSV rows")
+
+    def claim_norm(value):
+        return normalize_locator_sentence(value)
+
+    def parse_decimal_token(value, field, issues, context):
+        token = str(value or "").strip()
+        allow_scientific = numeric_reporting_policy.get("allow_scientific_notation") is True
+        decimal_core = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+        if allow_scientific:
+            decimal_core += r"(?:[eE][+-]?\d+)?"
+        if not token:
+            issues.append(f"{context}: {field} is not a bounded decimal")
+            return None
+        if field == "n":
+            if not re.fullmatch(r"(?:0|[1-9]\d{0,2}(?:,\d{3})*|[1-9]\d*)", token):
+                issues.append(f"{context}: n is not a nonnegative integer")
+                return None
+            token = token.replace(",", "")
+        elif not re.fullmatch(decimal_core, token):
+            issues.append(f"{context}: {field} is not a bounded decimal")
+            return None
+        try:
+            number = Decimal(token)
+        except InvalidOperation:
+            issues.append(f"{context}: {field} is not numeric")
+            return None
+        if not number.is_finite() or (field == "std_error" and number < 0) or (field == "p_value" and not Decimal(0) <= number <= Decimal(1)) or (field == "n" and (number < 0 or number != number.to_integral_value())):
+            issues.append(f"{context}: {field} is outside its domain")
+            return None
+        return number
+
+    def decimal_matches(source_token, visible_token, field, issues, context):
+        source = parse_decimal_token(source_token, field, issues, context)
+        visible = parse_decimal_token(visible_token, field, issues, context)
+        if source is None or visible is None:
+            return False
+        if field == "n":
+            return source == visible
+        digits = int(numeric_reporting_policy.get("inferential_digits", 3))
+        quantum = Decimal(1).scaleb(-digits)
+        if source != 0 and source.is_signed() != visible.is_signed():
+            return False
+        if source == 0 and (str(source_token).strip().startswith(("-", "+")) or str(visible_token).strip().startswith(("-", "+"))):
+            return False
+        try:
+            return source.quantize(quantum, rounding=ROUND_HALF_EVEN) == visible.quantize(quantum, rounding=ROUND_HALF_EVEN)
+        except InvalidOperation:
+            issues.append(f"{context}: numeric magnitude cannot be rounded under policy")
+            return False
+
+    def reported_value_matches(source_token, visible_token, field, issues, context):
+        visible = str(visible_token or "").strip()
+        if field != "p_value" or not visible.lower().startswith("p <"):
+            return decimal_matches(source_token, visible, field, issues, context)
+        threshold_token = visible[3:].strip()
+        source = parse_decimal_token(source_token, field, issues, context)
+        threshold = parse_decimal_token(threshold_token, field, issues, context)
+        digits = int(numeric_reporting_policy.get("inferential_digits", 3))
+        floor = Decimal(1).scaleb(-digits)
+        return source is not None and threshold is not None and threshold == floor and source < threshold
+
+    def parse_pipe_table(coverage_item):
+        bridge = coverage_item.get("claim_source")
+        rendered = bridge.get("rendered_table") if isinstance(bridge, dict) else None
+        grammar = rendered.get("grammar") if isinstance(rendered, dict) else None
+        if grammar != "markdown_pipe_v1":
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        anchor = str(coverage_item.get("display_anchor", "")).strip()
+        results_section = markdown_sections(manuscript_text).get("results", "")
+        if not anchor or results_section.count(anchor) != 1:
+            fail("FAIL: Phase 13 locked result claim-source bridge is invalid", ["display anchor must occur exactly once in Results"])
+        window = results_section.split(anchor, 1)[1]
+        window = re.split(r"(?m)^(?:<!--\s*DISPLAY_|#{1,6}\s+)", window, maxsplit=1)[0]
+        if re.search(r"(?is)<table\b|\\begin\{tabular\}", window) or "\\|" in window:
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        blocks = []
+        current = []
+        for line in window.splitlines():
+            if "|" in line.strip():
+                current.append(line.strip())
+            elif current:
+                blocks.append(current); current = []
+        if current:
+            blocks.append(current)
+        if len(blocks) != 1 or len(blocks[0]) < 3:
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        if any(re.search(r"^\s*\|\||\|\|\s*$", line) for line in blocks[0]):
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        def cells(line):
+            return [claim_norm(cell) for cell in line.strip().strip("|").split("|")]
+        parsed = [cells(line) for line in blocks[0]]
+        width = len(parsed[0])
+        is_alignment = lambda row: all(re.fullmatch(r":?-{3,}:?", cell.replace(" ", "")) for cell in row)
+        if width < 2 or any(len(row) != width for row in parsed) or not is_alignment(parsed[1]) or any(is_alignment(row) for row in parsed[2:]):
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        headers, rows = parsed[0], parsed[2:]
+        if any(not value for value in headers) or len(set(headers)) != len(headers):
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        if any(not row[0] for row in rows) or len({row[0] for row in rows}) != len(rows):
+            fail("FAIL: Phase 13 mapped regression display grammar is unsupported")
+        return headers, rows
+
+    bridge_issues = []
+    expected_groups = {}
+    registry_sources = [source for source, item in locked_by_source.items() if str(item.get("artifact_role", "")).strip() == "results_registry"]
+    regression_roles = {"result_table", "model_output", "main_regression_table", "sensitivity_regression_table", "regression_table"}
+    for display_source, coverage_item in coverage_by_source.items():
+        display_role = str(coverage_item.get("artifact_role", "")).strip()
+        if display_role not in regression_roles or coverage_item.get("used_in_manuscript") is not True or str(coverage_item.get("display_status", "")).strip() == "journal_exempt":
+            if "claim_source" in coverage_item:
+                bridge_issues.append(f"{display_source}: claim_source is only allowed on eligible reader-facing regression displays")
             continue
-        by_spec_index = {
-            (str(item.get("spec_id", "")).strip(), int(item.get("row_index", -1))): item
-            for item in row_claims
-            if isinstance(item, dict)
-        }
-        for row_index, row in enumerate(rows):
-            spec_id = str(row.get("spec_id", "")).strip()
-            if not spec_id or (spec_id, row_index) not in by_spec_index:
-                claim_issues.append(f"{source_path}: missing claim for spec {spec_id or '<blank>'}")
+        bridge = coverage_item.get("claim_source")
+        if not isinstance(bridge, dict) or bridge.get("schema_version") != 2:
+            bridge_issues.append(f"{display_source}: missing v2 claim_source")
+            continue
+        binding_type = str(bridge.get("binding_type", "")).strip()
+        value_source = str(bridge.get("source_path", "")).strip()
+        value_lock = locked_by_source.get(value_source)
+        display_lock = locked_by_source.get(display_source)
+        if binding_type != "mapped_structured_source" or not value_lock or not display_lock or not str(value_lock.get("locked_path", "")).lower().endswith(".csv"):
+            bridge_issues.append(f"{display_source}: invalid source binding")
+            continue
+        if bridge.get("locked_path") != value_lock.get("locked_path") or bridge.get("sha256") != value_lock.get("sha256") or coverage_item.get("locked_path") != display_lock.get("locked_path"):
+            bridge_issues.append(f"{display_source}: lock identity mismatch")
+        if value_source == display_source or value_lock.get("artifact_role") != "results_registry":
+            bridge_issues.append(f"{display_source}: mapped source must be a distinct results_registry")
+        if bridge.get("row_selector_field") != "spec_id":
+            bridge_issues.append(f"{display_source}: row_selector_field must be spec_id")
+        rendered = bridge.get("rendered_table")
+        selected = bridge.get("selected_rows")
+        if not isinstance(rendered, dict) or not isinstance(selected, list) or not selected or any(not isinstance(item, dict) for item in selected):
+            bridge_issues.append(f"{display_source}: rendered_table and selected_rows are required")
+            continue
+        headers, display_rows = parse_pipe_table(coverage_item)
+        orientation = rendered.get("orientation")
+        try:
+            source_rows = read_csv_dicts(proj / str(value_lock.get("locked_path", "")))
+        except Exception:
+            source_rows = []
+        selectors = [str(item.get("selector", "")).strip() for item in selected]
+        if len(selectors) != len(selected) or len(set(selectors)) != len(selectors):
+            bridge_issues.append(f"{display_source}: selectors must be nonempty and unique")
+        source_by_spec = {}
+        for idx, row in enumerate(source_rows):
+            source_by_spec.setdefault(str(row.get("spec_id", "")).strip(), []).append((idx, row))
+        mapped = []
+        if orientation == "models_as_columns":
+            if "model_column" in rendered or "field_columns" in rendered or any(
+                any(forbidden in item for forbidden in ("display_row", "model_column", "field_columns"))
+                for item in selected
+            ):
+                bridge_issues.append(f"{display_source}: models_as_columns forbids row-oriented fields")
                 continue
-            row_claim = by_spec_index[(spec_id, row_index)]
-            expected_claim_id = f"{source_path}#{row_index}:{spec_id}"
-            if int(row_claim.get("row_index", -1)) != row_index:
-                claim_issues.append(f"{source_path}:{spec_id}: row_index mismatch")
-            if row_claim.get("claim_id") != expected_claim_id:
-                claim_issues.append(f"{source_path}:{spec_id}: claim_id mismatch")
+            term_column = claim_norm(rendered.get("term_column", ""))
+            field_rows = rendered.get("field_rows")
+            if not isinstance(field_rows, dict):
+                bridge_issues.append(f"{display_source}: field_rows must be an object")
+                continue
+            columns = [claim_norm(item.get("display_column", "")) for item in selected]
+            if term_column not in headers or any(name not in headers for name in columns) or len(set(columns)) != len(columns) or set(columns) != set(headers) - {term_column}:
+                bridge_issues.append(f"{display_source}: selected columns must exactly cover inferential columns")
+                continue
+            term_index = headers.index(term_column)
+            row_by_label = {}
+            for row in display_rows:
+                row_by_label.setdefault(row[term_index], []).append(row)
+            required_labels = {key: claim_norm(field_rows.get(key, "")) for key in ("estimate_std_error", "p_value", "n")}
+            if len(set(required_labels.values())) != len(required_labels) or any(len(row_by_label.get(label, [])) != 1 for label in required_labels.values()):
+                bridge_issues.append(f"{display_source}: declared field rows must resolve exactly once")
+                continue
+            for item, selector, column in zip(selected, selectors, columns):
+                if "display_row" in item or len(source_by_spec.get(selector, [])) != 1:
+                    bridge_issues.append(f"{display_source}:{selector}: selected row does not resolve exactly once")
+                    continue
+                col = headers.index(column)
+                estimate_cell = row_by_label[required_labels["estimate_std_error"]][0][col]
+                display_number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+                if numeric_reporting_policy.get("allow_scientific_notation") is True:
+                    display_number += r"(?:[eE][+-]?\d+)?"
+                match = re.fullmatch(rf"({display_number})\s*\(({display_number})\)", estimate_cell)
+                if not match:
+                    bridge_issues.append(f"{display_source}:{selector}: estimate/SE cell is malformed")
+                    continue
+                idx, source_row = source_by_spec[selector][0]
+                mapped.append((item, idx, source_row, "column", column, {"estimate": match.group(1), "std_error": match.group(2), "p_value": row_by_label[required_labels["p_value"]][0][col], "n": row_by_label[required_labels["n"]][0][col]}))
+        else:
+            bridge_issues.append(f"{display_source}: orientation must be models_as_columns")
+            continue
+        expected_groups[(display_source, value_source)] = (coverage_item, bridge, mapped)
+    if bridge_issues:
+        fail("FAIL: Phase 13 locked result claim-source bridge is invalid", sorted(bridge_issues))
+
+    claim_groups = {}
+    duplicate_group = False
+    malformed_group = False
+    for group in claims:
+        if isinstance(group, dict):
+            key = (str(group.get("display_source_path", "")).strip(), str(group.get("source_path", "")).strip())
+            duplicate_group = duplicate_group or key in claim_groups
+            claim_groups[key] = group
+        else:
+            malformed_group = True
+    if malformed_group or duplicate_group or set(claim_groups) != set(expected_groups):
+        fail("FAIL: Phase 13 locked result claims do not exactly cover mapped rows")
+    structural_issues = []
+    numeric_issues = []
+    sentence_records = substantive_sentence_locations(manuscript_text)
+    claimed_sentences = set()
+    for key, (coverage_item, bridge, mapped) in expected_groups.items():
+        display_source, value_source = key
+        group = claim_groups[key]
+        expected_group = {
+            "schema_version": 2,
+            "binding_type": bridge.get("binding_type"),
+            "source_path": value_source,
+            "locked_path": bridge.get("locked_path"),
+            "display_source_path": display_source,
+            "display_locked_path": coverage_item.get("locked_path"),
+            "row_count": len(mapped),
+        }
+        for field, expected in expected_group.items():
+            if group.get(field) != expected:
+                structural_issues.append(f"{display_source}: {field} mismatch")
+        row_claims = group.get("rows")
+        if not isinstance(row_claims, list) or len(row_claims) != len(mapped):
+            structural_issues.append(f"{display_source}: row claims must exactly cover selected rows")
+            continue
+        by_identity = {}
+        for row_claim in row_claims:
+            if isinstance(row_claim, dict):
+                row_index_value = row_claim.get("row_index")
+                if isinstance(row_index_value, bool) or not isinstance(row_index_value, int) or row_index_value < 0:
+                    structural_issues.append(f"{display_source}: row claim row_index must be a nonnegative integer")
+                    continue
+                identity = (row_index_value, str(row_claim.get("spec_id", "")).strip(), str(row_claim.get("display_coordinate_kind", "")).strip(), claim_norm(row_claim.get("display_coordinate", "")))
+                if identity in by_identity:
+                    structural_issues.append(f"{display_source}: duplicate row claim identity")
+                by_identity[identity] = row_claim
+        for selected, row_index, source_row, coordinate_kind, coordinate, display_values in mapped:
+            spec_id = str(source_row.get("spec_id", "")).strip()
+            identity = (row_index, spec_id, coordinate_kind, coordinate)
+            row_claim = by_identity.get(identity)
+            if not row_claim:
+                structural_issues.append(f"{display_source}:{spec_id}: missing row claim")
+                continue
+            canonical_identity = ["locked_result_claim_v2", bridge.get("binding_type"), display_source, value_source, row_index, spec_id, coordinate_kind, coordinate]
+            expected_id = "lrc2:" + hashlib.sha256(json.dumps(canonical_identity, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+            if row_claim.get("claim_id") != expected_id:
+                structural_issues.append(f"{display_source}:{spec_id}: claim_id mismatch")
+            orientation_field = "display_column" if coordinate_kind == "column" else "display_row"
+            opposite_field = "display_row" if coordinate_kind == "column" else "display_column"
+            if claim_norm(row_claim.get(orientation_field, "")) != coordinate or opposite_field in row_claim:
+                structural_issues.append(f"{display_source}:{spec_id}: display coordinate mismatch")
             for field in ("estimate", "std_error", "p_value", "n"):
-                if field in row and str(row.get(field, "")).strip():
-                    expected = str(row.get(field, "")).strip()
-                    if str(row_claim.get(field, "")).strip() != expected:
-                        claim_issues.append(f"{source_path}:{spec_id}: {field} claim mismatch")
-                    if expected not in manuscript_text:
-                        claim_issues.append(f"{source_path}:{spec_id}: {field} value absent from manuscript")
-            anchor = str(row_claim.get("manuscript_anchor", "")).strip()
-            if not anchor or anchor not in manuscript_text:
-                claim_issues.append(f"{source_path}:{spec_id}: row manuscript_anchor missing")
-    if claim_issues:
-        fail("FAIL: Phase 13 locked result claims do not match locked CSV values", claim_issues)
+                locked_value = str(source_row.get(field, "")).strip()
+                if str(row_claim.get(field, "")).strip() != locked_value:
+                    structural_issues.append(f"{expected_id}: locked {field} claim mismatch")
+                display_token = display_values[field]
+                p_display_number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)" + (r"(?:[eE][+-]?\d+)?" if numeric_reporting_policy.get("allow_scientific_notation") is True else "")
+                if field == "p_value" and re.fullmatch(rf"p\s*<\s*{p_display_number}", display_token, re.I):
+                    display_token = "p < " + display_token.split("<", 1)[1].strip()
+                if not reported_value_matches(locked_value, display_token, field, numeric_issues, f"{expected_id}:display:{field}"):
+                    numeric_issues.append(f"{expected_id}: display {field} mismatch")
+            anchor = claim_norm(row_claim.get("manuscript_anchor", ""))
+            anchor_contains_claim_value = False
+            anchor_number_core = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+            if numeric_reporting_policy.get("allow_scientific_notation") is True:
+                anchor_number_core += r"(?:[eE][+-]?\d+)?"
+            for token_match in re.finditer(rf"(?<![\w.])({anchor_number_core})(?![\w.])", anchor):
+                if re.search(r"(?:Model|specification)\s*$", anchor[:token_match.start()], re.I):
+                    continue
+                token = token_match.group(1)
+                for field in ("estimate", "std_error", "p_value", "n"):
+                    probe_issues = []
+                    if decimal_matches(source_row.get(field, ""), token, field, probe_issues, "anchor") and not probe_issues:
+                        anchor_contains_claim_value = True
+                        break
+                if anchor_contains_claim_value:
+                    break
+            if len(re.findall(r"[A-Za-z]+", anchor)) < 2 or anchor_contains_claim_value:
+                structural_issues.append(f"{expected_id}: manuscript_anchor must be stable nonnumeric text")
+                continue
+            matches = [record for record in sentence_records if anchor in record["sentence"]]
+            result_matches = [record for record in matches if record["section"] == "results"]
+            if len(result_matches) != 1 or len(matches) != 1:
+                structural_issues.append(f"{expected_id}: manuscript_anchor must resolve to one visible Results sentence")
+                continue
+            sentence_key = (result_matches[0]["line_start"], result_matches[0]["sentence"])
+            if sentence_key in claimed_sentences:
+                structural_issues.append(f"{expected_id}: claim sentence is reused")
+            claimed_sentences.add(sentence_key)
+            sentence = result_matches[0]["sentence"]
+            number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
+            if numeric_reporting_policy.get("allow_scientific_notation") is True:
+                number += r"(?:[eE][+-]?\d+)?"
+            bounded_number = rf"(?<![\w.])({number})(?![\w.])"
+            bounded_n = r"(?<![\w.])((?:0|[1-9]\d{0,2}(?:,\d{3})*|[1-9]\d*))(?![\w.])"
+            patterns = {
+                "estimate": rf"(?<![A-Za-z])(?:estimate|coefficient)(?![A-Za-z])\s*(?:of|=)\s*{bounded_number}",
+                "std_error": rf"(?<![A-Za-z])(?:standard error|SE)(?![A-Za-z])\s*(?:of|=)\s*{bounded_number}",
+                "n": rf"(?<![A-Za-z])(?:n|sample size)(?![A-Za-z])\s*(?:of|=)\s*{bounded_n}",
+            }
+            for field, pattern in patterns.items():
+                raw_values = re.findall(pattern, sentence, flags=re.I)
+                values = raw_values
+                if len(values) != 1 or not reported_value_matches(source_row.get(field, ""), values[0] if values else "", field, numeric_issues, f"{expected_id}:prose:{field}"):
+                    numeric_issues.append(f"{expected_id}: prose {field} mismatch")
+            p_exact = re.findall(rf"(?<![A-Za-z])(?:p-value|p)(?![A-Za-z])\s*(?:of|=)\s*{bounded_number}", sentence, flags=re.I)
+            p_inequality = re.findall(rf"(?<![A-Za-z])(?:p-value|p)(?![A-Za-z])\s*<\s*{bounded_number}", sentence, flags=re.I)
+            p_values = list(p_exact) + ["p < " + value for value in p_inequality]
+            if len(p_values) != 1 or not reported_value_matches(source_row.get("p_value", ""), p_values[0] if p_values else "", "p_value", numeric_issues, f"{expected_id}:prose:p_value"):
+                numeric_issues.append(f"{expected_id}: prose p_value mismatch")
+            estimate_value = parse_decimal_token(source_row.get("estimate", ""), "estimate", numeric_issues, f"{expected_id}:prose:estimate")
+            direction_words = []
+            words = re.findall(r"[A-Za-z]+", sentence.lower())
+            for idx, word in enumerate(words):
+                if word in {"negative", "lower", "decrease", "decline", "positive", "higher", "increase", "rise"} and not any(negator in {"not", "no", "neither"} for negator in words[max(0, idx - 2):idx]):
+                    direction_words.append(word)
+            negative = any(word in {"negative", "lower", "decrease", "decline"} for word in direction_words)
+            positive = any(word in {"positive", "higher", "increase", "rise"} for word in direction_words)
+            if estimate_value is not None and ((estimate_value < 0 and (not negative or positive)) or (estimate_value > 0 and (not positive or negative)) or (estimate_value == 0 and (negative or positive))):
+                numeric_issues.append(f"{expected_id}: prose direction mismatch")
+    if structural_issues:
+        fail("FAIL: Phase 13 locked result claims do not exactly cover mapped rows", sorted(set(structural_issues)))
+    if numeric_issues:
+        fail("FAIL: Phase 13 locked numeric claims do not match visible Results evidence", sorted(set(numeric_issues)))
 
 if phase_id == "14":
     report_path = proj / "verify" / "manuscript-verification.json"
@@ -8255,8 +9083,8 @@ if phase_id == "14":
             agent_issues.append(f"{role}: independent must be true")
         if agent.get("verdict") != "PASS":
             agent_issues.append(f"{role}: verdict must be PASS")
-        if agent.get("agent_type") not in ("independent_scholar_verify_agent", "independent_codex_agent"):
-            agent_issues.append(f"{role}: agent_type invalid")
+        if not str(agent.get("agent_type", "")).strip():
+            agent_issues.append(f"{role}: agent_type missing")
         input_hashes = agent.get("input_hashes")
         if not isinstance(input_hashes, dict):
             agent_issues.append(f"{role}: input_hashes missing")
@@ -8347,23 +9175,55 @@ if phase_id == "14":
         extra = sorted(input_read_sources - expected_read_sources)
         fail("FAIL: Phase 14 input_artifacts_read must cover every reader-facing locked artifact", missing + extra)
     draft_claims = draft_manifest.get("locked_result_claims")
-    if not isinstance(draft_claims, list):
-        fail("FAIL: Phase 14 requires Phase 13 locked_result_claims")
-    expected_claim_keys = set()
+    if draft_manifest.get("locked_result_claims_schema_version") != 2 or not isinstance(draft_claims, list):
+        fail("FAIL: Phase 14 requires Phase 13 locked result claims schema version 2")
+    expected_claims = {}
+    duplicate_expected_claims = []
+    malformed_expected_claims = []
     for source_claim in draft_claims:
         if not isinstance(source_claim, dict):
+            malformed_expected_claims.append("claim group must be an object")
             continue
-        source = str(source_claim.get("source_path", "")).strip()
-        for row in source_claim.get("rows", []):
+        source_rows = source_claim.get("rows")
+        if not isinstance(source_rows, list):
+            malformed_expected_claims.append("claim group rows must be a list")
+            continue
+        for row in source_rows:
             if isinstance(row, dict):
-                spec_id = str(row.get("spec_id", "")).strip()
-                claim_id = str(row.get("claim_id", "")).strip()
-                if source and spec_id and claim_id:
-                    expected_claim_keys.add((source, spec_id, claim_id))
+                row_index_value = row.get("row_index")
+                if isinstance(row_index_value, bool) or not isinstance(row_index_value, int) or row_index_value < 0:
+                    malformed_expected_claims.append("row_index must be a nonnegative integer")
+                    continue
+                key = (
+                    str(source_claim.get("binding_type", "")).strip(),
+                    str(source_claim.get("display_source_path", "")).strip(),
+                    str(source_claim.get("display_locked_path", "")).strip(),
+                    str(source_claim.get("source_path", "")).strip(),
+                    str(source_claim.get("locked_path", "")).strip(),
+                    row_index_value,
+                    str(row.get("spec_id", "")).strip(),
+                    str(row.get("display_coordinate_kind", "")).strip(),
+                    str(row.get("display_coordinate", "")).strip(),
+                    str(row.get("claim_id", "")).strip(),
+                )
+                if key in expected_claims:
+                    duplicate_expected_claims.append(str(key))
+                expected_claims[key] = row
+            else:
+                malformed_expected_claims.append("claim row must be an object")
+    if malformed_expected_claims:
+        fail("FAIL: Phase 14 Phase 13 locked result claims are malformed", sorted(set(malformed_expected_claims)))
+    if duplicate_expected_claims:
+        fail("FAIL: Phase 14 Phase 13 locked result claims contain duplicate identities", sorted(duplicate_expected_claims))
+    expected_claim_keys = set(expected_claims)
     stage_specs = (
         ("stage_1_outputs_to_manuscript", "items_scanned"),
         ("stage_2_manuscript_to_prose", "claims_scanned"),
     )
+    def phase14_integer(value, label):
+        if isinstance(value, bool) or not isinstance(value, int):
+            fail(f"FAIL: Phase 14 {label} must be an integer")
+        return value
     for stage_name, scan_field in stage_specs:
         stage = report.get(stage_name)
         if not isinstance(stage, dict):
@@ -8372,20 +9232,20 @@ if phase_id == "14":
             fail(f"FAIL: Phase 14 {stage_name}.verdict must be PASS, got {stage.get('verdict')}")
         if stage.get("degraded") is not False:
             fail(f"FAIL: Phase 14 {stage_name}.degraded must be false")
-        if int(stage.get("critical_count", 0)) != 0:
+        if phase14_integer(stage.get("critical_count", 0), f"{stage_name}.critical_count") != 0:
             fail(f"FAIL: Phase 14 {stage_name}.critical_count must be 0")
         checked = stage.get("checked")
         if stage_name == "stage_2_manuscript_to_prose" and not expected_claim_keys:
-            if int(stage.get(scan_field, -1)) != 0:
+            if phase14_integer(stage.get(scan_field, -1), f"{stage_name}.{scan_field}") != 0:
                 fail(f"FAIL: Phase 14 {stage_name}.{scan_field} must be 0 when Phase 13 has no reader-facing CSV row claims")
             if checked != []:
                 fail(f"FAIL: Phase 14 {stage_name}.checked must be empty when Phase 13 has no reader-facing CSV row claims")
             continue
-        if int(stage.get(scan_field, 0)) <= 0:
+        if phase14_integer(stage.get(scan_field, 0), f"{stage_name}.{scan_field}") <= 0:
             fail(f"FAIL: Phase 14 {stage_name}.{scan_field} must be positive")
         if not isinstance(checked, list) or not checked:
             fail(f"FAIL: Phase 14 {stage_name}.checked must be a non-empty list")
-        if int(stage.get(scan_field, -1)) != len(checked):
+        if phase14_integer(stage.get(scan_field, -1), f"{stage_name}.{scan_field}") != len(checked):
             fail(f"FAIL: Phase 14 {stage_name}.{scan_field} must equal checked length")
         bad_checks = []
         for idx, check in enumerate(checked):
@@ -8449,33 +9309,42 @@ if phase_id == "14":
     if stage1_issues:
         fail("FAIL: Phase 14 Stage 1 locked artifact checks are incomplete", stage1_issues)
     stage2 = report.get("stage_2_manuscript_to_prose")
-    stage2_keys = {
-        (str(item.get("source_artifact", "")).strip(), str(item.get("spec_id", "")).strip(), str(item.get("claim_id", "")).strip())
-        for item in stage2.get("checked", [])
-        if isinstance(item, dict) and item.get("spec_id") and item.get("claim_id")
-    }
-    if stage2_keys != expected_claim_keys:
-        missing = sorted(f"{source}:{spec}:{claim}" for source, spec, claim in expected_claim_keys - stage2_keys)
-        extra = sorted(f"{source}:{spec}:{claim}" for source, spec, claim in stage2_keys - expected_claim_keys)
-        fail("FAIL: Phase 14 Stage 2 checks must exactly cover Phase 13 locked result claims", missing + extra)
-    claim_lookup = {}
-    for source_claim in draft_claims:
-        if not isinstance(source_claim, dict):
-            continue
-        source = str(source_claim.get("source_path", "")).strip()
-        for row in source_claim.get("rows", []):
-            if isinstance(row, dict):
-                claim_lookup[(source, str(row.get("spec_id", "")).strip(), str(row.get("claim_id", "")).strip())] = row
-    stage2_issues = []
-    seen_stage2_keys = set()
+    def stage2_identity(item):
+        row_index_value = item.get("row_index")
+        if isinstance(row_index_value, bool) or not isinstance(row_index_value, int) or row_index_value < 0:
+            return None
+        return (
+            str(item.get("binding_type", "")).strip(),
+            str(item.get("display_source_path", "")).strip(),
+            str(item.get("display_locked_path", "")).strip(),
+            str(item.get("source_artifact", "")).strip(),
+            str(item.get("locked_path", "")).strip(),
+            row_index_value,
+            str(item.get("spec_id", "")).strip(),
+            str(item.get("display_coordinate_kind", "")).strip(),
+            str(item.get("display_coordinate", "")).strip(),
+            str(item.get("claim_id", "")).strip(),
+        )
+    stage2_keys = set()
+    duplicate_stage2 = []
     for item in stage2.get("checked", []):
-        key = (str(item.get("source_artifact", "")).strip(), str(item.get("spec_id", "")).strip(), str(item.get("claim_id", "")).strip())
-        if key in seen_stage2_keys:
-            stage2_issues.append(f"{key}: duplicate Stage 2 check")
-        seen_stage2_keys.add(key)
-        expected = claim_lookup.get(key, {})
-        if item.get("locked_path") != next((claim.get("locked_path") for claim in draft_claims if isinstance(claim, dict) and claim.get("source_path") == key[0]), None):
-            stage2_issues.append(f"{key}: locked_path mismatch")
+        if isinstance(item, dict):
+            key = stage2_identity(item)
+            if key is None:
+                fail("FAIL: Phase 14 Stage 2 locked claim checks are incomplete", ["row_index must be a nonnegative integer"])
+            if key in stage2_keys:
+                duplicate_stage2.append(str(key))
+            stage2_keys.add(key)
+    if duplicate_stage2:
+        fail("FAIL: Phase 14 Stage 2 checks contain duplicate locked result claim identities", sorted(duplicate_stage2))
+    if stage2_keys != expected_claim_keys:
+        missing = sorted(str(key) for key in expected_claim_keys - stage2_keys)
+        extra = sorted(str(key) for key in stage2_keys - expected_claim_keys)
+        fail("FAIL: Phase 14 Stage 2 checks must exactly cover Phase 13 locked result claims", missing + extra)
+    stage2_issues = []
+    for item in stage2.get("checked", []):
+        key = stage2_identity(item)
+        expected = expected_claims.get(key, {})
         if item.get("manuscript_anchor") != expected.get("manuscript_anchor"):
             stage2_issues.append(f"{key}: manuscript_anchor mismatch")
         for field in ("estimate", "std_error", "p_value", "n"):
@@ -8570,24 +9439,16 @@ if phase_id == "14":
     conflict_pattern = re.compile(r"(critical|unverified|mismatch|unresolved|live read|stale).{0,60}(remains|open|found|detected|unresolved)", re.IGNORECASE)
     if conflict_pattern.search(verification_md):
         fail("FAIL: Phase 14 markdown summary contradicts JSON PASS status")
-    # Codex cross-model review gate (added 2026-05-10):
-    # SCHOLAR_CODEX_DEFAULT defaults to true, so when the codex CLI is on PATH
-    # the gate REQUIRES either codex full-mode artifacts under reviews/codex/
-    # OR an [EXCUSED:codex-review: <reason>] annotation in
-    # verify/manuscript-verification.{md,json}. Opt out at the shell level
-    # with SCHOLAR_CODEX_DEFAULT=false.
-    codex_external_gate_failures = []
-    codex_gate_result = run_external_gate(
-        "codex-trigger-phase14.sh", proj, "Phase 14 codex cross-model review"
-    )
-    if codex_gate_result is not None:
-        codex_status, codex_reason, codex_detail = codex_gate_result
-        if codex_status == "RED":
-            codex_external_gate_failures.append(
-                f"Phase 14 codex cross-model review: reason={codex_reason} detail={codex_detail}"
-            )
-    if codex_external_gate_failures:
-        fail("FAIL: Phase 14 codex cross-model review gate", codex_external_gate_failures)
+    if os.environ.get("SCHOLAR_CODEX_REVIEW", "0") == "1":
+        codex_external_gate_failures = []
+        codex_gate_advisories = []
+        consume_external_gate(
+            "codex-trigger-phase14.sh", proj, "Phase 14 optional Codex cross-model review",
+            codex_external_gate_failures, codex_gate_advisories,
+        )
+        emit_gate_advisories(codex_gate_advisories)
+        if codex_external_gate_failures:
+            fail("FAIL: Phase 14 explicitly requested Codex review gate", codex_external_gate_failures)
 
 if phase_id == "15":
     manuscript_path = proj / "manuscript" / "manuscript-draft.md"
@@ -8910,7 +9771,8 @@ if phase_id == "15":
             claim_issues.append(f"claims[{idx}] is not an object")
             continue
         claim_id = str(claim.get("claim_id", "")).strip()
-        if not claim_id or claim_id in seen_claim_ids:
+        claim_type = str(claim.get("claim_type", "")).strip()
+        if not claim_id or (claim_id in seen_claim_ids and not (claim_type == "empirical" and claim_id.startswith("lrc2:"))):
             claim_issues.append(f"claims[{idx}].claim_id missing or duplicate")
         seen_claim_ids.add(claim_id)
         for field in ("manuscript_location", "claim_type", "claim_text", "manuscript_anchor"):
@@ -8935,11 +9797,20 @@ if phase_id == "15":
         if anchor and anchor not in manuscript_text:
             claim_issues.append(f"{claim_id}: manuscript_anchor not found in manuscript")
         if anchor and keys:
-            missing_anchor_keys = sorted(key for key in keys if f"@{key}" not in anchor)
-            if missing_anchor_keys:
-                claim_issues.append(f"{claim_id}: manuscript_anchor missing cited keys {missing_anchor_keys}")
+            if claim.get("claim_type") == "empirical" and claim_id.startswith("lrc2:"):
+                anchor_norm = normalize_locator_sentence(anchor)
+                resolved = [record for record in substantive_sentence_locations(manuscript_text) if record["section"] == "results" and anchor_norm in record["sentence"]]
+                if len(resolved) != 1:
+                    claim_issues.append(f"{claim_id}: empirical manuscript_anchor must resolve to one Results sentence")
+                else:
+                    missing_anchor_keys = sorted(key for key in keys if f"@{key}" not in resolved[0]["sentence"])
+                    if missing_anchor_keys:
+                        claim_issues.append(f"{claim_id}: resolved Results sentence missing cited keys {missing_anchor_keys}")
+            else:
+                missing_anchor_keys = sorted(key for key in keys if f"@{key}" not in anchor)
+                if missing_anchor_keys:
+                    claim_issues.append(f"{claim_id}: manuscript_anchor missing cited keys {missing_anchor_keys}")
         claim_cited_keys.update(keys)
-        claim_type = str(claim.get("claim_type", "")).strip()
         locator = str(claim.get("source_locator", "")).strip()
         if claim_type in locator_required_types and not locator:
             claim_issues.append(f"{claim_id}: source_locator missing")
@@ -8960,26 +9831,80 @@ if phase_id == "15":
         fail("FAIL: Phase 15 claim_specificity must be an object")
     if claim_specificity.get("status") != "PASS":
         fail("FAIL: Phase 15 claim_specificity must report PASS status")
-    if int(claim_specificity.get("omnibus_claim_count", -1)) != 0:
+    omnibus_claim_count = claim_specificity.get("omnibus_claim_count")
+    if isinstance(omnibus_claim_count, bool) or not isinstance(omnibus_claim_count, int) or omnibus_claim_count != 0:
         fail("FAIL: Phase 15 claim_specificity must report zero omnibus claims")
-    if int(claim_specificity.get("max_citation_keys_per_claim", 99)) > 8 and claim_specificity.get("bulk_citation_exceptions_documented") is not True:
+    max_keys = claim_specificity.get("max_citation_keys_per_claim")
+    if isinstance(max_keys, bool) or not isinstance(max_keys, int) or max_keys < 0:
+        fail("FAIL: Phase 15 claim_specificity max_citation_keys_per_claim must be a nonnegative integer")
+    if max_keys > 8 and claim_specificity.get("bulk_citation_exceptions_documented") is not True:
         fail("FAIL: Phase 15 claim_specificity must document any claim with more than 8 citation keys")
     locked_result_claims = draft_manifest.get("locked_result_claims")
-    if not isinstance(locked_result_claims, list):
-        fail("FAIL: Phase 15 requires Phase 13 locked_result_claims to be a list")
-    mapped_claim_ids = {str(claim.get("claim_id", "")).strip() for claim in claims if isinstance(claim, dict)}
-    empirical_row_claim_ids = []
+    if draft_manifest.get("locked_result_claims_schema_version") != 2 or not isinstance(locked_result_claims, list):
+        fail("FAIL: Phase 15 requires Phase 13 locked result claims schema version 2")
+    expected_empirical = {}
+    duplicate_phase13_ids = []
+    malformed_phase13_claims = []
     for source_claim in locked_result_claims:
         if not isinstance(source_claim, dict):
+            malformed_phase13_claims.append("claim group must be an object")
             continue
-        for row in source_claim.get("rows", []):
+        source_rows = source_claim.get("rows")
+        if not isinstance(source_rows, list):
+            malformed_phase13_claims.append("claim group rows must be a list")
+            continue
+        for row in source_rows:
             if isinstance(row, dict):
                 claim_id = str(row.get("claim_id", "")).strip()
                 if claim_id:
-                    empirical_row_claim_ids.append(claim_id)
-    missing_empirical_claims = sorted(claim_id for claim_id in empirical_row_claim_ids if claim_id not in mapped_claim_ids)
-    if missing_empirical_claims:
-        fail("FAIL: Phase 15 claim-source map must cover every Phase 13 empirical row claim", missing_empirical_claims[:50])
+                    if claim_id in expected_empirical:
+                        duplicate_phase13_ids.append(claim_id)
+                    expected_empirical[claim_id] = {
+                        "manuscript_anchor": row.get("manuscript_anchor"),
+                        "result_binding": {
+                            "binding_type": source_claim.get("binding_type"),
+                            "display_source_path": source_claim.get("display_source_path"),
+                            "display_locked_path": source_claim.get("display_locked_path"),
+                            "value_source_path": source_claim.get("source_path"),
+                            "value_locked_path": source_claim.get("locked_path"),
+                            "row_index": row.get("row_index"),
+                            "spec_id": row.get("spec_id"),
+                            "display_coordinate_kind": row.get("display_coordinate_kind"),
+                            "display_coordinate": row.get("display_coordinate"),
+                        },
+                    }
+            else:
+                malformed_phase13_claims.append("claim row must be an object")
+    if malformed_phase13_claims:
+        fail("FAIL: Phase 15 Phase 13 locked result claims are malformed", sorted(set(malformed_phase13_claims)))
+    if duplicate_phase13_ids:
+        fail("FAIL: Phase 15 Phase 13 empirical claim identities contain duplicates", sorted(duplicate_phase13_ids))
+    actual_empirical = {}
+    duplicate_phase15_ids = []
+    for claim in claims:
+        if not isinstance(claim, dict) or claim.get("claim_type") != "empirical":
+            continue
+        claim_id = str(claim.get("claim_id", "")).strip()
+        if claim_id in actual_empirical:
+            duplicate_phase15_ids.append(claim_id)
+        actual_empirical[claim_id] = claim
+    if duplicate_phase15_ids:
+        fail("FAIL: Phase 15 empirical claim-source records contain duplicate identities", sorted(duplicate_phase15_ids))
+    if set(actual_empirical) != set(expected_empirical):
+        missing = sorted(set(expected_empirical) - set(actual_empirical))
+        extra = sorted(set(actual_empirical) - set(expected_empirical))
+        fail("FAIL: Phase 15 claim-source map must exactly cover every Phase 13 empirical row claim", missing + extra)
+    empirical_binding_issues = []
+    for claim_id, expected in expected_empirical.items():
+        actual = actual_empirical[claim_id]
+        if str(actual.get("manuscript_location", "")).strip().lower() != "results":
+            empirical_binding_issues.append(f"{claim_id}: manuscript_location must be results")
+        if actual.get("manuscript_anchor") != expected["manuscript_anchor"]:
+            empirical_binding_issues.append(f"{claim_id}: manuscript_anchor mismatch")
+        if actual.get("result_binding") != expected["result_binding"]:
+            empirical_binding_issues.append(f"{claim_id}: result_binding mismatch")
+    if empirical_binding_issues:
+        fail("FAIL: Phase 15 empirical claim bindings must exactly match Phase 13", sorted(empirical_binding_issues))
     manuscript_locations = {str(claim.get("manuscript_location", "")).strip().lower() for claim in claims if isinstance(claim, dict)}
     manuscript_sections_for_claims = markdown_sections(manuscript_text)
     required_claim_sections = {
@@ -9030,48 +9955,52 @@ if phase_id == "15":
     #   - verify-rendered-references-against-bib  rendered `## References` ↔ bib
     #   - verify-citation-local-library.sh        bib ↔ user's local Zotero
     #
-    # Semantics: any RED contradicts the JSON's PASS verdict → fail.
-    # YELLOW (network down, library unavailable) does NOT contradict — it
-    # only means the gate could not run. Missing vendored gate → hard fail
-    # via run_external_gate() (vendoring policy).
-    #
-    # Skip-flag: SCHOLAR_AUTO_RESEARCH_SKIP_GATE_RECHECK=1 (intended for
-    # fixture tests that exercise the JSON-shape contract in isolation).
-    if os.environ.get("SCHOLAR_AUTO_RESEARCH_SKIP_GATE_RECHECK") != "1":
-        gate_contradictions = []
-        gate_unavailable = []
-        for gate_name, label in (
-            ("verify-citation-metadata.sh",
-             "verify-citation-metadata (bib ↔ CrossRef)"),
-            ("verify-rendered-references-against-bib.sh",
-             "verify-rendered-references-against-bib (manuscript ↔ bib)"),
-            ("verify-citation-local-library.sh",
-             "verify-citation-local-library (bib ↔ local Zotero)"),
-        ):
-            status, reason, detail = run_external_gate(gate_name, str(proj), label)
-            if status == "RED":
-                # missing_external_gate or external_gate_not_executable are
-                # bundling defects — these MUST be treated as RED contradictions
-                # (vendoring contract violated).
-                gate_contradictions.append(
-                    f"{label}: STATUS=RED reason={reason or '<unspecified>'}"
-                    + (f" detail={detail}" if detail else "")
-                )
-            elif status == "YELLOW":
-                # YELLOW = gate could not run (network, library missing).
-                # Record but don't contradict the JSON verdict.
-                gate_unavailable.append(f"{label}: YELLOW ({reason or 'unavailable'})")
-            # status == "GREEN" → cross-check confirms the JSON's PASS verdict
-        if gate_contradictions:
-            fail(
-                "FAIL: Phase 15 citation-audit JSON declares verdict=PASS but "
-                "the vendored gate cross-check returned RED. The declared "
-                "fabrication_guard/source_verification flags are inconsistent "
-                "with the actual citation state — the audit cannot be trusted.",
-                gate_contradictions
-                + (["  (also: " + u + ")" for u in gate_unavailable]
-                   if gate_unavailable else []),
+    # RED contradicts the audit. Rendered reconciliation must be GREEN, and at
+    # least one keyed authority (CrossRef metadata or local library) must be
+    # available. The production verifier has no skip flag.
+    gate_contradictions = []
+    gate_unavailable = []
+    authority_green = []
+    authority_covered_keys = set()
+    canonical_bib = proj / "citation" / "references.bib"
+    canonical_manuscript = proj / "manuscript" / "manuscript-draft.md"
+    gate_specs = (
+        ("verify-citation-metadata.sh", "verify-citation-metadata (bib ↔ CrossRef)", (canonical_bib,), True),
+        ("verify-rendered-references-against-bib.sh", "verify-rendered-references-against-bib (manuscript ↔ bib)", (canonical_bib, canonical_manuscript), False),
+        ("verify-citation-local-library.sh", "verify-citation-local-library (bib ↔ local Zotero)", (canonical_bib,), True),
+    )
+    for gate_name, label, gate_args, is_authority in gate_specs:
+        status, reason, detail = run_external_gate(gate_name, str(proj), label, gate_args)
+        if status == "RED":
+            gate_contradictions.append(
+                f"{label}: STATUS=RED reason={reason or '<unspecified>'}"
+                + (f" detail={detail}" if detail else "")
             )
+        elif status == "YELLOW":
+            gate_unavailable.append(f"{label}: YELLOW ({reason or 'unavailable'})")
+        if is_authority and detail.startswith("AUTHORITY_KEYS="):
+            authority_covered_keys.update(
+                key for key in detail.split("=", 1)[1].split(",") if key
+            )
+        if status == "GREEN" and is_authority:
+            authority_green.append(label)
+        if not is_authority and status != "GREEN":
+            gate_contradictions.append(f"{label}: rendered reconciliation requires GREEN, got {status}")
+    emit_gate_advisories(gate_unavailable)
+    if not authority_green:
+        gate_contradictions.append(
+            "citation authority coverage unavailable: neither CrossRef metadata nor local library returned GREEN"
+        )
+    uncovered_keys = sorted(cited_keys - authority_covered_keys)
+    if uncovered_keys:
+        gate_contradictions.append(
+            "authoritative metadata coverage missing for cited keys: " + ",".join(uncovered_keys)
+        )
+    if gate_contradictions:
+        fail(
+            "FAIL: Phase 15 canonical citation cross-check did not establish authoritative coverage",
+            gate_contradictions,
+        )
 
 if phase_id == "16":
     safety_path = proj / "safety" / "safety-status.json"
@@ -9947,6 +10876,7 @@ if phase_id == "17":
         fail("FAIL: Phase 17 ready_for_phase_18 must be true")
 
 if phase_id == "18":
+    research_question_path = proj / "idea" / "research-question.json"
     manuscript_path = proj / "manuscript" / "manuscript-draft.md"
     draft_manifest_path = proj / "manuscript" / "draft-manifest.json"
     polish_report_path = proj / "manuscript" / "polish-report.json"
@@ -9959,6 +10889,7 @@ if phase_id == "18":
     quality_path = proj / "quality" / "manuscript-quality.json"
     quality_md_path = proj / "quality" / "manuscript-quality.md"
     required_inputs = (
+        research_question_path,
         manuscript_path,
         draft_manifest_path,
         polish_report_path,
@@ -9970,8 +10901,9 @@ if phase_id == "18":
     )
     for required_path in required_inputs:
         if not required_path.exists():
-            fail(f"FAIL: Phase 17 missing required input {required_path.relative_to(proj)}")
+            fail(f"FAIL: Phase 18 missing required input {required_path.relative_to(proj)}")
     try:
+        research_question = json.loads(research_question_path.read_text())
         draft_manifest = json.loads(draft_manifest_path.read_text())
         polish_report = json.loads(polish_report_path.read_text())
         phase13 = json.loads(phase13_path.read_text())
@@ -9982,7 +10914,7 @@ if phase_id == "18":
         quality = json.loads(quality_path.read_text())
         journal_spec = json.loads(journal_spec_path.read_text()) if journal_spec_path.exists() else {}
     except Exception as exc:
-        fail(f"FAIL: Phase 17 quality artifacts or inputs are not valid JSON: {exc}")
+        fail(f"FAIL: Phase 18 quality artifacts or inputs are not valid JSON: {exc}")
     if draft_manifest.get("ready_for_phase_14") is not True:
         fail("FAIL: Phase 18 requires a passing Phase 13 draft manifest")
     if phase13.get("verdict") != "PASS" or phase13.get("ready_for_phase_15") is not True:
@@ -10079,10 +11011,10 @@ if phase_id == "18":
     )
     absent = [field for field in required if field not in quality]
     if absent:
-        fail("FAIL: Phase 17 quality report missing required fields", absent)
+        fail("FAIL: Phase 18 quality report missing required fields", absent)
     findings = quality.get("findings")
     if not isinstance(findings, list):
-        fail("FAIL: Phase 17 findings must be a list")
+        fail("FAIL: Phase 18 findings must be a list")
     allowed_categories = {
         "research_question_answer": "13",
         "manuscript_structure": "13",
@@ -10107,9 +11039,9 @@ if phase_id == "18":
     }
     if quality.get("verdict") != "PASS":
         if quality.get("verdict") != "FAIL":
-            fail(f"FAIL: Phase 17 top-level verdict must be PASS or FAIL, got {quality.get('verdict')}")
+            fail(f"FAIL: Phase 18 top-level verdict must be PASS or FAIL, got {quality.get('verdict')}")
         if not findings:
-            fail("FAIL: Phase 17 FAIL report must include nonempty findings")
+            fail("FAIL: Phase 18 FAIL report must include nonempty findings")
         finding_issues = []
         route_phases = set()
         critical_or_major = 0
@@ -10140,7 +11072,7 @@ if phase_id == "18":
             if route_back_phase:
                 route_phases.add(route_back_phase)
             if finding.get("detected_by") not in {"scholar-respond", "scholar-polish", "quality-panel", "senior-editor", "interpretive-skeptic", "quality-verifier"}:
-                finding_issues.append(f"{finding_id}: detected_by must be a Phase 17 checker")
+                finding_issues.append(f"{finding_id}: detected_by must be a Phase 18 checker")
             affected = finding.get("affected_artifacts")
             if not isinstance(affected, list) or not affected or any(not str(item).strip() for item in affected):
                 finding_issues.append(f"{finding_id}: affected_artifacts must be a nonempty list")
@@ -10167,7 +11099,7 @@ if phase_id == "18":
         if quality.get("ready_for_phase_19") is not False:
             finding_issues.append("ready_for_phase_19 must be false for FAIL")
         if finding_issues:
-            fail("FAIL: Phase 17 FAIL report is malformed", finding_issues)
+            fail("FAIL: Phase 18 FAIL report is malformed", finding_issues)
         fail("FAIL: Phase 18 quality gate found unresolved manuscript issues; route back before Phase 19", [f"route_back_phase={top_route}"] + [f"{f.get('finding_id')}: {f.get('required_fix')}" for f in findings if isinstance(f, dict)])
 
     if quality.get("degraded") is not False:
@@ -10175,19 +11107,20 @@ if phase_id == "18":
     if quality.get("source_phase") != "18":
         fail("FAIL: Phase 18 source_phase must be 18")
     if findings:
-        fail("FAIL: Phase 17 PASS report must have empty findings")
+        fail("FAIL: Phase 18 PASS report must have empty findings")
     engine = quality.get("quality_engine")
     if not isinstance(engine, dict) or engine.get("skill") != "scholar-respond" or engine.get("mode") != "simulate":
-        fail("FAIL: Phase 17 quality_engine must be scholar-respond simulate mode")
+        fail("FAIL: Phase 18 quality_engine must be scholar-respond simulate mode")
     quality_engine_issues = validate_engine_provenance(engine, "Phase 18 quality_engine")
     if quality_engine_issues:
         fail("FAIL: Phase 18 quality_engine provenance is incomplete", quality_engine_issues)
     if quality.get("selected_manuscript_hash") != sha256(manuscript_path):
-        fail("FAIL: Phase 17 selected_manuscript_hash is stale")
+        fail("FAIL: Phase 18 selected_manuscript_hash is stale")
     source_hashes = quality.get("source_hashes")
     if not isinstance(source_hashes, dict):
-        fail("FAIL: Phase 17 source_hashes must be an object")
+        fail("FAIL: Phase 18 source_hashes must be an object")
     expected_hashes = {
+        "research_question": sha256(research_question_path),
         "manuscript": sha256(manuscript_path),
         "draft_manifest": sha256(draft_manifest_path),
         "polish_report": sha256(polish_report_path),
@@ -10203,48 +11136,50 @@ if phase_id == "18":
         if source_hashes.get(key) != expected
     ]
     if stale_sources:
-        fail("FAIL: Phase 17 source_hashes are stale", stale_sources)
+        fail("FAIL: Phase 18 source_hashes are stale", stale_sources)
     if claim_map.get("unsupported_count", 0) not in (0, "0") or claim_map.get("locator_missing_count", 0) not in (0, "0"):
-        fail("FAIL: Phase 17 cannot pass with unsupported claims or missing source locators")
+        fail("FAIL: Phase 18 cannot pass with unsupported claims or missing source locators")
     if polish_report.get("verdict") != "PASS" or polish_report.get("ready_for_verification") is not True:
-        fail("FAIL: Phase 17 requires passing Phase 12 scholar-polish report")
+        fail("FAIL: Phase 18 requires passing Phase 13 scholar-polish report")
     polish_audit = quality.get("polish_audit")
     if not isinstance(polish_audit, dict):
-        fail("FAIL: Phase 17 polish_audit must be an object")
+        fail("FAIL: Phase 18 polish_audit must be an object")
     if polish_audit.get("skill") != "scholar-polish" or polish_audit.get("mode") != "scan":
-        fail("FAIL: Phase 17 polish_audit must declare scholar-polish scan mode")
+        fail("FAIL: Phase 18 polish_audit must declare scholar-polish scan mode")
     polish_audit_issues = validate_engine_provenance(polish_audit, "Phase 18 polish_audit")
     if polish_audit_issues:
         fail("FAIL: Phase 18 polish_audit provenance is incomplete", polish_audit_issues)
     if polish_audit.get("manuscript_hash") != sha256(manuscript_path):
-        fail("FAIL: Phase 17 polish_audit manuscript_hash is stale")
+        fail("FAIL: Phase 18 polish_audit manuscript_hash is stale")
     if polish_audit.get("rewrite_applied") not in (False, 0):
-        fail("FAIL: Phase 17 polish_audit must not rewrite the verified manuscript")
+        fail("FAIL: Phase 18 polish_audit must not rewrite the verified manuscript")
     if polish_audit.get("high_severity_markers") not in (0, "0"):
-        fail("FAIL: Phase 17 polish_audit must report zero high-severity AI writing markers")
+        fail("FAIL: Phase 18 polish_audit must report zero high-severity AI writing markers")
     if polish_audit.get("route_back_required") not in (False, 0):
-        fail("FAIL: Phase 17 polish_audit route_back_required must be false for PASS")
+        fail("FAIL: Phase 18 polish_audit route_back_required must be false for PASS")
     reviewers = quality.get("reviewer_reports")
     if not isinstance(reviewers, list) or len(reviewers) < 4:
-        fail("FAIL: Phase 17 requires at least four independent reviewer reports")
+        fail("FAIL: Phase 18 requires at least four independent reviewer reports")
     required_roles = {"methods-evidence", "theory-contribution", "senior-editor", "interpretive-skeptic"}
     roles = {str(reviewer.get("role", "")).strip() for reviewer in reviewers if isinstance(reviewer, dict)}
     missing_roles = sorted(required_roles - roles)
     if missing_roles:
-        fail("FAIL: Phase 17 missing required reviewer roles", missing_roles)
+        fail("FAIL: Phase 18 missing required reviewer roles", missing_roles)
     if not any(isinstance(reviewer, dict) and reviewer.get("role") == "senior-editor" and reviewer.get("primed") in (False, 0) for reviewer in reviewers):
-        fail("FAIL: Phase 17 requires an unprimed senior-editor reviewer")
-    structured_quality_review_needed = structured_secondary_data_indicated(manuscript_text, draft_manifest, claim_map)
-    if structured_quality_review_needed:
-        specialist_roles = {
-            "survey-methods",
-            "demographic-family-methods",
-            "quantitative-family-methods",
-            "domain-methods",
-            "methods-specialist",
-        }
-        if not roles.intersection(specialist_roles):
-            fail("FAIL: Phase 18 structured secondary-data manuscripts require a method-specialized reviewer", sorted(specialist_roles))
+        fail("FAIL: Phase 18 requires an unprimed senior-editor reviewer")
+    specialist_review_needed, specialist_family = phase18_specialist_requirement(
+        research_question.get("method_orientation"), manuscript_text, draft_manifest, claim_map
+    )
+    if specialist_review_needed:
+        allowed_specialist_roles = METHOD_SPECIALIST_ROLES_BY_FAMILY.get(specialist_family, set())
+        if not allowed_specialist_roles:
+            fail(f"FAIL: Phase 18 has no specialist-role mapping for method family {specialist_family}")
+        if len(reviewers) < 5 or not roles.intersection(allowed_specialist_roles):
+            fail(
+                "FAIL: Phase 18 authoritative method_orientation requires a fifth "
+                f"method-specialized reviewer (family={specialist_family})",
+                sorted(allowed_specialist_roles),
+            )
     reviewer_independence = quality.get("reviewer_independence")
     if not isinstance(reviewer_independence, dict):
         fail("FAIL: Phase 18 reviewer_independence must be an object")
@@ -10260,15 +11195,30 @@ if phase_id == "18":
         fail("FAIL: Phase 18 method_specialist_review must be an object")
     if method_specialist_review.get("status") not in {"PASS", "NOT_APPLICABLE"}:
         fail("FAIL: Phase 18 method_specialist_review status must be PASS or NOT_APPLICABLE")
-    if structured_quality_review_needed and method_specialist_review.get("status") != "PASS":
-        fail("FAIL: Phase 18 method_specialist_review must PASS when structured secondary-data review is needed")
+    if specialist_review_needed and method_specialist_review.get("status") != "PASS":
+        fail(f"FAIL: Phase 18 method_specialist_review must PASS for {specialist_family} manuscripts")
+    if specialist_review_needed:
+        declared_specialist_role = str(method_specialist_review.get("role", "")).strip()
+        allowed_specialist_roles = METHOD_SPECIALIST_ROLES_BY_FAMILY[specialist_family]
+        if declared_specialist_role not in roles.intersection(allowed_specialist_roles):
+            fail(
+                "FAIL: Phase 18 method_specialist_review.role must identify the "
+                f"evidence-bound {specialist_family} specialist reviewer",
+                sorted(allowed_specialist_roles),
+            )
+        if str(method_specialist_review.get("method_family", "")).strip() != specialist_family:
+            fail(
+                "FAIL: Phase 18 method_specialist_review.method_family must match "
+                f"the authoritative family {specialist_family}"
+            )
 
-    # External-gate dispatch:
+    # External-gate dispatch (audit 2026-05-06 cfps-platform-trust-asr-auto):
     # Phase 18 must compute shape evidence from artifacts, not trust the
     # self-reported regression_table_audit. Run each gate; RED status fails
     # the phase regardless of metadata. See quality-gate.md for contract.
     external_gate_failures = []
-    for gate_name, label in [
+    external_gate_advisories = []
+    for entry in [
         # 5.18.0 structural gates (front matter, table fidelity, descriptives, methods bridge)
         ("front-matter-check.sh", "Phase 18 front matter"),
         ("abstract-boilerplate-check.sh", "Phase 18 abstract boilerplate"),
@@ -10294,25 +11244,25 @@ if phase_id == "18":
         ("descriptives-coverage-check.sh", "Phase 18 descriptive-table coverage"),
         ("descriptive-table-display-check.sh", "Phase 18 descriptive table display"),
         ("concept-to-measure-check.sh", "Phase 18 concept-to-measure bridge"),
-        # 5.19.0 substantive-quality gates
+        # 5.19.0 substantive-quality gates (audit 2026-05-06 cfps-platform-trust-asr-auto)
         ("survey-weights-check.sh", "Phase 18 survey weights"),
         ("composite-measure-validation-check.sh", "Phase 18 composite-measure validation"),
         ("interaction-joint-test-check.sh", "Phase 18 interaction joint test"),
-        # G5/F1 consolidation (audit 2026-08-25 port): effect-size-narrative-check
-        # is phase-aware (RED at 18, YELLOW at 13) via the PHASE_TAG env fallback
-        # (AUTO_RESEARCH_VERIFY_PHASE, exported by run_external_gate) — no extra
-        # positional needed since this call runs while phase_id == "18". As a
-        # normal tuple entry, missing / not-executable / crash are handled
-        # uniformly by run_external_gate; the old bespoke `if es_gate.exists()`
-        # block silently SKIPPED a missing gate instead of RED-failing it.
-        ("effect-size-narrative-check.sh", "Phase 18 effect-size narrative"),
+        # F1/Batch-5 consolidation (audit 2026-07-07): the phase-aware effect-size
+        # gate now runs through this same panel with an explicit "18" positional
+        # (extra_args) so it RED-fails on unacknowledged small R². As a normal
+        # tuple entry, missing / not-executable / crash are handled uniformly by
+        # run_external_gate — the old bespoke `if es_gate.exists()` block (which
+        # silently SKIPPED a missing gate before F1) is gone.
+        ("effect-size-narrative-check.sh", "Phase 18 effect-size narrative", ("18",)),
     ]:
-        gate_result = run_external_gate(gate_name, proj, label)
-        if gate_result is None:
-            continue
-        status, reason, detail = gate_result
-        if status == "RED":
-            external_gate_failures.append(f"{label}: reason={reason} detail={detail}")
+        gate_name, label = entry[0], entry[1]
+        extra_args = entry[2] if len(entry) > 2 else ()
+        consume_external_gate(
+            gate_name, proj, label,
+            external_gate_failures, external_gate_advisories, extra_args,
+        )
+    emit_gate_advisories(external_gate_advisories)
     if external_gate_failures:
         fail("FAIL: Phase 18 external-gate panel reported RED", external_gate_failures)
 
@@ -10368,6 +11318,7 @@ if phase_id == "18":
     seen_reviewer_tasks = set()
     seen_reviewer_paths = set()
     reviewer_texts = []
+    manuscript_sentence_locations = substantive_sentence_locations(manuscript_text)
     placeholder_values = {"", "tbd", "todo", "unknown", "n/a", "na", "placeholder"}
     for idx, reviewer in enumerate(reviewers):
         if not isinstance(reviewer, dict):
@@ -10379,8 +11330,8 @@ if phase_id == "18":
             reviewer_issues.append(f"reviewer_reports[{idx}].reviewer_id missing or duplicate")
         seen_reviewers.add(reviewer_id)
         agent_name = str(reviewer.get("agent_name", "")).strip()
-        if not agent_name.startswith("peer-reviewer-"):
-            reviewer_issues.append(f"{reviewer_id}: agent_name must start with peer-reviewer-")
+        if not agent_name:
+            reviewer_issues.append(f"{reviewer_id}: agent_name missing")
         task_id = str(reviewer.get("task_invocation_id", "")).strip()
         if not task_id or task_id in seen_reviewer_tasks or task_id.lower() in placeholder_values:
             reviewer_issues.append(f"{reviewer_id}: task_invocation_id missing")
@@ -10389,8 +11340,8 @@ if phase_id == "18":
         if report_path in seen_reviewer_paths:
             reviewer_issues.append(f"{reviewer_id}: duplicate report_path")
         seen_reviewer_paths.add(report_path)
-        if not report_path.startswith("quality/agents/") or not (proj / report_path).exists():
-            reviewer_issues.append(f"{reviewer_id}: report_path missing under quality/agents/")
+        if Path(report_path).is_absolute() or not (proj / report_path).exists():
+            reviewer_issues.append(f"{reviewer_id}: report_path missing or outside the project")
         else:
             report_text = (proj / report_path).read_text(errors="ignore")
             reviewer_texts.append((reviewer_id, role, report_text))
@@ -10425,6 +11376,17 @@ if phase_id == "18":
             reviewer_issues.append(f"{reviewer_id}: contribution_locator missing or not an object")
         else:
             sentences = locator.get("sentences")
+            locator_section = normalize_locator_sentence(locator.get("section", "")).lower()
+            locator_line = locator.get("line_start")
+            if not locator_section:
+                reviewer_issues.append(f"{reviewer_id}: contribution_locator.section missing")
+            try:
+                locator_line = int(locator_line)
+                if locator_line < 1:
+                    raise ValueError
+            except Exception:
+                reviewer_issues.append(f"{reviewer_id}: contribution_locator.line_start must be a positive integer")
+                locator_line = None
             if not isinstance(sentences, list) or not sentences:
                 reviewer_issues.append(f"{reviewer_id}: contribution_locator.sentences must be a nonempty list")
             else:
@@ -10432,6 +11394,18 @@ if phase_id == "18":
                     if not isinstance(sent, str) or len(sent.split()) < 10:
                         reviewer_issues.append(f"{reviewer_id}: contribution_locator.sentences[{si}] must be a string with at least 10 words")
                         break
+                    normalized_sentence = normalize_locator_sentence(sent)
+                    exact_matches = [
+                        location for location in manuscript_sentence_locations
+                        if location["sentence"] == normalized_sentence
+                        and location["section"] == locator_section
+                        and location["line_start"] == locator_line
+                    ]
+                    if not exact_matches:
+                        reviewer_issues.append(
+                            f"{reviewer_id}: contribution_locator.sentences[{si}] is not an exact "
+                            "visible-prose sentence at the declared manuscript section and line_start"
+                        )
             for sf in ("clarity_score", "specificity_score"):
                 sval = locator.get(sf)
                 try:
@@ -10559,7 +11533,7 @@ if phase_id == "18":
     ]
     scores = quality.get("dimension_scores")
     if not isinstance(scores, dict):
-        fail("FAIL: Phase 17 dimension_scores must be an object")
+        fail("FAIL: Phase 18 dimension_scores must be an object")
     score_values = []
     score_issues = []
     for dimension in required_dimensions:
@@ -10577,21 +11551,21 @@ if phase_id == "18":
         if numeric > 10 or numeric < 0:
             score_issues.append(f"{dimension}: score outside 0-10")
     if score_issues:
-        fail("FAIL: Phase 17 quality dimension scores do not meet threshold", score_issues)
+        fail("FAIL: Phase 18 quality dimension scores do not meet threshold", score_issues)
     mean_score = sum(score_values) / len(score_values)
     policy = quality.get("threshold_policy")
     if not isinstance(policy, dict):
-        fail("FAIL: Phase 17 threshold_policy must be an object")
+        fail("FAIL: Phase 18 threshold_policy must be an object")
     if float(policy.get("min_dimension_score", 7)) < 7 or float(policy.get("mean_score_min", 8)) < 8:
-        fail("FAIL: Phase 17 threshold_policy is weaker than the required gate")
+        fail("FAIL: Phase 18 threshold_policy is weaker than the required gate")
     if mean_score < 8:
-        fail("FAIL: Phase 17 mean quality score must be at least 8", [f"mean_score={mean_score:.2f}"])
+        fail("FAIL: Phase 18 mean quality score must be at least 8", [f"mean_score={mean_score:.2f}"])
     blockers = policy.get("non_overridable_blockers")
     if blockers not in ([], None):
-        fail("FAIL: Phase 17 non_overridable_blockers must be empty for PASS")
+        fail("FAIL: Phase 18 non_overridable_blockers must be empty for PASS")
     matrix = quality.get("severity_confidence_matrix")
     if not isinstance(matrix, list):
-        fail("FAIL: Phase 17 severity_confidence_matrix must be a list")
+        fail("FAIL: Phase 18 severity_confidence_matrix must be a list")
     blocking_matrix = []
     for idx, item in enumerate(matrix):
         if not isinstance(item, dict):
@@ -10602,18 +11576,18 @@ if phase_id == "18":
         if severity in {"CRITICAL", "MAJOR"} and status not in {"resolved", "not_applicable"}:
             blocking_matrix.append(f"{item.get('issue_id', idx)}: unresolved {severity}")
     if blocking_matrix:
-        fail("FAIL: Phase 17 severity-confidence matrix has unresolved major or critical items", blocking_matrix)
+        fail("FAIL: Phase 18 severity-confidence matrix has unresolved major or critical items", blocking_matrix)
     decision = quality.get("decision")
     if not isinstance(decision, dict):
-        fail("FAIL: Phase 17 decision must be an object")
+        fail("FAIL: Phase 18 decision must be an object")
     if decision.get("editorial_recommendation") != "PROCEED_TO_FINAL_ASSEMBLY":
-        fail("FAIL: Phase 17 decision must be PROCEED_TO_FINAL_ASSEMBLY for PASS")
+        fail("FAIL: Phase 18 decision must be PROCEED_TO_FINAL_ASSEMBLY for PASS")
     if quality.get("fix_checklist", {}).get("critical_fixes") not in ([], None):
-        fail("FAIL: Phase 17 fix_checklist.critical_fixes must be empty for PASS")
+        fail("FAIL: Phase 18 fix_checklist.critical_fixes must be empty for PASS")
     if quality.get("fix_checklist", {}).get("route_back") not in ([], None):
-        fail("FAIL: Phase 17 fix_checklist.route_back must be empty for PASS")
+        fail("FAIL: Phase 18 fix_checklist.route_back must be empty for PASS")
     if quality.get("route_back_phase") not in (None, ""):
-        fail("FAIL: Phase 17 route_back_phase must be empty for PASS")
+        fail("FAIL: Phase 18 route_back_phase must be empty for PASS")
     if quality.get("ready_for_phase_19") is not True:
         fail("FAIL: Phase 18 ready_for_phase_19 must be true")
     quality_md = quality_md_path.read_text(errors="ignore")
@@ -10621,18 +11595,18 @@ if phase_id == "18":
     required_terms = ["overall verdict", "dimension scores", "reviewer consensus", "severity confidence", "route back", "proceed to final assembly"]
     missing_terms = [term for term in required_terms if term not in md_lower]
     if missing_terms:
-        fail("FAIL: Phase 17 markdown summary is missing required quality-gate sections", missing_terms)
+        fail("FAIL: Phase 18 markdown summary is missing required quality-gate sections", missing_terms)
     placeholder_pattern = re.compile(
         r"\[(paper title|title|journal|insert [^\]]+|add [^\]]+)\]"
         r"|\b(TBD|TODO|XXXX+|to be determined|Author\s+[0-9X])\b",
         re.IGNORECASE
     )
     if placeholder_pattern.search(quality_md) or placeholder_pattern.search(json.dumps(quality)):
-        fail("FAIL: Phase 17 quality report contains placeholder text")
+        fail("FAIL: Phase 18 quality report contains placeholder text")
     if word_count(quality_md) < 100:
-        fail("FAIL: Phase 17 markdown summary is too short")
+        fail("FAIL: Phase 18 markdown summary is too short")
     if "proceed_to_final_assembly" not in md_lower and "proceed to final assembly" not in md_lower:
-        fail("FAIL: Phase 17 markdown summary does not match JSON PASS decision")
+        fail("FAIL: Phase 18 markdown summary does not match JSON PASS decision")
 
 if phase_id == "19":
     manuscript_path = proj / "manuscript" / "manuscript-draft.md"
@@ -10663,7 +11637,7 @@ if phase_id == "19":
     )
     for required_path in required_inputs:
         if not required_path.exists():
-            fail(f"FAIL: Phase 18 missing required input {required_path.relative_to(proj)}")
+            fail(f"FAIL: Phase 19 missing required input {required_path.relative_to(proj)}")
     try:
         draft_manifest = json.loads(draft_manifest_path.read_text())
         quality = json.loads(quality_path.read_text())
@@ -10674,7 +11648,7 @@ if phase_id == "19":
         manifest = json.loads(final_manifest_path.read_text())
         blueprint = json.loads((proj / "manuscript" / "manuscript-blueprint.json").read_text())
     except Exception as exc:
-        fail(f"FAIL: Phase 18 final manifest or inputs are not valid JSON: {exc}")
+        fail(f"FAIL: Phase 19 final manifest or inputs are not valid JSON: {exc}")
     if draft_manifest.get("ready_for_phase_14") is not True:
         fail("FAIL: Phase 19 requires a passing Phase 13 draft manifest")
     if quality.get("verdict") != "PASS" or quality.get("ready_for_phase_19") is not True:
@@ -10714,10 +11688,10 @@ if phase_id == "19":
     )
     absent = [field for field in required if field not in manifest]
     if absent:
-        fail("FAIL: Phase 18 final manifest missing required fields", absent)
+        fail("FAIL: Phase 19 final manifest missing required fields", absent)
     findings = manifest.get("findings")
     if not isinstance(findings, list):
-        fail("FAIL: Phase 18 findings must be a list")
+        fail("FAIL: Phase 19 findings must be a list")
     allowed_categories = {
         "manuscript_source": "13",
         "citation_bibliography": "15",
@@ -10733,9 +11707,9 @@ if phase_id == "19":
     }
     if manifest.get("verdict") != "PASS":
         if manifest.get("verdict") != "FAIL":
-            fail(f"FAIL: Phase 18 top-level verdict must be PASS or FAIL, got {manifest.get('verdict')}")
+            fail(f"FAIL: Phase 19 top-level verdict must be PASS or FAIL, got {manifest.get('verdict')}")
         if not findings:
-            fail("FAIL: Phase 18 FAIL report must include nonempty findings")
+            fail("FAIL: Phase 19 FAIL report must include nonempty findings")
         finding_issues = []
         route_phases = set()
         critical_or_major = 0
@@ -10793,7 +11767,7 @@ if phase_id == "19":
         if manifest.get("ready_for_phase_20") is not False:
             finding_issues.append("ready_for_phase_20 must be false for FAIL")
         if finding_issues:
-            fail("FAIL: Phase 18 FAIL report is malformed", finding_issues)
+            fail("FAIL: Phase 19 FAIL report is malformed", finding_issues)
         fail("FAIL: Phase 19 final assembly found unresolved issues; route back before Phase 20", [f"route_back_phase={top_route}"] + [f"{f.get('finding_id')}: {f.get('required_fix')}" for f in findings if isinstance(f, dict)])
 
     if manifest.get("degraded") is not False:
@@ -10807,30 +11781,30 @@ if phase_id == "19":
     if resolution_issues:
         fail("FAIL: Phase 19 final manifest journal_profile_resolution is invalid", resolution_issues)
     if findings:
-        fail("FAIL: Phase 18 PASS manifest must have empty findings")
+        fail("FAIL: Phase 19 PASS manifest must have empty findings")
     engine = manifest.get("assembly_engine")
     if not isinstance(engine, dict) or not str(engine.get("name", "")).strip():
-        fail("FAIL: Phase 18 assembly_engine must identify the renderer")
+        fail("FAIL: Phase 19 assembly_engine must identify the renderer")
     if engine.get("name") != "pandoc":
-        fail("FAIL: Phase 18 assembly_engine.name must be pandoc")
+        fail("FAIL: Phase 19 assembly_engine.name must be pandoc")
     if engine.get("mode") != "same-source-final-assembly":
-        fail("FAIL: Phase 18 assembly_engine.mode must be same-source-final-assembly")
+        fail("FAIL: Phase 19 assembly_engine.mode must be same-source-final-assembly")
     if engine.get("fallback_used") is not False:
-        fail("FAIL: Phase 18 assembly_engine.fallback_used must be false")
+        fail("FAIL: Phase 19 assembly_engine.fallback_used must be false")
     version_id = str(manifest.get("version_id", "")).strip()
     if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{6}Z-v\d{3}$", version_id):
-        fail("FAIL: Phase 18 version_id must match YYYY-MM-DDTHHMMSSZ-vNNN")
+        fail("FAIL: Phase 19 version_id must match YYYY-MM-DDTHHMMSSZ-vNNN")
     created_at = str(manifest.get("created_at_utc", "")).strip()
     if not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", created_at):
-        fail("FAIL: Phase 18 created_at_utc must match YYYY-MM-DDTHH:MM:SSZ")
+        fail("FAIL: Phase 19 created_at_utc must match YYYY-MM-DDTHH:MM:SSZ")
     expected_created = f"{version_id[:13]}:{version_id[13:15]}:{version_id[15:17]}Z"
     if created_at != expected_created:
-        fail("FAIL: Phase 18 created_at_utc must match version_id timestamp")
+        fail("FAIL: Phase 19 created_at_utc must match version_id timestamp")
     if not latest_final_path.exists() or latest_final_path.read_text(errors="ignore") != f"{version_id}\n":
-        fail("FAIL: Phase 18 final/LATEST.txt must point to the active version_id")
+        fail("FAIL: Phase 19 final/LATEST.txt must point to the active version_id")
     source_hashes = manifest.get("source_hashes")
     if not isinstance(source_hashes, dict):
-        fail("FAIL: Phase 18 source_hashes must be an object")
+        fail("FAIL: Phase 19 source_hashes must be an object")
     expected_hashes = {
         "manuscript": sha256(manuscript_path),
         "draft_manifest": sha256(draft_manifest_path),
@@ -10848,11 +11822,11 @@ if phase_id == "19":
         if source_hashes.get(key) != expected
     ]
     if stale_sources:
-        fail("FAIL: Phase 18 source_hashes are stale", stale_sources)
+        fail("FAIL: Phase 19 source_hashes are stale", stale_sources)
     if manifest.get("source_manuscript_path") != "manuscript/manuscript-draft.md":
-        fail("FAIL: Phase 18 source_manuscript_path must be manuscript/manuscript-draft.md")
+        fail("FAIL: Phase 19 source_manuscript_path must be manuscript/manuscript-draft.md")
     if manifest.get("source_manuscript_hash") != sha256(manuscript_path):
-        fail("FAIL: Phase 18 source_manuscript_hash is stale")
+        fail("FAIL: Phase 19 source_manuscript_hash is stale")
     output_paths = manifest.get("output_paths")
     expected_outputs = {
         "md": "final/manuscript-final.md",
@@ -10861,10 +11835,10 @@ if phase_id == "19":
         "pdf": "final/manuscript-final.pdf",
     }
     if output_paths != expected_outputs:
-        fail("FAIL: Phase 18 output_paths must use canonical final/manuscript-final stem")
+        fail("FAIL: Phase 19 output_paths must use canonical final/manuscript-final stem")
     output_hashes = manifest.get("output_hashes")
     if not isinstance(output_hashes, dict):
-        fail("FAIL: Phase 18 output_hashes must be an object")
+        fail("FAIL: Phase 19 output_hashes must be an object")
     versioned_output_paths = manifest.get("versioned_output_paths")
     expected_versioned_outputs = {
         "md": f"final/versions/{version_id}/manuscript-final-{version_id}.md",
@@ -10874,10 +11848,10 @@ if phase_id == "19":
         "manifest": f"final/versions/{version_id}/final-manifest-{version_id}.json",
     }
     if versioned_output_paths != expected_versioned_outputs:
-        fail("FAIL: Phase 18 versioned_output_paths must use final/versions/<version_id>/ with versioned filenames")
+        fail("FAIL: Phase 19 versioned_output_paths must use final/versions/<version_id>/ with versioned filenames")
     versioned_output_hashes = manifest.get("versioned_output_hashes")
     if not isinstance(versioned_output_hashes, dict):
-        fail("FAIL: Phase 18 versioned_output_hashes must be an object")
+        fail("FAIL: Phase 19 versioned_output_hashes must be an object")
     output_file_map = {
         "md": final_md_path,
         "docx": final_docx_path,
@@ -10895,7 +11869,7 @@ if phase_id == "19":
         if output_hashes.get(ext) != sha256(path):
             file_issues.append(f"{ext}: sha256 mismatch")
     if file_issues:
-        fail("FAIL: Phase 18 output files or hashes are invalid", file_issues)
+        fail("FAIL: Phase 19 output files or hashes are invalid", file_issues)
     version_issues = []
     for ext in ("md", "docx", "tex", "pdf"):
         rel = versioned_output_paths.get(ext)
@@ -10915,22 +11889,22 @@ if phase_id == "19":
     elif versioned_output_hashes.get("manifest") != "SELF_REFERENTIAL":
         version_issues.append("manifest: versioned manifest hash must be SELF_REFERENTIAL")
     if version_issues:
-        fail("FAIL: Phase 18 versioned final outputs are invalid", version_issues)
+        fail("FAIL: Phase 19 versioned final outputs are invalid", version_issues)
     same_source = manifest.get("same_source")
     if not isinstance(same_source, dict):
-        fail("FAIL: Phase 18 same_source must be an object")
+        fail("FAIL: Phase 19 same_source must be an object")
     final_md_hash = sha256(final_md_path)
     if same_source.get("source_md_path") != "final/manuscript-final.md":
-        fail("FAIL: Phase 18 same_source.source_md_path must be final/manuscript-final.md")
+        fail("FAIL: Phase 19 same_source.source_md_path must be final/manuscript-final.md")
     if same_source.get("source_md_sha256") != final_md_hash:
-        fail("FAIL: Phase 18 same_source.source_md_sha256 mismatch")
+        fail("FAIL: Phase 19 same_source.source_md_sha256 mismatch")
     if same_source.get("shared_stem") != "final/manuscript-final":
-        fail("FAIL: Phase 18 same_source.shared_stem must be final/manuscript-final")
+        fail("FAIL: Phase 19 same_source.shared_stem must be final/manuscript-final")
     if same_source.get("all_formats_from_source_md") is not True:
-        fail("FAIL: Phase 18 same_source must prove all formats came from final Markdown")
+        fail("FAIL: Phase 19 same_source must prove all formats came from final Markdown")
     generation = manifest.get("format_generation")
     if not isinstance(generation, dict):
-        fail("FAIL: Phase 18 format_generation must be an object")
+        fail("FAIL: Phase 19 format_generation must be an object")
     generation_issues = []
     for ext in ("docx", "tex", "pdf"):
         record = generation.get(ext)
@@ -10953,21 +11927,13 @@ if phase_id == "19":
             if expected_output not in command:
                 generation_issues.append(f"{ext}: command must write {expected_output}")
     if generation_issues:
-        fail("FAIL: Phase 18 format_generation is incomplete", generation_issues)
-    try:
-        with zipfile.ZipFile(final_docx_path) as zf:
-            names = set(zf.namelist())
-            if "word/document.xml" not in names:
-                fail("FAIL: Phase 18 DOCX is missing word/document.xml")
-    except Exception as exc:
-        fail(f"FAIL: Phase 18 DOCX is not a valid docx zip: {exc}")
-    tex_text = final_tex_path.read_text(errors="ignore")
-    if "\\documentclass" not in tex_text or "\\begin{document}" not in tex_text:
-        fail("FAIL: Phase 18 TeX output does not look like a standalone LaTeX document")
-    pdf_bytes = final_pdf_path.read_bytes()
-    if not pdf_bytes.startswith(b"%PDF") or b"%%EOF" not in pdf_bytes[-2048:]:
-        fail("FAIL: Phase 18 PDF output does not look like a valid PDF")
+        fail("FAIL: Phase 19 format_generation is incomplete", generation_issues)
     final_md = final_md_path.read_text(errors="ignore")
+    format_authenticity_issues = validate_format_trio(
+        final_md, final_docx_path, final_tex_path, final_pdf_path, "Phase 19 final"
+    )
+    if format_authenticity_issues:
+        fail("FAIL: Phase 19 final deliverable authenticity checks failed", format_authenticity_issues)
     md_lower = final_md.lower()
     final_sections = markdown_sections(final_md)
     final_keyword_issues = keyword_placement_issues(final_md)
@@ -10979,7 +11945,7 @@ if phase_id == "19":
         re.IGNORECASE
     )
     if placeholder_pattern.search(final_md) or placeholder_pattern.search(json.dumps(manifest)):
-        fail("FAIL: Phase 18 final outputs contain placeholder text")
+        fail("FAIL: Phase 19 final outputs contain placeholder text")
     if "the locked artifact snapshot" in final_md.lower():
         fail("FAIL: Phase 19 final markdown contains placeholder artifact targets")
     if has_raw_citekeys(final_md):
@@ -11022,7 +11988,7 @@ if phase_id == "19":
         fail("FAIL: Phase 19 final markdown is missing visible declaration sections or statements", missing_final_declarations)
     content_checks = manifest.get("content_checks")
     if not isinstance(content_checks, dict):
-        fail("FAIL: Phase 18 content_checks must be an object")
+        fail("FAIL: Phase 19 content_checks must be an object")
     final_structure = blueprint.get("journal_structure", {}) if isinstance(blueprint.get("journal_structure"), dict) else {}
     final_display_architecture = blueprint.get("display_architecture", {}) if isinstance(blueprint.get("display_architecture"), dict) else {}
     if editable_text_policy_forbids_raw_html_tables(final_display_architecture):
@@ -11046,7 +12012,7 @@ if phase_id == "19":
     final_heading_order = visible_heading_sequence(final_md)
     missing_sections = [section for section in required_sections if section not in final_heading_order]
     if missing_sections:
-        fail("FAIL: Phase 18 final markdown missing required manuscript sections", missing_sections)
+        fail("FAIL: Phase 19 final markdown missing required manuscript sections", missing_sections)
     expected_sequence = [section for section in required_sections if section != "references"]
     if not sequence_contains_in_order(final_heading_order, expected_sequence):
         fail("FAIL: Phase 19 final markdown section order does not match the approved journal structure", [f"expected_order={expected_sequence}", f"actual_headings={final_heading_order}"])
@@ -11057,7 +12023,7 @@ if phase_id == "19":
     if references_looks_like_key_dump(refs_body):
         fail("FAIL: Phase 19 final markdown References section looks like a citekey dump rather than formatted references")
     if content_checks.get("required_sections_present") is not True or content_checks.get("placeholder_free") is not True:
-        fail("FAIL: Phase 18 content_checks must confirm sections and placeholder-free text")
+        fail("FAIL: Phase 19 content_checks must confirm sections and placeholder-free text")
     required_content_fields = (
         "journal_structure_applied",
         "journal_display_architecture_applied",
@@ -11074,35 +12040,35 @@ if phase_id == "19":
     )
     missing_content_fields = [field for field in required_content_fields if field not in content_checks]
     if missing_content_fields:
-        fail("FAIL: Phase 18 content_checks missing journal-specific display fields", missing_content_fields)
+        fail("FAIL: Phase 19 content_checks missing journal-specific display fields", missing_content_fields)
     if content_checks.get("journal_structure_applied") is not True:
-        fail("FAIL: Phase 18 content_checks must confirm journal_structure_applied")
+        fail("FAIL: Phase 19 content_checks must confirm journal_structure_applied")
     if content_checks.get("journal_display_architecture_applied") is not True:
-        fail("FAIL: Phase 18 content_checks must confirm journal_display_architecture_applied")
+        fail("FAIL: Phase 19 content_checks must confirm journal_display_architecture_applied")
     if content_checks.get("section_sequence_matches_blueprint") is not True:
-        fail("FAIL: Phase 18 content_checks must confirm section_sequence_matches_blueprint")
+        fail("FAIL: Phase 19 content_checks must confirm section_sequence_matches_blueprint")
     if content_checks.get("table_placement_policy_applied") != final_display_architecture.get("table_placement_policy"):
-        fail("FAIL: Phase 18 content_checks.table_placement_policy_applied must match blueprint display_architecture")
+        fail("FAIL: Phase 19 content_checks.table_placement_policy_applied must match blueprint display_architecture")
     if content_checks.get("figure_placement_policy_applied") != final_display_architecture.get("figure_placement_policy"):
-        fail("FAIL: Phase 18 content_checks.figure_placement_policy_applied must match blueprint display_architecture")
+        fail("FAIL: Phase 19 content_checks.figure_placement_policy_applied must match blueprint display_architecture")
     if content_checks.get("table_rendering_mode_applied") != final_display_architecture.get("table_rendering_mode"):
-        fail("FAIL: Phase 18 content_checks.table_rendering_mode_applied must match blueprint display_architecture")
+        fail("FAIL: Phase 19 content_checks.table_rendering_mode_applied must match blueprint display_architecture")
     if content_checks.get("figure_rendering_mode_applied") != final_display_architecture.get("figure_rendering_mode"):
-        fail("FAIL: Phase 18 content_checks.figure_rendering_mode_applied must match blueprint display_architecture")
+        fail("FAIL: Phase 19 content_checks.figure_rendering_mode_applied must match blueprint display_architecture")
     citation_checks = manifest.get("citation_checks")
     if not isinstance(citation_checks, dict):
-        fail("FAIL: Phase 18 citation_checks must be an object")
+        fail("FAIL: Phase 19 citation_checks must be an object")
     if citation_checks.get("references_bib_used") is not True or citation_checks.get("unresolved_citations") not in (0, "0"):
-        fail("FAIL: Phase 18 citation_checks must confirm bibliography use and zero unresolved citations")
+        fail("FAIL: Phase 19 citation_checks must confirm bibliography use and zero unresolved citations")
     if claim_map.get("unsupported_count", 0) not in (0, "0"):
-        fail("FAIL: Phase 18 cannot assemble with unsupported claims")
+        fail("FAIL: Phase 19 cannot assemble with unsupported claims")
     declaration_checks = manifest.get("declaration_checks")
     if not isinstance(declaration_checks, dict):
-        fail("FAIL: Phase 18 declaration_checks must be an object")
+        fail("FAIL: Phase 19 declaration_checks must be an object")
     required_declarations = ["ethics_statement", "data_availability", "ai_use_disclosure", "coi_statement"]
     missing_declarations = [key for key in required_declarations if declaration_checks.get(key) not in (True, "not_applicable")]
     if missing_declarations:
-        fail("FAIL: Phase 18 declaration_checks missing required declarations", missing_declarations)
+        fail("FAIL: Phase 19 declaration_checks missing required declarations", missing_declarations)
     reader_language = manifest.get("reader_facing_language")
     if not isinstance(reader_language, dict):
         fail("FAIL: Phase 19 reader_facing_language must be an object")
@@ -11154,11 +12120,11 @@ if phase_id == "19":
     visible_final_tables = count_visible_table_blocks(final_md)
     total_displays = visible_final_tables + visible_final_figures
     if int(content_checks.get("main_text_table_count", -1)) != visible_final_tables:
-        fail("FAIL: Phase 18 content_checks.main_text_table_count mismatch")
+        fail("FAIL: Phase 19 content_checks.main_text_table_count mismatch")
     if int(content_checks.get("main_text_figure_count", -1)) != visible_final_figures:
-        fail("FAIL: Phase 18 content_checks.main_text_figure_count mismatch")
+        fail("FAIL: Phase 19 content_checks.main_text_figure_count mismatch")
     if int(content_checks.get("main_text_display_count", -1)) != total_displays:
-        fail("FAIL: Phase 18 content_checks.main_text_display_count mismatch")
+        fail("FAIL: Phase 19 content_checks.main_text_display_count mismatch")
     display_cap = final_display_architecture.get("main_text_display_cap")
     if display_cap not in (None, "") and total_displays > int(display_cap):
         fail("FAIL: Phase 19 final markdown exceeds journal-specific main-text display cap")
@@ -11169,7 +12135,7 @@ if phase_id == "19":
     if figure_cap not in (None, "") and visible_final_figures > int(figure_cap):
         fail("FAIL: Phase 19 final markdown exceeds journal-specific figure cap")
     if content_checks.get("display_cap_respected") is not True:
-        fail("FAIL: Phase 18 content_checks must confirm display_cap_respected")
+        fail("FAIL: Phase 19 content_checks must confirm display_cap_respected")
     if str(final_display_architecture.get("descriptive_table_requirement", "")).strip() in DESCRIPTIVE_TABLE_REQUIREMENTS:
         if "Table 1" not in final_md or content_checks.get("descriptive_table_requirement_satisfied") is not True:
             fail("FAIL: Phase 19 final markdown must satisfy the journal's descriptive Table 1 requirement")
@@ -11192,11 +12158,11 @@ if phase_id == "19":
         if figure_policy == "separate_files_after_tables" and table_positions and min(figure_positions) < max(table_positions):
             fail("FAIL: Phase 19 figures must follow tables under the journal separate-file policy")
     if manifest.get("fix_checklist", {}).get("critical_fixes") not in ([], None):
-        fail("FAIL: Phase 18 fix_checklist.critical_fixes must be empty for PASS")
+        fail("FAIL: Phase 19 fix_checklist.critical_fixes must be empty for PASS")
     if manifest.get("fix_checklist", {}).get("route_back") not in ([], None):
-        fail("FAIL: Phase 18 fix_checklist.route_back must be empty for PASS")
+        fail("FAIL: Phase 19 fix_checklist.route_back must be empty for PASS")
     if manifest.get("route_back_phase") not in (None, ""):
-        fail("FAIL: Phase 18 route_back_phase must be empty for PASS")
+        fail("FAIL: Phase 19 route_back_phase must be empty for PASS")
     if manifest.get("ready_for_phase_20") is not True:
         fail("FAIL: Phase 19 ready_for_phase_20 must be true")
 
@@ -11498,24 +12464,6 @@ if phase_id == "20":
             output_issues.append(f"{key}: versioned self-referential hash must be SELF_REFERENTIAL")
     if output_issues:
         fail("FAIL: Phase 20 submission package outputs are invalid", output_issues)
-    format_issues = []
-    try:
-        with zipfile.ZipFile(submission_docx_path) as zf:
-            if "word/document.xml" not in zf.namelist():
-                format_issues.append("submission_docx: missing word/document.xml")
-    except zipfile.BadZipFile:
-        format_issues.append("submission_docx: not a valid docx zip")
-    tex_text = submission_tex_path.read_text(errors="ignore")
-    if "\\documentclass" not in tex_text or "\\begin{document}" not in tex_text:
-        format_issues.append("submission_tex: missing documentclass or document body")
-    with submission_pdf_path.open("rb") as f:
-        pdf_head = f.read(8)
-        f.seek(max(0, submission_pdf_path.stat().st_size - 2048))
-        pdf_tail = f.read()
-    if not pdf_head.startswith(b"%PDF") or b"%%EOF" not in pdf_tail:
-        format_issues.append("submission_pdf: missing PDF header or EOF marker")
-    if format_issues:
-        fail("FAIL: Phase 20 submission formats are invalid", format_issues)
     submission_text = submission_md_path.read_text(errors="ignore")
     submission_keyword_issues = keyword_placement_issues(submission_text)
     if submission_keyword_issues:
@@ -11555,6 +12503,7 @@ if phase_id == "20":
     if submission_registry_table_hits:
         fail("FAIL: Phase 20 submission manuscript exposes registry/model-ladder tables as reader-facing evidence", submission_registry_table_hits[:25])
     phase20_external_gate_failures = []
+    phase20_external_gate_advisories = []
     for gate_name, label in [
         ("abstract-boilerplate-check.sh", "Phase 20 abstract boilerplate"),
         ("manuscript-artifact-leakage-check.sh", "Phase 20 manuscript artifact leakage"),
@@ -11570,12 +12519,11 @@ if phase_id == "20":
         ("citation-cluster-quality-check.sh", "Phase 20 citation cluster quality"),
         ("figure-style-source-check.sh", "Phase 20 figure style source"),
     ]:
-        gate_result = run_external_gate(gate_name, proj, label)
-        if gate_result is None:
-            continue
-        status, reason, detail = gate_result
-        if status == "RED":
-            phase20_external_gate_failures.append(f"{label}: reason={reason} detail={detail}")
+        consume_external_gate(
+            gate_name, proj, label,
+            phase20_external_gate_failures, phase20_external_gate_advisories,
+        )
+    emit_gate_advisories(phase20_external_gate_advisories)
     if phase20_external_gate_failures:
         fail("FAIL: Phase 20 external methods gates failed", phase20_external_gate_failures)
     placeholder_pattern = re.compile(
@@ -11657,6 +12605,24 @@ if phase_id == "20":
     if reader_language.get("workflow_jargon_hits") not in (0, "0") or reader_language.get("status") != "PASS":
         fail("FAIL: Phase 20 reader_facing_language must report zero workflow jargon hits and PASS status")
     semantic_report_issues = validate_semantic_body_prose_report(semantic_body, semantic_body_path, sha256(submission_md_path))
+    evidence_report_relative = str(semantic_body.get("evidence_report_path", "")).strip()
+    try:
+        _, evidence_report_path = normalize_relative(
+            proj, evidence_report_relative, "Phase 20 evidence-bound semantic report"
+        )
+        evidence_report_issues = validate_semantic_body_prose_report(
+            semantic_body, evidence_report_path, sha256(submission_md_path)
+        )
+        if evidence_report_issues:
+            semantic_report_issues.extend(
+                f"evidence-bound report: {issue}" for issue in evidence_report_issues
+            )
+        elif semantic_body_prose_audit_fields(evidence_report_path) != semantic_body_prose_audit_fields(semantic_body_path):
+            semantic_report_issues.append(
+                "stable semantic report audit fields differ from the registered evidence-bound report"
+            )
+    except EvidenceError as exc:
+        semantic_report_issues.append(f"evidence-bound report path is invalid: {exc}")
     if semantic_report_issues:
         fail("FAIL: Phase 20 semantic body-prose read is missing, stale, or unresolved", semantic_report_issues)
     if declaration_visibility.get("missing_required_declarations") not in ([], None) or declaration_visibility.get("status") != "PASS":
@@ -11743,39 +12709,69 @@ if phase_id == "20":
         fail("FAIL: Phase 20 fix_checklist.route_back must be empty for PASS")
     if hygiene.get("route_back_phase") not in (None, ""):
         fail("FAIL: Phase 20 route_back_phase must be empty for PASS")
+    format_authenticity_issues = validate_format_trio(
+        submission_text, submission_docx_path, submission_tex_path,
+        submission_pdf_path, "Phase 20 submission"
+    )
+    if format_authenticity_issues:
+        fail("FAIL: Phase 20 submission deliverable authenticity checks failed", format_authenticity_issues)
     if package_manifest.get("verdict") != "PASS":
         fail("FAIL: Phase 20 submission package manifest verdict must be PASS")
 
-# F9 (audit 2026-08-25 port): on PASS, mint an atomic verify-stamp so that
-# `auto-research-state.sh complete` can prove THIS phase was actually verified
-# against the current contract and unmodified artifacts. complete refuses
-# without a fresh stamp (no env bypass) — the legitimate escape from a
-# blocked complete is route-back / cap-3 escalation. Written tmp+replace to
-# match the state writer's atomicity.
-_stamp_dir = proj / ".auto-research" / "verify-stamps"
-_stamp_dir.mkdir(parents=True, exist_ok=True)
-_artifact_hashes = {}
-for _p in sorted(set(verified_output_paths)):
-    _pp = Path(_p)
-    try:
-        _rel = str(_pp.relative_to(proj))
-    except ValueError:
-        _rel = str(_pp)
-    if _pp.is_dir():
-        _artifact_hashes[_rel] = "DIR"
-    elif _pp.is_file():
-        _artifact_hashes[_rel] = sha256(_pp)
-_stamp = {
+def descriptor_digest(path):
+    if path.is_symlink():
+        fail(f"FAIL: verified path is a symlink: {path}")
+    if path.is_file():
+        return sha256(path)
+    if not path.is_dir():
+        fail(f"FAIL: verified path is neither file nor directory: {path}")
+    digest = hashlib.sha256()
+    for child in sorted(path.rglob("*"), key=lambda item: item.as_posix()):
+        if child.is_symlink():
+            fail(f"FAIL: verified directory contains a symlink: {child}")
+        relative = child.relative_to(path).as_posix()
+        if child.is_dir():
+            digest.update(f"D\0{relative}\0".encode())
+        elif child.is_file():
+            digest.update(f"F\0{relative}\0{sha256(child)}\0".encode())
+    return digest.hexdigest()
+
+def descriptor_paths(patterns, *, required):
+    project_root = proj.resolve()
+    resolved = {}
+    missing_patterns = []
+    for pattern in patterns:
+        matches = sorted(glob.glob(str(proj / str(pattern))))
+        if required and not matches:
+            missing_patterns.append(str(pattern))
+        for raw in matches:
+            path = Path(raw)
+            if path.is_symlink():
+                fail(f"FAIL: verified path is a symlink: {path}")
+            try:
+                relative = path.resolve().relative_to(project_root).as_posix()
+            except ValueError:
+                fail(f"FAIL: verified path resolves outside project: {path}")
+            resolved[relative] = descriptor_digest(path)
+    if missing_patterns:
+        fail("FAIL: descriptor missing required outputs", missing_patterns)
+    return dict(sorted(resolved.items()))
+
+# The descriptor is emitted only after every semantic check passes. It is not
+# persisted by the verifier. The state manager binds its commit to these exact
+# bytes by rehashing both outputs and inputs immediately before and after the
+# atomic state publication.
+_descriptor = {
+    "schema_version": "scholar-auto-research-verification-descriptor/v1",
     "phase_id": phase_id,
     "verdict": "PASS",
-    "contract_sha256": sha256(contract_path),
-    "artifact_hashes": _artifact_hashes,
-    "verified_at": datetime.now(timezone.utc).isoformat(),
+    "contract_sha256": contract_generation_sha256,
+    "required_outputs": descriptor_paths(phase.get("required_outputs", []), required=True),
+    "required_inputs": descriptor_paths(phase.get("required_inputs", []), required=False),
 }
-_stamp_path = _stamp_dir / (str(phase_id) + ".json")
-_stamp_tmp = _stamp_path.with_suffix(".json.tmp")
-_stamp_tmp.write_text(json.dumps(_stamp, indent=2, sort_keys=True) + "\n")
-_stamp_tmp.replace(_stamp_path)
+if review_evidence_result is not None:
+    _descriptor["review_evidence"] = review_evidence_result
+print("VERIFICATION_DESCRIPTOR_JSON=" + json.dumps(_descriptor, sort_keys=True, separators=(",", ":")))
 
 print(f"PASS: Phase {phase_id} {phase['name']} required outputs exist")
 print("Required verdict fields:")

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # manuscript-title-check.sh — Phase 13 / 19 / 20 structural gate.
 #
-# Rationale: a run can ship manuscript-draft.md, manuscript-final.md, AND
-# manuscript-submission.md all opening directly at `## Abstract` with no
-# manuscript title. No
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): the run shipped
+# manuscript-draft.md, manuscript-final.md, AND manuscript-submission.md
+# all opening directly at `## Abstract` with no manuscript title. No
 # Phase 12 / 13 / 19 / 20 contract required a title field, so the gap
 # was invisible to every existing gate. Existing title-* gates
 # (title-outcome-check, title-claim-vs-headline-stat-check) PRESUME a
@@ -71,7 +71,7 @@ for f in "${CANDIDATES[@]}"; do
 done
 
 # scholar-full-paper layout: drafts/<canonical-pattern>.md. Use find -print0
-# to be safe with spaces in paths (Google-Drive-mounted projects). Take the
+# to be safe with spaces in paths (including Dropbox projects). Take the
 # newest file matching each canonical pattern; the gate then audits each
 # present manuscript independently.
 _mtc_newest() {
@@ -195,7 +195,7 @@ while k < n:
 
 # Adjudicate
 if yaml_title and h1_title:
-    # Dual title failure mode: both a YAML title and an H1 title are present.
+    # Dual title (the v2 cohabitation-marriage-cfps failure mode).
     # Pandoc renders both; reviewers see two titles. RED.
     snippet = (h1_title[:60] + "...") if len(h1_title) > 60 else h1_title
     print(f"RED:dual_title:yaml_and_h1::{snippet}")

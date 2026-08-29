@@ -1,0 +1,61 @@
+{
+  "coverage_matrix_hash": "f27ba65465cf93cdd827e63148a38497b382bd7f286ccb0428b8d4dc010259a7",
+  "engine_handoff": {
+    "lit_review_engine": {
+      "input_artifacts": [
+        "idea/research-question.json",
+        "idea/journal-fit.json"
+      ],
+      "invoked_at_utc": "2026-04-28T09:00:00Z",
+      "mode": "integrated_literature_theory_hypotheses",
+      "output_artifacts": [
+        "literature/literature-coverage-matrix.json",
+        "literature/references.bib",
+        "literature/search-log.md",
+        "literature/review-protocol.json"
+      ],
+      "protocol_artifacts": [
+        "literature/review-protocol.json",
+        "literature/search-log.md"
+      ],
+      "protocol_followed": true,
+      "skill": "scholar-lit-review-hypothesis",
+      "task_invocation_id": "phase2-lit-review-001"
+    },
+    "target_journal": "Journal of Marriage and Family",
+    "writing_engine": {
+      "input_artifacts": [
+        "literature/literature-coverage-matrix.json",
+        "idea/journal-fit.json"
+      ],
+      "invoked_at_utc": "2026-04-28T09:30:00Z",
+      "mode": "draft",
+      "output_artifacts": [
+        "literature/lit-theory.md",
+        "literature/lit-theory-manifest.json"
+      ],
+      "section": "Literature Review and Theory",
+      "skill": "scholar-write",
+      "task_invocation_id": "phase2-write-001"
+    }
+  },
+  "evidence_ledger": {
+    "path": "evidence/claim-anchors.ndjson",
+    "records": 1
+  },
+  "journal_fit_hash": "b4d7e0edb65b9f53e9db6e9bb294235d86adf9a4231d55fa6c09a3d9ce2b7228",
+  "lit_theory_hash": "d2c64d598935ed0619639824fa24462834a3c983ff89d203a69d271cf665d763",
+  "protocol_artifacts": {
+    "review_protocol": "literature/review-protocol.json",
+    "search_log": "literature/search-log.md"
+  },
+  "ready_for_phase_3": true,
+  "references_bib_hash": "41fe5320db7d6182be8353a99f5db3626b29f066f395d480114f62188be9e6fd",
+  "selected_rq_hash": "312b76e06c768ab965b56d003d430fc41d42a5ba6f5504f5e33307e125a851e5",
+  "source_hashes": {
+    "journal_fit": "b4d7e0edb65b9f53e9db6e9bb294235d86adf9a4231d55fa6c09a3d9ce2b7228",
+    "research_question": "312b76e06c768ab965b56d003d430fc41d42a5ba6f5504f5e33307e125a851e5"
+  },
+  "source_phase": "2",
+  "verdict": "PASS"
+}

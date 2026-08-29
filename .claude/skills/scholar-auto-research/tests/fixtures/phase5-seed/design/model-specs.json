@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "id": "M1",
+      "outcome": "adolescent educational expectations",
+      "predictors": ["parental job loss"],
+      "estimator": "household fixed effects linear model",
+      "covariates": ["child age", "wave", "household income"],
+      "hypothesis_ids": ["H1"],
+      "purpose": "primary estimate of within-household expectation change"
+    }
+  ]
+}

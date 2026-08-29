@@ -20,6 +20,7 @@ from pathlib import Path
 
 skill_dir = Path(sys.argv[1])
 contract = json.loads((skill_dir / "references" / "phase-contract.json").read_text())
+runtime_manifest = json.loads((skill_dir / "references" / "runtime-dependencies.json").read_text())
 phase_by_id = {str(item["id"]): item for item in contract["phases"]}
 
 required_schema = {
@@ -43,18 +44,25 @@ for phase_id, fields in required_schema.items():
 
 verify_text = (skill_dir / "scripts" / "auto-research-verify.sh").read_text()
 gate_dir = skill_dir / "scripts" / "gates"
-# External-gate extraction. TWO invocation shapes are recognized (F8, audit
-# 2026-08-25 port): the tuple form `("<name>.sh", "Phase ...")` used by the
-# panel lists, AND the direct form `GATE_DIR / "<name>.sh"` used for
-# phase-aware gates called outside a panel list. The tuple-only regex
-# silently missed the latter, so effect-size-narrative-check.sh could go
-# un-vendored without this smoke reporting it.
-_TUPLE_GATE_RE = r'\("([A-Za-z0-9._-]+\.sh)",\s*"Phase'
-_GATEDIR_GATE_RE = r'GATE_DIR\s*/\s*"([A-Za-z0-9._-]+\.sh)"'
-external_gates = sorted(
-    set(re.findall(_TUPLE_GATE_RE, verify_text))
-    | set(re.findall(_GATEDIR_GATE_RE, verify_text))
-)
+inventory_helper = skill_dir / "tests" / "helpers" / "external_gate_inventory.py"
+if not inventory_helper.exists():
+    errors.append("missing packaged external-gate inventory helper")
+    external_gates = []
+else:
+    inventory_result = subprocess.run(
+        [sys.executable, str(inventory_helper), str(skill_dir / "scripts" / "auto-research-verify.sh"), "--self-test"],
+        capture_output=True, text=True,
+    )
+    if inventory_result.returncode != 0:
+        errors.append("external-gate inventory failed: " + inventory_result.stderr.strip())
+        external_gates = []
+    else:
+        try:
+            inventory = json.loads(inventory_result.stdout)
+            external_gates = sorted({row["gate"] for row in inventory["obligations"]})
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            errors.append(f"external-gate inventory returned invalid JSON: {exc}")
+            external_gates = []
 if not gate_dir.exists():
     errors.append("missing bundled auto-research scripts/gates directory")
 for gate_name in external_gates:
@@ -77,7 +85,15 @@ git_root = subprocess.run(
 )
 if git_root.returncode == 0:
     repo_root = Path(git_root.stdout.strip())
-    for path in [gate_dir / name for name in external_gates] + [gate_dir / "_section-role-helper.py", gate_dir / "derive-manuscript-path.sh"]:
+    packaged_dependencies = [
+        skill_dir / str(relative)
+        for relative in runtime_manifest.get("required_packaged_files", [])
+    ]
+    for path in (
+        [gate_dir / name for name in external_gates]
+        + [gate_dir / "_section-role-helper.py", gate_dir / "derive-manuscript-path.sh"]
+        + packaged_dependencies
+    ):
         if not path.exists():
             continue
         rel = path.relative_to(repo_root)
@@ -103,7 +119,7 @@ required_verify_tokens = [
     "drafting-plan is incomplete",
     "draft-self-critique is incomplete",
     "omnibus citation cluster",
-    "structured secondary-data manuscripts require a method-specialized reviewer",
+    "authoritative method_orientation requires a fifth",
     "submission manuscript exposes internal workflow language",
     "referenced figure missing package inventory record",
 ]
@@ -131,6 +147,7 @@ contract_files = [
     "manuscript-drafting-contract.md",
     "final-assembly-contract.md",
     "submission-hygiene-contract.md",
+    "review-evidence-contract.md",
 ]
 doc_text = "\n".join((skill_dir / "references" / name).read_text() for name in contract_files)
 required_doc_tokens = [
@@ -147,6 +164,8 @@ required_doc_tokens = [
     "reader-facing prose",
     "declaration_visibility",
     "figure_packaging",
+    "process_recorded",
+    "runtime-preflight.py",
 ]
 for token in required_doc_tokens:
     if token not in doc_text:

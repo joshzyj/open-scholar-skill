@@ -1,111 +1,219 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "claim-anchor.schema.json",
-  "title": "claim-anchor/v1",
-  "description": "One evidence observation in a project's Evidence Ledger (evidence/claim-anchors.ndjson): a verbatim source passage selected to support, contradict, or qualify an output claim, captured at claim finalization. Identity is source-side (cite_key + quote + locator) so prose rewrites do not mint new anchors. Protocol: skills/_shared/evidence-ledger.md.",
-  "type": "object",
-  "required": [
-    "schema",
-    "anchor_id",
-    "cite_key",
-    "claim_kind",
-    "stance",
-    "evidence_form",
-    "access_tier",
-    "produced_by",
-    "ts"
-  ],
-  "properties": {
-    "schema": { "const": "claim-anchor/v1" },
-    "anchor_id": {
-      "type": "string",
-      "pattern": "^[a-z0-9_-]+-[0-9a-f]{8}$",
-      "description": "<cite_key lowercase>-<sha1(cite_key|quote_sha256|source_loc)[:8]>. Lowercase, no dots (regex-inert vs anchor-verify numeric grammar). Append helper dedups on this: first capture wins."
-    },
-    "cite_key": { "type": "string", "minLength": 1 },
-    "doi": { "type": ["string", "null"] },
-    "source_title": { "type": ["string", "null"] },
-    "claim_kind": {
-      "enum": [
-        "prose_sentence",
-        "map_cell",
-        "hypothesis",
-        "mechanism_status",
-        "magnitude",
-        "theory_attribution",
-        "gap_claim",
-        "reading_list"
-      ]
-    },
-    "stance": { "enum": ["supports", "contradicts", "qualifies"] },
-    "claim_text": {
-      "type": ["string", "null"],
-      "description": "First-use snapshot of the prose/map-cell this passage was captured for. ADVISORY — not identity. Authoritative bindings: <!--ev:--> tags in drafts, anchor_ids[] in evidence/claim-inventory.json, anchor_refs[] in audit records."
-    },
-    "claim_loc": {
-      "type": ["string", "null"],
-      "description": "Advisory locator at capture time (inventory row_id like '4c-established-3', or file:line)."
-    },
-    "hypothesis_id": {
-      "type": ["string", "null"],
-      "description": "Optional join to citations/hypotheses-canonical.json (e.g. 'H1')."
-    },
-    "evidence_quote": {
-      "type": ["string", "null"],
-      "description": "VERBATIM source passage, <=60 words. null is legal with access_tier T3/T4 + evidence_form metadata_only — it makes 'cited on metadata alone' visible."
-    },
-    "evidence_context": {
-      "type": ["string", "null"],
-      "description": "Optional +/-1-2 surrounding sentences, <=150 words. RECOMMENDED for direction/magnitude/population claims."
-    },
-    "evidence_form": {
-      "enum": ["source_verbatim", "abstract_verbatim", "kg_paraphrase", "metadata_only"],
-      "description": "What the quote IS, independent of how it was reached. KG-derived text is kg_paraphrase, never presented as a source quote."
-    },
-    "quote_sha256": {
-      "type": ["string", "null"],
-      "pattern": "^[0-9a-f]{64}$",
-      "description": "sha256 of the normalized quote (lowercase, collapsed whitespace). Integrity/dedup only — never sole identity."
-    },
-    "source_loc": { "type": ["string", "null"], "description": "e.g. 'p.2125', 'Section: Results'" },
-    "locator_type": { "enum": ["page", "section", "paragraph", "abstract", "none"] },
-    "access_tier": {
-      "enum": ["T0_kg_fulltext", "T1_fulltext", "T2_oa_fulltext", "T3_abstract", "T4_none"],
-      "description": "Tier chain per .claude/agents/verify-claim-faithfulness.md. Tier-honest capture: record the best evidence already in context; escalation to T0-T2 is the Phase-8 audit's job."
-    },
-    "retrieval": {
-      "type": "object",
-      "properties": {
-        "tool": { "enum": ["rag_search", "zotero_pdf", "kg", "webfetch", "websearch"] },
-        "doc_id": { "type": ["string", "null"] },
-        "chunk_id": { "type": ["string", "null"] },
-        "text_sha256": { "type": ["string", "null"] }
-      },
-      "additionalProperties": false
-    },
-    "produced_by": {
-      "enum": [
-        "scholar-lit-review",
-        "scholar-lit-review-hypothesis",
-        "scholar-citation",
-        "scholar-write",
-        "scholar-hypothesis",
-        "scholar-respond",
-        "scholar-book",
-        "scholar-grant",
-        "scholar-teach",
-        "scholar-brainstorm",
-        "scholar-idea",
-        "scholar-conceptual"
-      ]
-    },
-    "phase": { "type": ["string", "null"], "description": "Orchestrator phase at capture ('2', '7', '8'); absent/null on standalone runs." },
-    "ts": { "type": "string", "description": "ISO-8601 timestamp" },
-    "supersedes": {
-      "type": ["string", "null"],
-      "pattern": "^[a-z0-9_-]+-[0-9a-f]{8}$",
-      "description": "anchor_id this record corrects. Renderer and gates take the latest record per anchor_id."
-    }
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "$id": "claim-anchor.schema.json",
+ "title": "claim-anchor/v1",
+ "description": "One evidence observation in a project's Evidence Ledger (evidence/claim-anchors.ndjson): a verbatim source passage selected to support, contradict, or qualify an output claim, captured at claim finalization. Identity is source-side (cite_key + quote + locator) so prose rewrites do not mint new anchors. Protocol: skills/_shared/evidence-ledger.md.",
+ "type": "object",
+ "required": [
+  "schema",
+  "anchor_id",
+  "cite_key",
+  "claim_kind",
+  "stance",
+  "evidence_form",
+  "access_tier",
+  "produced_by",
+  "ts"
+ ],
+ "properties": {
+  "schema": {
+   "const": "claim-anchor/v1"
   },
-  "additionalProperties": false
+  "anchor_id": {
+   "type": "string",
+   "pattern": "^[a-z0-9_-]+-[0-9a-f]{8}$",
+   "description": "<cite_key lowercase>-<sha1(cite_key|quote_sha256|source_loc)[:8]>. Lowercase, no dots (regex-inert vs anchor-verify numeric grammar). Append helper dedups on this: first capture wins."
+  },
+  "cite_key": {
+   "type": "string",
+   "minLength": 1
+  },
+  "doi": {
+   "type": [
+    "string",
+    "null"
+   ]
+  },
+  "source_title": {
+   "type": [
+    "string",
+    "null"
+   ]
+  },
+  "claim_kind": {
+   "enum": [
+    "prose_sentence",
+    "map_cell",
+    "hypothesis",
+    "mechanism_status",
+    "magnitude",
+    "theory_attribution",
+    "gap_claim",
+    "reading_list"
+   ]
+  },
+  "stance": {
+   "enum": [
+    "supports",
+    "contradicts",
+    "qualifies"
+   ]
+  },
+  "claim_text": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "First-use snapshot of the prose/map-cell this passage was captured for. ADVISORY \u2014 not identity. Authoritative bindings: <!--ev:--> tags in drafts, anchor_ids[] in evidence/claim-inventory.json, anchor_refs[] in audit records."
+  },
+  "claim_loc": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "Advisory locator at capture time (inventory row_id like '4c-established-3', or file:line)."
+  },
+  "hypothesis_id": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "Optional join to citations/hypotheses-canonical.json (e.g. 'H1')."
+  },
+  "evidence_quote": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "VERBATIM source passage, <=60 words. null is legal with access_tier T3/T4 + evidence_form metadata_only \u2014 it makes 'cited on metadata alone' visible."
+  },
+  "evidence_context": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "Optional +/-1-2 surrounding sentences, <=150 words. RECOMMENDED for direction/magnitude/population claims."
+  },
+  "evidence_form": {
+   "enum": [
+    "source_verbatim",
+    "abstract_verbatim",
+    "kg_paraphrase",
+    "metadata_only"
+   ],
+   "description": "What the quote IS, independent of how it was reached. KG-derived text is kg_paraphrase, never presented as a source quote."
+  },
+  "quote_sha256": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "pattern": "^[0-9a-f]{64}$",
+   "description": "sha256 of the normalized quote (lowercase, collapsed whitespace). Integrity/dedup only \u2014 never sole identity."
+  },
+  "source_loc": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "e.g. 'p.2125', 'Section: Results'"
+  },
+  "locator_type": {
+   "enum": [
+    "page",
+    "section",
+    "paragraph",
+    "abstract",
+    "none"
+   ]
+  },
+  "access_tier": {
+   "enum": [
+    "T0_kg_fulltext",
+    "T1_fulltext",
+    "T2_oa_fulltext",
+    "T3_abstract",
+    "T4_none"
+   ],
+   "description": "Tier chain per .claude/agents/verify-claim-faithfulness.md. Tier-honest capture: record the best evidence already in context; escalation to T0-T2 is the Phase-8 audit's job."
+  },
+  "retrieval": {
+   "type": "object",
+   "properties": {
+    "tool": {
+     "enum": [
+      "rag_search",
+      "zotero_pdf",
+      "kg",
+      "webfetch",
+      "websearch"
+     ]
+    },
+    "doc_id": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "chunk_id": {
+     "type": [
+      "string",
+      "null"
+     ]
+    },
+    "text_sha256": {
+     "type": [
+      "string",
+      "null"
+     ]
+    }
+   },
+   "additionalProperties": false
+  },
+  "produced_by": {
+   "type": "string",
+   "anyOf": [
+    {
+     "enum": [
+      "scholar-lit-review",
+      "scholar-lit-review-hypothesis",
+      "scholar-citation",
+      "scholar-write",
+      "scholar-hypothesis",
+      "scholar-respond",
+      "scholar-book",
+      "scholar-grant",
+      "scholar-teach",
+      "scholar-brainstorm",
+      "scholar-idea",
+      "scholar-conceptual"
+     ]
+    },
+    {
+     "pattern": "^reader-batch[0-9]+$"
+    }
+   ],
+   "description": "The skill that filed the anchor, or the delegated Phase-2 reader identity (reader-batchN) \u2014 readers file anchors directly under the records-json contract (RCA Round 2 #10b, real-project eval 2026-08-22)"
+  },
+  "phase": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "description": "Orchestrator phase at capture ('2', '7', '8'); absent/null on standalone runs."
+  },
+  "ts": {
+   "type": "string",
+   "description": "ISO-8601 timestamp"
+  },
+  "supersedes": {
+   "type": [
+    "string",
+    "null"
+   ],
+   "pattern": "^[a-z0-9_-]+-[0-9a-f]{8}$",
+   "description": "anchor_id this record corrects. Renderer and gates take the latest record per anchor_id."
+  }
+ },
+ "additionalProperties": false
 }

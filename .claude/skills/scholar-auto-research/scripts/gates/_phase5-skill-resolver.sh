@@ -43,16 +43,21 @@ ID_JSON="$PROJ/design/identification-strategy.json"
 
 PRIMARY=""
 if [ -f "$ID_JSON" ] && command -v python3 >/dev/null 2>&1; then
-  PRIMARY=$(python3 -c "
+  # F13 (audit 2026-07-07): pass the path via argv, not string interpolation —
+  # a project dir containing a quote or shell/python metacharacter would
+  # otherwise break the -c program (or worse). Fail-closed default preserved:
+  # any exception leaves PRIMARY empty -> COVARIATES_OPTIONAL=false (strict).
+  PRIMARY=$(python3 - "$ID_JSON" 2>/dev/null <<'PY'
 import json, sys
 try:
-    d = json.load(open('$ID_JSON'))
+    d = json.load(open(sys.argv[1]))
     r = d.get('method_specialist_routing') or {}
     v = r.get('primary_execution_skill') or ''
     print(str(v).strip())
 except Exception:
     pass
-" 2>/dev/null) || PRIMARY=""
+PY
+) || PRIMARY=""
 fi
 
 # Skills where covariates may be legitimately empty.

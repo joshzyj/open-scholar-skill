@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # survey-weights-check.sh — Phase 8 substantive-quality gate.
 #
-# Rationale: a common failure is a Table 1 note admitting "models are
-# unweighted because the local public files do not contain a verified
-# survey weight variable" — when the survey in fact publishes design
-# weights that were never loaded, while the manuscript still makes a
-# population-level claim. A national-survey population claim without survey
-# weights is a classic methodological gap.
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): Table 1 notes admit
+# "models are unweighted because the local public files do not contain a
+# verified survey weight variable." But CFPS does publish weights
+# (rswt_natcs20 etc.). The pipeline never loaded them, and the manuscript
+# still made a population claim about "Chinese adults." A national-survey
+# population claim without survey weights is a classic methodological gap.
 #
 # Contract
 # --------
@@ -65,14 +65,14 @@ fi
 
 # Resolve registry location
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_REGISTRY="$SELF_DIR/../../skills/scholar-auto-research/references/weighted-survey-registry.json"
+DEFAULT_REGISTRY="$SELF_DIR/../../references/weighted-survey-registry.json"
 REGISTRY="${SCHOLAR_WEIGHTED_SURVEY_REGISTRY:-$DEFAULT_REGISTRY}"
 
 if [ ! -f "$REGISTRY" ]; then
-  echo "STATUS=YELLOW"
+  echo "STATUS=RED"
   echo "REASON=registry_missing"
   echo "DETAIL: ${REGISTRY}"
-  exit 2
+  exit 1
 fi
 
 DATA_STATUS="$PROJ/data/data-status.json"

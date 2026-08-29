@@ -96,7 +96,6 @@ else
       [ -f "$HOME/Documents/Zotero/zotero.sqlite" ] && printf '%s\0' "$HOME/Documents/Zotero/zotero.sqlite"
       [ -f "$HOME/snap/zotero-snap/common/Zotero/zotero.sqlite" ] && printf '%s\0' "$HOME/snap/zotero-snap/common/Zotero/zotero.sqlite"
       find "$HOME/Library/CloudStorage" -maxdepth 4 -name "zotero.sqlite" -print0 2>/dev/null
-      find "$HOME/Google Drive" -maxdepth 3 -name "zotero.sqlite" -print0 2>/dev/null
     } 2>/dev/null
   )
   if [ "${#ZOTERO_CANDIDATES[@]}" -gt 0 ]; then
@@ -440,6 +439,7 @@ def field_mismatches(bib_entry, zot_entry):
 
 
 matched_count = 0
+matched_keys = []
 mismatched = []
 not_in_local = []
 exempt_count = 0
@@ -500,6 +500,7 @@ for kind, key, body in entries:
         mismatched.append((key, kind, issues, (title or "")[:80]))
     else:
         matched_count += 1
+        matched_keys.append(key)
 
 
 total = matched_count + len(mismatched) + len(not_in_local) + exempt_count
@@ -559,6 +560,8 @@ else:
     print(f"  matched_local:    {matched_count}/{total}")
     print(f"  not_in_local:     {len(not_in_local)}/{total} (YELLOW informational)")
     print(f"  exempt_via_field: {exempt_count}/{total}")
+    for key in sorted(matched_keys):
+        print(f"AUTHORITY_KEY={key}")
     if debug and not_in_local:
         print("  (debug) not_in_local sample:", file=sys.stderr)
         for key, kind, sur, yr, title in not_in_local[:5]:

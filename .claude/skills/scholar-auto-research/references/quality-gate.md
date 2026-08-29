@@ -27,25 +27,48 @@ Minimum reviewers:
 
 Add a fifth reviewer when the manuscript is computational, qualitative, demographic, linguistic, mixed-methods, or otherwise journal-specialized.
 
-The fifth reviewer must be method-specialized rather than generic. Expected specialization:
+The verifier derives this requirement from Phase 1's authoritative
+`idea/research-question.json.method_orientation`, which is a required Phase 18
+input and part of every Phase 18 evidence reservation. Manuscript/artifact
+signals for structured secondary data remain a conservative backstop. A later
+summary cannot relabel the method to avoid the fifth reviewer.
 
-- computational -> reviewer explicitly calibrated to `scholar-compute`-type risks
-- qualitative -> reviewer explicitly calibrated to `scholar-qual`-type risks
-- linguistic -> reviewer explicitly calibrated to `scholar-ling`-type risks
-- demographic / quantitative family -> reviewer explicitly calibrated to `scholar-analyze`-type empirical interpretation risks
+The fifth reviewer must be method-specialized rather than generic. The verifier
+requires the evidence-bound role and `method_specialist_review.method_family`
+to match this routing:
 
-Each reviewer report must be saved under `quality/agents/` and record reviewer id, role, agent name (must start with `peer-reviewer-`), task invocation id (must be a real dispatched id, not a placeholder like `tbd` or `todo`), reviewed inputs, score vector, decision, findings, and whether the reviewer was primed. The file itself must include role and task identifiers so it can be audited independently of the JSON wrapper. At least one senior/editorial reviewer must be unprimed.
+- computational -> `computational-methods`
+- qualitative -> `qualitative-methods`
+- linguistic -> `linguistic-methods`
+- mixed-methods -> `mixed-methods`
+- demographic -> `demographic-family-methods`
+- structured secondary/survey data -> `survey-methods` or `quantitative-family-methods`
+- other explicitly journal-specialized work -> `domain-methods`
+
+Each reviewer report must use its registered evidence path and record reviewer
+id, role, a nonempty host-neutral agent label, the evidence-bound opaque task
+identity, reviewed inputs, score vector, decision, findings, and whether the
+reviewer was primed. Provider-specific name prefixes and task-ID syntax are not
+required. The file itself must include role and task identifiers so it can be
+audited independently of the JSON wrapper. At least one senior/editorial
+reviewer must be unprimed.
 
 `quality/manuscript-quality.json` must also include `reviewer_independence`, `adversarial_review_coverage`, and `method_specialist_review` objects. These are not narrative summaries: they must record whether reports were materially distinct, whether every report included concrete manuscript/artifact locators and risk or robustness concerns, and whether a method-specialized reviewer was required and used.
 
 For quantitative empirical manuscripts, `quality/manuscript-quality.json` must also include `regression_table_audit`. This object must record `status`, `canonical_main_regression_table_present`, `registry_table_used_as_main_display`, `model_columns_as_columns`, `predictor_rows_as_rows`, `standard_errors_or_intervals_present`, `sample_size_present`, `reader_facing_labels_used`, and `notes_cover_design_features`. The status must be `PASS`, the canonical table flag must be true, the registry-as-main-display flag must be false, and `reader_facing_labels_used` must mean both concept-level variable labels and model labels such as `Model 1`/`Model 2` or `M1`/`M2`, not internal `S1`/`S2` specification IDs.
 
-Self-reported `regression_table_audit` is necessary but not sufficient. Phase 18 must additionally COMPUTE shape evidence from the artifacts:
+Self-reported `regression_table_audit` is necessary but not sufficient. Phase 18 must additionally COMPUTE shape evidence from the artifacts (audit 2026-05-06 cfps-platform-trust-asr-auto):
 
 - The focal-summary detector inside `auto-research-verify.sh` (`registry_like_table_display_hits`) parses every embedded markdown table header and rejects focal-summary patterns whose first column is `Statistic` and whose visible rows collapse to one focal coefficient (e.g., headers `{Statistic, Focal adjusted association, p value, N}`).
 - `scripts/gates/regression-table-export-check.sh` (regression-engine purity branch) RED-fails when `tables/table-main-regression.*` is rendered solely by descriptive engines such as `datasummary_df()`, `datasummary()`, or `tbl_summary()` without a regression-grade engine call (`modelsummary()`, `msummary()`, `stargazer()`, `texreg()`, `huxreg()`, `tbl_regression()`, `etable()`).
 - `scripts/gates/locked-artifact-transclusion-check.sh` RED-fails when any artifact whose `artifact_role = main_regression_table` in `results-locked/manifest.json` no longer hash-matches its recorded sha256 — preventing Phase 13/19 from silently rebuilding Table 1 from CSV.
 - `scripts/gates/regression-table-family-shape-check.sh` RED-fails sparse omnibus tables with many model columns and many empty predictor cells. Split unrelated outcomes, robustness checks, and model families rather than turning the model ladder into one publication table.
+- `scripts/gates/regression-table-display-check.sh <project_dir>` is enforced
+  in Phases 13 and 18. It returns GREEN/0 when the locked full regression table
+  is reader-facing, RED/1 when it is hidden, YELLOW/2 when the manuscript or
+  Python runtime is unavailable, and INERT/3 when the gate is not applicable.
+  RED display defects recover at Phase 13; Phase 18 rechecks the corrected
+  manuscript rather than owning the display rewrite.
 - `scripts/gates/descriptive-table-display-check.sh` RED-fails when descriptive tables exist or are journal-required but remain hidden in manifests instead of appearing as a reader-facing descriptive display.
 - `scripts/gates/front-matter-check.sh`, `scripts/gates/abstract-boilerplate-check.sh`, `scripts/gates/journal-section-architecture-check.sh`, `scripts/gates/introduction-argument-architecture-check.sh`, `scripts/gates/theory-hypothesis-continuity-check.sh`, `scripts/gates/theory-structure-depth-check.sh`, `scripts/gates/methods-role-subsections-check.sh`, `scripts/gates/analytic-strategy-quality-check.sh`, `scripts/gates/analytic-formula-specificity-check.sh`, `scripts/gates/discussion-adjudication-check.sh`, `scripts/gates/conclusion-contribution-support-check.sh`, `scripts/gates/cross-section-continuity-check.sh`, `scripts/gates/manuscript-artifact-leakage-check.sh`, `scripts/gates/citation-cluster-quality-check.sh`, `scripts/gates/figure-style-source-check.sh`, and `scripts/gates/concept-to-measure-check.sh` RED-fail missing titles/keywords, display callouts or defensive limitation boilerplate in abstracts, generic methods blobs, weak introductions, post-results theory leakage, memo-style rival/scope paragraphs, thin theory/literature structure, canonical-hypothesis drift, missing dependent/independent/control role structure, prose-only formula surrogates, weak analytic-strategy prose, discussion sections that do not adjudicate theory/rivals, conclusions that reopen model/table reporting, cross-section promise drift, internal artifact leakage, oversized citation clusters, unpackaged/unapplied shared figure styles, and under-80% measurement coverage.
 
@@ -60,7 +83,7 @@ Reviewer reports must be adversarial and non-boilerplate. Each report must:
 
 Each reviewer report must additionally carry two structured fields that test intellectual quality directly rather than via mechanical coverage:
 
-- `contribution_locator` — the reviewer's independent identification of the manuscript's contribution. Required keys: `sentences` (a nonempty list of verbatim sentences quoted from the manuscript, each at least 10 words long), `section` (the section the sentences come from), `clarity_score` (0–10; can the reviewer find the contribution?), `specificity_score` (0–10; is the claim concrete or boilerplate?). Both scores must be at least 7. The four reviewer agents quote independently — they do not see each other's locators while drafting.
+- `contribution_locator` — the reviewer's independent identification of the manuscript's contribution. Required keys: `sentences` (a nonempty list of full verbatim sentences from visible substantive manuscript prose, each at least 10 words long), `section`, `line_start` (the paragraph's one-based source line), `clarity_score`, and `specificity_score`. References, comments, tables, captions, metadata, and reviewer prose do not establish membership. Both scores must be at least 7. The four reviewer agents quote independently — they do not see each other's locators while drafting.
 - `rival_adjudication` — the reviewer's audit of rival explanations. Required keys: `rivals_in_lit_review` (a list of rival/alternative explanations the lit review names), `rivals_addressed_in_discussion` (a list of those the discussion explicitly adjudicates), `missing_adjudications` (a list of rivals named but never adjudicated), `adjudication_quality_score` (0–10; how convincingly does the discussion address the rivals it does engage?). The score must be at least 7.
 
 ## Score Dimensions

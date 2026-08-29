@@ -13,8 +13,16 @@
 #         CLEARED | ANONYMIZED | OVERRIDE | LOCAL_MODE | HALTED |
 #         NEEDS_REVIEW | NEEDS_REVIEW:LEVEL
 #     where LEVEL is any non-empty token (e.g., GREEN / YELLOW / RED).
-#   - ONE reserved meta key is allowed: "_safety_level" (the per-project
-#     safety tier), whose value MUST be one of standard | strict | lockdown.
+#   - TWO reserved meta keys are allowed:
+#       "_safety_level" — the per-project safety tier; value MUST be one of
+#           standard | strict | lockdown.
+#       "_meta" — the no-data declaration; value MUST be exactly
+#           "no-data-project". This is the form phase-early-hardstops.sh has
+#           always PRINTED as the way to assert a no-data project; until
+#           2026-08-23 (system-fix P0.1) the schema rejected it, so following
+#           the printed advice produced a RED. The hardstop verifies the
+#           declaration against disk — it is not honor-system (see
+#           phase-early-hardstops.sh no-data branch).
 #     Any other underscore-prefixed key is a schema violation (so a typoed
 #     meta key cannot silently pass).
 #
@@ -63,15 +71,21 @@ validate_sidecar_schema() {
         to_entries
         | map(
             if (.key | startswith("_")) then
-              # Reserved meta keys. Only "_safety_level" is recognized.
+              # Reserved meta keys: "_safety_level" and "_meta" (P0.1).
               if .key == "_safety_level" then
                 if (.value | type) != "string" then
                   "  - \(.key): non-string value (\(.value | type))"
                 elif (.value | test("^(standard|strict|lockdown)$")) | not then
                   "  - \(.key): unknown safety level \"\(.value)\" (want standard|strict|lockdown)"
                 else empty end
+              elif .key == "_meta" then
+                if (.value | type) != "string" then
+                  "  - \(.key): non-string value (\(.value | type))"
+                elif .value != "no-data-project" then
+                  "  - \(.key): unknown value \"\(.value)\" (only \"no-data-project\" is recognized)"
+                else empty end
               else
-                "  - \(.key): unknown meta key (only _safety_level is allowed)"
+                "  - \(.key): unknown meta key (only _safety_level and _meta are allowed)"
               end
             elif (.value | type) != "string" then
               "  - \(.key): non-string value (\(.value | type))"

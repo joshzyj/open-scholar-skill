@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.1.0",
+  "schema_version": "1.4.0",
   "default_terminal_phase": "20",
   "phases": [
     {
@@ -83,7 +83,9 @@
         "literature/lit-theory.md",
         "literature/literature-coverage-matrix.json",
         "literature/references.bib",
-        "literature/lit-theory-manifest.json"
+        "literature/lit-theory-manifest.json",
+        "literature/search-log.md",
+        "literature/review-protocol.json"
       ],
       "gate": "auto-research-verify.sh 2",
       "next": "3",
@@ -266,7 +268,8 @@
         "review/pre-execution-review.md",
         "review/pre-execution-fix-log.json",
         "review/pre-execution-fix-log.md",
-        "review/pre-execution-rereview.json"
+        "review/pre-execution-rereview.json",
+        "review-evidence/phase-06"
       ],
       "gate": "auto-research-verify.sh 6",
       "next": "7",
@@ -279,7 +282,8 @@
         "review_engine",
         "source_hashes",
         "inventory_hash",
-        "multiagent_reviewers",
+        "reviewers",
+        "review_evidence",
         "reviewed_scripts",
         "reviewed_specs",
         "reviewed_tests",
@@ -293,7 +297,65 @@
         "fix_log",
         "rereview",
         "ready_for_phase_7"
-      ]
+      ],
+      "review_evidence_policy": {
+        "minimum_assurance": "process_recorded",
+        "evidence_root": "review-evidence/phase-06",
+        "summary_output": "review/pre-execution-review.json",
+        "strict_required_host_claims": [
+          "task_identity",
+          "terminal_status",
+          "completion_time",
+          "report_digest",
+          "reviewed_inputs_digest"
+        ],
+        "rounds": {
+          "initial_panel": {
+            "binding_collection": "reviewers",
+            "roles": [
+              "correctness",
+              "robustness",
+              "statistical",
+              "reproducibility",
+              "style_ai_patterns",
+              "data_handling"
+            ],
+            "input_patterns": [
+              "analysis/analysis-plan.md",
+              "analysis/analysis-plan-manifest.json",
+              "analysis/scripts-inventory.json",
+              "analysis/spec-registry.csv",
+              "design/identification-strategy.json",
+              "design/model-specs.json",
+              "data/variable-dictionary.csv",
+              "data/data-measurement-manifest.json"
+            ]
+          },
+          "fix_rereview": {
+            "binding_output": "review/pre-execution-rereview.json",
+            "binding_object": ".",
+            "role_field": "evidence_role",
+            "roles": [
+              "fix_verifier"
+            ],
+            "when_nonempty_array": {
+              "path": "review/pre-execution-fix-log.json",
+              "field": "fixed_findings"
+            },
+            "input_patterns": [
+              "analysis/analysis-plan.md",
+              "analysis/analysis-plan-manifest.json",
+              "analysis/scripts-inventory.json",
+              "analysis/spec-registry.csv",
+              "design/identification-strategy.json",
+              "design/model-specs.json",
+              "data/variable-dictionary.csv",
+              "data/data-measurement-manifest.json",
+              "review/pre-execution-fix-log.json"
+            ]
+          }
+        }
+      }
     },
     {
       "id": "7",
@@ -315,7 +377,8 @@
       "required_outputs": [
         "review/analysis-premortem.json",
         "review/analysis-premortem.md",
-        "review/analysis-premortem-fix-log.json"
+        "review/analysis-premortem-fix-log.json",
+        "review-evidence/phase-07"
       ],
       "gate": "auto-research-verify.sh 7",
       "next": "8",
@@ -331,6 +394,7 @@
         "source_hashes",
         "reviewer_provenance",
         "reviewers",
+        "review_evidence",
         "traffic_light_summary",
         "null_falsification_table",
         "reporting_depth_checklist",
@@ -344,7 +408,31 @@
         "phase8_handoff",
         "go_no_go",
         "ready_for_phase_8"
-      ]
+      ],
+      "review_evidence_policy": {
+        "minimum_assurance": "process_recorded",
+        "evidence_root": "review-evidence/phase-07",
+        "summary_output": "review/analysis-premortem.json",
+        "strict_required_host_claims": ["task_identity", "terminal_status", "completion_time", "report_digest", "reviewed_inputs_digest"],
+        "rounds": {
+          "premortem_panel": {
+            "binding_collection": "reviewers",
+            "roles": ["identification", "measurement_missingness", "model_robustness", "interpretation_claims"],
+            "input_patterns": [
+              "design/identification-strategy.json",
+              "design/model-specs.json",
+              "data/measurement-plan.md",
+              "data/variable-dictionary.csv",
+              "analysis/analysis-plan.md",
+              "analysis/spec-registry.csv",
+              "analysis/scripts-inventory.json",
+              "review/pre-execution-review.json",
+              "review/pre-execution-fix-log.json",
+              "review/pre-execution-rereview.json"
+            ]
+          }
+        }
+      }
     },
     {
       "id": "8",
@@ -406,7 +494,8 @@
       "required_outputs": [
         "review/post-execution-review.json",
         "review/post-execution-review.md",
-        "review/post-execution-fix-log.json"
+        "review/post-execution-fix-log.json",
+        "review-evidence/phase-09"
       ],
       "gate": "auto-research-verify.sh 9",
       "next": "10",
@@ -423,6 +512,7 @@
         "raw_output_verification",
         "reviewer_provenance",
         "reviewers",
+        "review_evidence",
         "reviewed_specs",
         "reviewed_figures",
         "sample_integrity",
@@ -435,7 +525,26 @@
         "fix_status",
         "route_back_phase",
         "ready_for_phase_10"
-      ]
+      ],
+      "review_evidence_policy": {
+        "minimum_assurance": "process_recorded",
+        "evidence_root": "review-evidence/phase-09",
+        "summary_output": "review/post-execution-review.json",
+        "strict_required_host_claims": ["task_identity", "terminal_status", "completion_time", "report_digest", "reviewed_inputs_digest"],
+        "rounds": {
+          "post_execution_panel": {
+            "binding_collection": "reviewers",
+            "roles": ["statistical_results", "robustness_consistency", "sample_data_integrity", "interpretation_claims"],
+            "input_patterns": [
+              "analysis/spec-registry.csv",
+              "review/analysis-premortem.json",
+              "analysis/execution-report.json",
+              "tables/results-registry.csv",
+              "figures/figure-registry.csv"
+            ]
+          }
+        }
+      }
     },
     {
       "id": "10",
@@ -563,6 +672,7 @@
         "source_hashes",
         "paper_type",
         "target_journal",
+        "journal_profile_resolution",
         "paper_claim",
         "claim_strength",
         "publication_readiness",
@@ -572,6 +682,7 @@
         "mechanism_integration_plan",
         "journal_structure",
         "display_architecture",
+        "discussion_mode",
         "section_obligations",
         "appendix_policy",
         "required_disclosures",
@@ -643,8 +754,9 @@
         "reader_facing_language",
         "draft_quality_gate",
         "locked_result_coverage",
-        "display_evidence",
-        "locked_result_claims",
+                 "display_evidence",
+                 "locked_result_claims_schema_version",
+                 "locked_result_claims",
         "citation_plan",
         "claim_discipline",
         "blueprint_execution",
@@ -666,7 +778,8 @@
       ],
       "required_outputs": [
         "verify/manuscript-verification.json",
-        "verify/manuscript-verification.md"
+        "verify/manuscript-verification.md",
+        "review-evidence/phase-14"
       ],
       "gate": "auto-research-verify.sh 14",
       "next": "15",
@@ -684,6 +797,7 @@
         "blueprint_hashes",
         "agent_reports",
         "agents",
+        "review_evidence",
         "input_artifacts_read",
         "scanned",
         "critical_count",
@@ -696,7 +810,26 @@
         "fix_checklist",
         "route_back_phase",
         "ready_for_phase_15"
-      ]
+      ],
+      "review_evidence_policy": {
+        "minimum_assurance": "process_recorded",
+        "evidence_root": "review-evidence/phase-14",
+        "summary_output": "verify/manuscript-verification.json",
+        "strict_required_host_claims": ["task_identity", "terminal_status", "completion_time", "report_digest", "reviewed_inputs_digest"],
+        "rounds": {
+          "verification_panel": {
+            "binding_collection": "agents",
+            "roles": ["verify-numerics", "verify-figures", "verify-logic", "verify-completeness"],
+            "input_patterns": [
+              "manuscript/manuscript-blueprint.json",
+              "manuscript/manuscript-draft.md",
+              "manuscript/draft-manifest.json",
+              "results-locked/manifest.json",
+              "results-locked/LATEST.txt"
+            ]
+          }
+        }
+      }
     },
     {
       "id": "15",
@@ -704,6 +837,7 @@
       "route": "default",
       "trigger": "always",
       "required_inputs": [
+        "idea/research-question.json",
         "manuscript/manuscript-draft.md",
         "manuscript/draft-manifest.json",
         "literature/references.bib",
@@ -850,6 +984,7 @@
       "route": "default",
       "trigger": "always",
       "required_inputs": [
+        "idea/research-question.json",
         "manuscript/manuscript-draft.md",
         "manuscript/draft-manifest.json",
         "manuscript/polish-report.json",
@@ -861,7 +996,8 @@
       ],
       "required_outputs": [
         "quality/manuscript-quality.json",
-        "quality/manuscript-quality.md"
+        "quality/manuscript-quality.md",
+        "review-evidence/phase-18"
       ],
       "gate": "auto-research-verify.sh 18",
       "next": "19",
@@ -881,6 +1017,7 @@
         "source_hashes",
         "reviewer_reports",
         "reviewer_independence",
+        "review_evidence",
         "adversarial_review_coverage",
         "method_specialist_review",
         "polish_audit",
@@ -892,6 +1029,40 @@
         "fix_checklist",
         "route_back_phase",
         "ready_for_phase_19"
+      ],
+      "review_evidence_policy": {
+        "minimum_assurance": "process_recorded",
+        "evidence_root": "review-evidence/phase-18",
+        "summary_output": "quality/manuscript-quality.json",
+        "strict_required_host_claims": ["task_identity", "terminal_status", "completion_time", "report_digest", "reviewed_inputs_digest"],
+        "rounds": {
+          "adversarial_panel": {
+            "binding_collection": "reviewer_reports",
+            "roles": ["methods-evidence", "theory-contribution", "senior-editor", "interpretive-skeptic"],
+            "optional_role_groups": [
+              ["computational-methods", "qualitative-methods", "linguistic-methods", "mixed-methods", "survey-methods", "demographic-family-methods", "quantitative-family-methods", "domain-methods", "methods-specialist"]
+            ],
+            "input_patterns": [
+              "idea/research-question.json",
+              "manuscript/manuscript-draft.md",
+              "manuscript/draft-manifest.json",
+              "manuscript/polish-report.json",
+              "verify/manuscript-verification.json",
+              "citation/citation-audit.json",
+              "citation/claim-source-map.json",
+              "ethics/ethics-open-science.json",
+              "replication-package/replication-report.json"
+            ]
+          }
+        }
+      },
+      "conditional_pass_schema": [
+        {
+          "when": "quantitative_empirical_regression_table_required",
+          "fields": [
+            "regression_table_audit"
+          ]
+        }
       ]
     },
     {
@@ -933,6 +1104,7 @@
         "degraded",
         "source_phase",
         "assembly_engine",
+        "journal_profile_resolution",
         "version_id",
         "created_at_utc",
         "source_hashes",
@@ -979,7 +1151,8 @@
         "submission/semantic-body-prose-read.md",
         "submission/submission-hygiene.json",
         "submission/submission-package-manifest.json",
-        "submission/LATEST.txt"
+        "submission/LATEST.txt",
+        "review-evidence/phase-20"
       ],
       "gate": "auto-research-verify.sh 20",
       "next": "DONE",
@@ -1003,6 +1176,7 @@
         "internal_metadata_scan",
         "reader_facing_language",
         "semantic_body_prose_read",
+        "review_evidence",
         "declaration_visibility",
         "figure_packaging",
         "format_generation",
@@ -1011,7 +1185,23 @@
         "route_back_phase",
         "pipeline_complete",
         "package_manifest"
-      ]
+      ],
+      "review_evidence_policy": {
+        "minimum_assurance": "process_recorded",
+        "evidence_root": "review-evidence/phase-20",
+        "summary_output": "submission/submission-hygiene.json",
+        "strict_required_host_claims": ["task_identity", "terminal_status", "completion_time", "report_digest", "reviewed_inputs_digest"],
+        "rounds": {
+          "semantic_body_reader": {
+            "binding_object": "semantic_body_prose_read",
+            "role_field": "evidence_role",
+            "report_path_field": "evidence_report_path",
+            "task_id_field": "evidence_task_invocation_id",
+            "roles": ["semantic_body_prose_reader"],
+            "input_patterns": ["submission/manuscript-submission.md"]
+          }
+        }
+      }
     }
   ]
 }

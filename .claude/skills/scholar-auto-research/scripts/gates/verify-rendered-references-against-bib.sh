@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # verify-rendered-references-against-bib.sh — Phase 11+ structural gate.
 #
-# RATIONALE: even after a .bib metadata pass removes pure-fabrication
-# entries and corrects misattributions, the manuscript's rendered
-# `## References` section can be silently repopulated with additional
-# citations that have no corresponding `@` entry in the .bib file —
-# typically when the LLM hand-writes the References list from parametric
-# memory during a late regeneration pass. These phantom references look
-# plausible (real-sounding authors, journals, and years) but never came
-# from the verified bibliography.
+# AUDIT TRAIL (2026-05-25, age-cohabitation-cfps): after the May 24 fixes
+# removed the two pure-fabrication bib entries (pan_yang_2018, wang_ji_2019)
+# and corrected the Yuanting/Yongjun Zhang misattribution, a four-agent
+# audit found that the manuscript's `## References` section had been
+# repopulated with SIX additional citations that have no corresponding
+# `@` entry in the .bib file:
+#   - Banister & Hill 2004 (Population Studies)
+#   - Hu & Tian 2018 (Population, Space and Place)
+#   - Liu et al. 2008 (The Lancet)
+#   - Schmid, Schumacher & Beyersmann 2021 (Stat Methods Med Res)
+#   - Lesthaeghe & Van de Kaa 1986 (Dutch book chapter)
+#   - United Nations WPP 2024
 #
 # `verify-citation-metadata.sh` iterates the .bib only; it never reverse-
 # maps the manuscript's rendered References section. `verify-citation-
@@ -32,7 +36,8 @@
 # Usage:
 #   verify-rendered-references-against-bib.sh <project_dir|manuscript_path>
 #
-# Optional second arg: explicit bib path. If absent, the script auto-
+# Optional second arg: explicit bib path. Optional third arg: explicit
+# manuscript path. If absent, the script auto-
 # discovers the newest .bib under <proj>/citations/, drafts/, manuscript/.
 #
 # Environment:
@@ -48,18 +53,23 @@ fi
 
 INPUT="$1"
 EXPLICIT_BIB="${2:-}"
+EXPLICIT_MS="${3:-}"
 
 # ── Resolve manuscript ─────────────────────────────────────────────
-MS=""
+MS="$EXPLICIT_MS"
 PROJ=""
-if [ -f "$INPUT" ]; then
+if [ -n "$EXPLICIT_MS" ] && [ ! -f "$EXPLICIT_MS" ]; then
+  MS=""
+elif [ -n "$EXPLICIT_MS" ] && [ -d "$INPUT" ]; then
+  PROJ="$INPUT"
+elif [ -f "$INPUT" ]; then
   MS="$INPUT"
   # PROJ = grandparent if file lives under drafts/ or submission/
   PROJ="$(dirname "$(dirname "$MS")")"
 elif [ -d "$INPUT" ]; then
   PROJ="$INPUT"
   # Discovery order mirrors submission-hygiene.sh + Phase 11.5 convention.
-  # Use null-delimited find to handle paths with spaces (e.g., "My Drive").
+  # Use null-delimited find to handle paths with spaces (e.g., "Dropbox Project").
   while IFS= read -r -d '' f; do
     MS="$f"
     break

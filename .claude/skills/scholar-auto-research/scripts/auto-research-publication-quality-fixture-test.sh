@@ -3,332 +3,82 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SELF="$SCRIPT_DIR/auto-research-publication-quality-fixture-test.sh"
+BUILDER="$SKILL_DIR/tests/helpers/build-publication-quality-fixture.py"
+CASE_TOOL="$SKILL_DIR/tests/helpers/case_result.py"
+HARNESS="$SKILL_DIR/tests/helpers/harness.sh"
+VERIFY="$SCRIPT_DIR/auto-research-verify.sh"
+MANIFEST="$SKILL_DIR/tests/coverage-manifest.json"
+export PYTHONDONTWRITEBYTECODE=1
 
-bash -n "$SCRIPT_DIR/auto-research-verify.sh"
+mutant_diagnostic() {
+  case "$1" in
+    source_roles) printf '%s\n' 'F20_L3_MUTANT_ACCEPTED: source_roles production verifier accepted mapped invalid fixture' ;;
+    design_continuity) printf '%s\n' 'F20_L3_MUTANT_ACCEPTED: design_continuity production verifier accepted mapped invalid fixture' ;;
+    publication_readiness) printf '%s\n' 'F20_L3_MUTANT_ACCEPTED: publication_readiness production verifier accepted mapped invalid fixture' ;;
+    drafting_plan) printf '%s\n' 'F20_L3_MUTANT_ACCEPTED: drafting_plan production verifier accepted mapped invalid fixture' ;;
+    self_critique) printf '%s\n' 'F20_L3_MUTANT_ACCEPTED: self_critique production verifier accepted mapped invalid fixture' ;;
+    source_roles_callsite) printf '%s\n' 'F20_L3_MUTANT_ACCEPTED: source_roles_callsite production verifier accepted mapped invalid fixture' ;;
+    *) printf 'F20_L3_MUTANT_UNKNOWN: %s\n' "$1" >&2; return 1 ;;
+  esac
+}
+
+# The mutation oracle deliberately inverts one observation for expect_reject:
+# rc=97 means the syntactically valid mutant accepted the mapped invalid input.
+# Any rejection/crash is not a kill and therefore cannot emit the kill diagnostic.
+if [ "${1:-}" = "__mutation_oracle" ]; then
+  [ "$#" -eq 5 ] || { printf 'F20_L3_MUTANT_ORACLE_USAGE\n' >&2; exit 99; }
+  operator="$2"
+  verifier="$3"
+  phase="$4"
+  project="$5"
+  set +e
+  oracle_output="$(bash "$verifier" "$phase" "$project" 2>&1)"
+  oracle_rc=$?
+  set -e
+  if [ "$oracle_rc" -eq 0 ]; then
+    mutant_diagnostic "$operator"
+    exit 97
+  fi
+  printf '%s\n' "$oracle_output" >&2
+  printf 'F20_L3_MUTANT_NOT_KILLED: %s verifier_rc=%s\n' "$operator" "$oracle_rc" >&2
+  exit 98
+fi
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+source "$HARNESS"
+harness_make_temp_root TMP_ROOT "publication quality's root" || exit 1
+
+# Honor a release coordinator when present; otherwise create one fresh focused
+# run bound to this finalized skill tree and manifest generation.
+if [ -z "${SCHOLAR_HARNESS_SOURCE_ROOT:-}" ]; then
+  export SCHOLAR_HARNESS_SOURCE_ROOT="$SKILL_DIR"
+  export SCHOLAR_HARNESS_MANIFEST="$MANIFEST"
+  export SCHOLAR_HARNESS_RESULTS_DIR="$TMP_ROOT/results"
+  export SCHOLAR_HARNESS_RUN_ID="publication-quality-$$"
+  export SCHOLAR_HARNESS_RUN_NONCE="publication-quality-$$-$(date +%s)"
+  export SCHOLAR_HARNESS_SUITE_MODE="focused"
+  export SCHOLAR_HARNESS_SUITE_ORDER="normal"
+  export SCHOLAR_HARNESS_MANIFEST_SHA256="$(python3 "$CASE_TOOL" digest-file "$MANIFEST")"
+  export SCHOLAR_HARNESS_SOURCE_GENERATION_SHA256="$(python3 "$CASE_TOOL" source-digest "$SKILL_DIR")"
+fi
+harness_init "$SELF" "publication-quality-fixture" || exit 1
+
+bash -n "$VERIFY"
+PYTHONPYCACHEPREFIX="$TMP_ROOT/pycache" python3 -m py_compile "$BUILDER"
 python3 -m json.tool "$SKILL_DIR/references/phase-contract.json" >/dev/null
+python3 -m json.tool "$SKILL_DIR/tests/fixtures/publication-quality-seed/fixture-metadata.json" >/dev/null
 bash "$SCRIPT_DIR/auto-research-contract-lint.sh" >/dev/null
 bash "$SCRIPT_DIR/auto-research-system-gate-smoke.sh" >/dev/null
 
-python3 - "$SKILL_DIR" <<'PY'
-import copy
+python3 - "$SKILL_DIR/references/phase-contract.json" <<'PY'
 import json
-import re
 import sys
-from pathlib import Path
-
-skill_dir = Path(sys.argv[1])
-
-
-def word_count(value):
-    return len(re.findall(r"\b\w+\b", str(value or "")))
-
-
-def norm(value):
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
-
-
-def validate_source_role_matrix(matrix):
-    issues = []
-    entries = matrix.get("source_role_matrix")
-    if not isinstance(entries, list) or len(entries) < 12:
-        issues.append("source_role_matrix must include at least 12 entries")
-        return issues
-    allowed = {
-        "theory",
-        "mechanism",
-        "rival",
-        "competing_explanation",
-        "method",
-        "design",
-        "context",
-        "population",
-        "domain",
-        "data",
-        "empirical_prior",
-        "journal_canon",
-    }
-    roles = set()
-    for idx, item in enumerate(entries):
-        if not isinstance(item, dict):
-            issues.append(f"source_role_matrix[{idx}] is not an object")
-            continue
-        role = str(item.get("argument_role", "")).strip()
-        roles.add(role)
-        if not str(item.get("key", "") or item.get("title", "")).strip():
-            issues.append(f"source_role_matrix[{idx}] missing source key/title")
-        if role not in allowed:
-            issues.append(f"source_role_matrix[{idx}] invalid role")
-        for field in ("claim_supported", "target_section", "why_it_matters"):
-            if word_count(item.get(field)) < 4:
-                issues.append(f"source_role_matrix[{idx}].{field} too thin")
-    required_groups = [
-        {"theory"},
-        {"mechanism"},
-        {"rival", "competing_explanation"},
-        {"method", "design"},
-    ]
-    for group in required_groups:
-        if not roles.intersection(group):
-            issues.append(f"missing source role group {sorted(group)}")
-    return issues
-
-
-def validate_design_continuity(manifest):
-    issues = []
-    expected_claim_strength = norm(manifest.get("identification_claim_strength", "associational"))
-    continuity = manifest.get("claim_continuity")
-    if not isinstance(continuity, dict):
-        issues.append("claim_continuity must be an object")
-    else:
-        if norm(continuity.get("claim_strength")) != expected_claim_strength:
-            issues.append("claim_continuity claim_strength mismatch")
-        for field in (
-            "mechanisms_carried_forward",
-            "hypotheses_carried_forward",
-            "robustness_carried_forward",
-            "limitations_carried_forward",
-        ):
-            if continuity.get(field) is not True:
-                issues.append(f"{field} must be true")
-        if word_count(continuity.get("manuscript_claim_boundary")) < 8:
-            issues.append("manuscript_claim_boundary too thin")
-    mechanism_rows = manifest.get("mechanism_result_matrix")
-    if not isinstance(mechanism_rows, list) or not mechanism_rows:
-        issues.append("mechanism_result_matrix must be nonempty")
-    else:
-        for idx, item in enumerate(mechanism_rows):
-            for field in ("mechanism", "model_or_spec", "expected_pattern", "manuscript_implication"):
-                if not isinstance(item, dict) or word_count(item.get(field)) < 3:
-                    issues.append(f"mechanism_result_matrix[{idx}].{field} too thin")
-    robustness_rows = manifest.get("robustness_claim_matrix")
-    expected_robustness = int(manifest.get("robustness_plan_count", 1))
-    if not isinstance(robustness_rows, list) or len(robustness_rows) < expected_robustness:
-        issues.append("robustness_claim_matrix must cover robustness plan")
-    else:
-        for idx, item in enumerate(robustness_rows):
-            for field in ("robustness_check", "claim_implication", "weaken_or_bound_rule"):
-                if not isinstance(item, dict) or word_count(item.get(field)) < 3:
-                    issues.append(f"robustness_claim_matrix[{idx}].{field} too thin")
-    limitation_rows = manifest.get("limitation_scope_matrix")
-    if not isinstance(limitation_rows, list) or not limitation_rows:
-        issues.append("limitation_scope_matrix must be nonempty")
-    else:
-        for idx, item in enumerate(limitation_rows):
-            for field in ("limitation", "scope_language", "affected_claim"):
-                if not isinstance(item, dict) or word_count(item.get(field)) < 3:
-                    issues.append(f"limitation_scope_matrix[{idx}].{field} too thin")
-    return issues
-
-
-def validate_publication_readiness(blueprint):
-    issues = []
-    readiness = blueprint.get("publication_readiness")
-    if not isinstance(readiness, dict):
-        return ["publication_readiness must be an object"]
-    if readiness.get("status") != "PASS":
-        issues.append("status must be PASS")
-    if readiness.get("ready_for_drafting") is not True:
-        issues.append("ready_for_drafting must be true")
-    if readiness.get("route_back_if_not_ready") not in (False, 0):
-        issues.append("route_back_if_not_ready must be false")
-    if word_count(readiness.get("contribution_sentence")) < 10:
-        issues.append("contribution_sentence too thin")
-    if word_count(readiness.get("target_journal_novelty_claim") or readiness.get("novelty_claim")) < 10:
-        issues.append("target_journal_novelty_claim too thin")
-    if word_count(readiness.get("target_journal_fit") or readiness.get("journal_fit_claim")) < 8:
-        issues.append("target_journal_fit too thin")
-
-    mechanism_rows = readiness.get("mechanism_rival_matrix")
-    roles = set()
-    if not isinstance(mechanism_rows, list) or len(mechanism_rows) < 2:
-        issues.append("mechanism_rival_matrix must include mechanism and rival entries")
-    else:
-        for idx, item in enumerate(mechanism_rows):
-            role = str(item.get("role", "")).strip() if isinstance(item, dict) else ""
-            roles.add(role)
-            if role not in {"mechanism", "rival", "alternative", "scope_condition", "boundary_condition"}:
-                issues.append(f"mechanism_rival_matrix[{idx}].role invalid")
-            for field in ("label", "evidence_link", "claim_implication"):
-                if not isinstance(item, dict) or word_count(item.get(field)) < 3:
-                    issues.append(f"mechanism_rival_matrix[{idx}].{field} too thin")
-        if "mechanism" not in roles:
-            issues.append("mechanism_rival_matrix must include a mechanism")
-        if not roles.intersection({"rival", "alternative"}):
-            issues.append("mechanism_rival_matrix must include a rival")
-
-    risks = readiness.get("reviewer_risk_register")
-    if not isinstance(risks, list) or len(risks) < 3:
-        issues.append("reviewer_risk_register must include three objections")
-    else:
-        has_rejection_reason = False
-        for idx, item in enumerate(risks):
-            if not isinstance(item, dict):
-                issues.append(f"reviewer_risk_register[{idx}] is not an object")
-                continue
-            risk_type = str(item.get("risk_type", "") or item.get("type", "")).lower()
-            has_rejection_reason = has_rejection_reason or "rejection" in risk_type or item.get("strongest_rejection_reason") is True
-            for field in ("objection", "required_response"):
-                if word_count(item.get(field)) < 5:
-                    issues.append(f"reviewer_risk_register[{idx}].{field} too thin")
-        if not has_rejection_reason:
-            issues.append("reviewer_risk_register must identify the strongest rejection reason")
-
-    hierarchy_paths = {
-        str(item.get("artifact_path", "")).strip()
-        for item in blueprint.get("result_hierarchy", [])
-        if isinstance(item, dict)
-    }
-    evidence = readiness.get("evidence_claim_map")
-    if not isinstance(evidence, list) or not evidence:
-        issues.append("evidence_claim_map must be nonempty")
-    else:
-        for idx, item in enumerate(evidence):
-            if not isinstance(item, dict):
-                issues.append(f"evidence_claim_map[{idx}] is not an object")
-                continue
-            for field in ("claim", "evidence_type", "claim_strength"):
-                if word_count(item.get(field)) < 2:
-                    issues.append(f"evidence_claim_map[{idx}].{field} too thin")
-            path = str(item.get("artifact_path", "")).strip()
-            if not (path or str(item.get("hypothesis_id", "")).strip() or str(item.get("limitation", "")).strip()):
-                issues.append(f"evidence_claim_map[{idx}] lacks evidence locator")
-            if path and path not in hierarchy_paths:
-                issues.append(f"evidence_claim_map[{idx}].artifact_path not in result_hierarchy")
-    return issues
-
-
-def validate_drafting_plan(plan, blueprint):
-    issues = []
-    required_sections = {"abstract", "introduction", "background", "data and methods", "results", "discussion"}
-    if plan.get("verdict") != "PASS":
-        issues.append("drafting-plan verdict must be PASS")
-    if plan.get("source_phase") not in ("13", 13):
-        issues.append("source_phase must be 13")
-    section_briefs = plan.get("section_briefs")
-    if not isinstance(section_briefs, dict):
-        issues.append("section_briefs must be an object")
-    else:
-        for section in required_sections:
-            brief = section_briefs.get(section)
-            if not isinstance(brief, dict):
-                issues.append(f"section_briefs.{section} missing")
-                continue
-            for field in ("section_purpose", "key_claim", "required_evidence", "source_roles", "forbidden_moves"):
-                value = brief.get(field)
-                if isinstance(value, list):
-                    if not value:
-                        issues.append(f"section_briefs.{section}.{field} empty")
-                elif word_count(value) < 4:
-                    issues.append(f"section_briefs.{section}.{field} too thin")
-
-    paragraph_map = plan.get("paragraph_purpose_map")
-    if not isinstance(paragraph_map, list) or len(paragraph_map) < max(6, len(required_sections)):
-        issues.append("paragraph_purpose_map must cover required sections")
-    else:
-        covered = set()
-        for idx, item in enumerate(paragraph_map):
-            if not isinstance(item, dict):
-                issues.append(f"paragraph_purpose_map[{idx}] is not an object")
-                continue
-            covered.add(norm(item.get("section")))
-            for field in ("paragraph_id", "purpose", "claim"):
-                if word_count(item.get(field)) < 2:
-                    issues.append(f"paragraph_purpose_map[{idx}].{field} too thin")
-            if not (item.get("source_roles") or item.get("evidence_artifacts") or item.get("mechanism_link")):
-                issues.append(f"paragraph_purpose_map[{idx}] lacks source/evidence/mechanism link")
-        missing = sorted(required_sections - covered - {"abstract"})
-        if missing:
-            issues.append(f"paragraph_purpose_map missing sections {missing}")
-
-    source_plan = plan.get("source_use_plan")
-    if not isinstance(source_plan, list) or len(source_plan) < 10:
-        issues.append("source_use_plan must include at least 10 entries")
-    else:
-        roles = set()
-        for idx, item in enumerate(source_plan):
-            role = str(item.get("argument_role", "")).strip() if isinstance(item, dict) else ""
-            roles.add(role)
-            if not isinstance(item, dict) or not str(item.get("citation_key", "") or item.get("title", "")).strip():
-                issues.append(f"source_use_plan[{idx}] missing citation key/title")
-                continue
-            for field in ("target_section", "claim_supported", "why_necessary"):
-                if word_count(item.get(field)) < 3:
-                    issues.append(f"source_use_plan[{idx}].{field} too thin")
-        if not roles.intersection({"rival", "competing_explanation", "alternative"}):
-            issues.append("source_use_plan must include rival sources")
-        if not roles.intersection({"theory", "mechanism"}):
-            issues.append("source_use_plan must include theory or mechanism sources")
-
-    expected_artifacts = {
-        str(item.get("artifact_path", "")).strip()
-        for item in blueprint.get("result_hierarchy", [])
-        if isinstance(item, dict) and item.get("headline_status") in {"headline", "supporting"}
-    }
-    results_plan = plan.get("results_interpretation_plan")
-    if not isinstance(results_plan, list):
-        issues.append("results_interpretation_plan must be a list")
-    else:
-        covered = set()
-        for idx, item in enumerate(results_plan):
-            if not isinstance(item, dict):
-                issues.append(f"results_interpretation_plan[{idx}] is not an object")
-                continue
-            covered.add(str(item.get("artifact_path", "")).strip())
-            for field in ("interpretive_claim", "uncertainty_language", "mechanism_link", "limitation_language"):
-                if word_count(item.get(field)) < 4:
-                    issues.append(f"results_interpretation_plan[{idx}].{field} too thin")
-        missing = sorted(expected_artifacts - covered)
-        if missing:
-            issues.append(f"results_interpretation_plan missing {missing}")
-
-    workflow = plan.get("revision_workflow")
-    if not isinstance(workflow, dict):
-        issues.append("revision_workflow must be an object")
-    else:
-        for field in ("outline_completed", "draft_after_plan", "self_critique_required"):
-            if workflow.get(field) is not True:
-                issues.append(f"revision_workflow.{field} must be true")
-    return issues
-
-
-def validate_self_critique(critique):
-    issues = []
-    if critique.get("verdict") != "PASS" or critique.get("ready_for_verification") is not True:
-        issues.append("draft-self-critique must PASS and be ready")
-    if word_count(critique.get("strongest_rejection_reason")) < 8:
-        issues.append("strongest_rejection_reason too thin")
-    for field in ("unsupported_leap_scan", "missing_rival_scan", "claim_strength_scan", "workflow_language_scan"):
-        value = critique.get(field)
-        if not isinstance(value, dict):
-            issues.append(f"{field} must be an object")
-            continue
-        if value.get("status") not in {"PASS", "NOT_APPLICABLE", "REVISED"}:
-            issues.append(f"{field}.status invalid")
-        if word_count(value.get("summary")) < 6:
-            issues.append(f"{field}.summary too thin")
-    actions = critique.get("revision_actions")
-    if not isinstance(actions, list) or not actions:
-        issues.append("revision_actions must be nonempty")
-    else:
-        for idx, item in enumerate(actions):
-            if not isinstance(item, dict) or word_count(item.get("action")) < 4:
-                issues.append(f"revision_actions[{idx}].action too thin")
-    return issues
-
-
-def expect_pass(name, issues):
-    if issues:
-        raise AssertionError(f"{name} should pass, got: {issues[:8]}")
-
-
-def expect_fail(name, issues, token):
-    if not issues:
-        raise AssertionError(f"{name} should fail")
-    if token and not any(token in issue for issue in issues):
-        raise AssertionError(f"{name} failed for wrong reason; expected token {token!r}, got {issues[:8]}")
-
-
-contract = json.loads((skill_dir / "references" / "phase-contract.json").read_text())
+contract = json.load(open(sys.argv[1], encoding="utf-8"))
 phase_by_id = {str(item["id"]): item for item in contract["phases"]}
 for phase_id, fields in {
     "2": {"source_role_matrix"},
@@ -338,247 +88,392 @@ for phase_id, fields in {
 }.items():
     missing = sorted(fields - set(phase_by_id[phase_id].get("pass_schema", [])))
     if missing:
-        raise AssertionError(f"phase {phase_id} missing pass_schema fields {missing}")
-
-verify_text = (skill_dir / "scripts" / "auto-research-verify.sh").read_text()
-for token in (
-    "Phase 2 source_role_matrix",
-    "Phase 3 design-to-writing continuity",
-    "Phase 12 publication_readiness gate",
-    "Phase 13 drafting-plan is incomplete",
-    "Phase 13 draft-self-critique is incomplete",
-):
-    if token not in verify_text:
-        raise AssertionError(f"verifier missing expected publication-quality token: {token}")
-
-roles = [
-    "theory",
-    "mechanism",
-    "rival",
-    "method",
-    "design",
-    "context",
-    "population",
-    "domain",
-    "data",
-    "empirical_prior",
-    "journal_canon",
-    "mechanism",
-]
-good_source_matrix = {
-    "source_role_matrix": [
-        {
-            "key": f"GenericSource{idx:02d}",
-            "argument_role": role,
-            "claim_supported": "supports a specific manuscript claim",
-            "target_section": "Literature Review and Theory",
-            "why_it_matters": "prevents generic citation padding",
-        }
-        for idx, role in enumerate(roles, start=1)
-    ]
-}
-bad_source_matrix = {"source_role_matrix": [{"key": f"Source{idx}", "argument_role": "background"} for idx in range(12)]}
-expect_pass("good source role matrix", validate_source_role_matrix(good_source_matrix))
-expect_fail("bad source role matrix", validate_source_role_matrix(bad_source_matrix), "missing source role group")
-
-good_design = {
-    "identification_claim_strength": "associational",
-    "robustness_plan_count": 2,
-    "claim_continuity": {
-        "claim_strength": "associational",
-        "mechanisms_carried_forward": True,
-        "hypotheses_carried_forward": True,
-        "robustness_carried_forward": True,
-        "limitations_carried_forward": True,
-        "manuscript_claim_boundary": "The manuscript will state bounded associational claims with no causal overreach.",
-    },
-    "mechanism_result_matrix": [
-        {
-            "mechanism": "resource strain mechanism",
-            "model_or_spec": "primary adjusted model",
-            "expected_pattern": "larger coefficient among constrained households",
-            "manuscript_implication": "supports bounded mechanism discussion",
-        }
-    ],
-    "robustness_claim_matrix": [
-        {
-            "robustness_check": "alternative outcome scale",
-            "claim_implication": "main association remains substantively similar",
-            "weaken_or_bound_rule": "downgrade claim if sign changes",
-        },
-        {
-            "robustness_check": "additional baseline controls",
-            "claim_implication": "supports cautious descriptive interpretation",
-            "weaken_or_bound_rule": "bound conclusion if interval widens",
-        },
-    ],
-    "limitation_scope_matrix": [
-        {
-            "limitation": "unobserved household shocks",
-            "scope_language": "claims remain associational within observed survey scope",
-            "affected_claim": "headline association claim",
-        }
-    ],
-}
-bad_design = copy.deepcopy(good_design)
-bad_design.pop("mechanism_result_matrix")
-bad_design["claim_continuity"]["mechanisms_carried_forward"] = False
-expect_pass("good design continuity", validate_design_continuity(good_design))
-expect_fail("bad design continuity", validate_design_continuity(bad_design), "mechanism")
-
-generic_blueprint = {
-    "result_hierarchy": [
-        {"artifact_path": "tables/model-1.csv", "headline_status": "headline"},
-        {"artifact_path": "figures/diagnostic-1.png", "headline_status": "supporting"},
-    ],
-    "publication_readiness": {
-        "status": "PASS",
-        "ready_for_drafting": True,
-        "route_back_if_not_ready": False,
-        "contribution_sentence": "The paper clarifies a bounded family-process mechanism using transparent observational evidence.",
-        "target_journal_novelty_claim": "The manuscript contributes to the target journal by linking mechanism, measurement, and scope more explicitly than prior work.",
-        "target_journal_fit": "The study addresses the journal audience with family mechanisms and careful empirical boundaries.",
-        "mechanism_rival_matrix": [
-            {
-                "role": "mechanism",
-                "label": "resource strain mechanism",
-                "evidence_link": "primary model and mechanism-aligned heterogeneity",
-                "claim_implication": "supports cautious process interpretation",
-            },
-            {
-                "role": "rival",
-                "label": "selection into exposure",
-                "evidence_link": "baseline covariates and sensitivity checks",
-                "claim_implication": "bounds rather than eliminates alternative explanations",
-            },
-        ],
-        "evidence_claim_map": [
-            {
-                "claim": "headline association is negative",
-                "evidence_type": "model output",
-                "claim_strength": "associational bounded",
-                "claim_status": "headline",
-                "artifact_path": "tables/model-1.csv",
-            },
-            {
-                "claim": "unobserved shocks remain a limitation",
-                "evidence_type": "design limitation",
-                "claim_strength": "scope condition",
-                "claim_status": "limitation",
-                "limitation": "unobserved household shocks",
-            },
-        ],
-        "reviewer_risk_register": [
-            {
-                "risk_type": "strongest rejection reason",
-                "strongest_rejection_reason": True,
-                "objection": "The design may not justify the implied causal language.",
-                "required_response": "Use bounded associational language and route claims through robustness evidence.",
-                "route_back_phase": "3",
-            },
-            {
-                "risk_type": "measurement objection",
-                "objection": "The outcome may not capture the intended construct.",
-                "required_response": "Explain construct validity and report alternative measurement checks.",
-                "route_back_phase": "4",
-            },
-            {
-                "risk_type": "novelty objection",
-                "objection": "The contribution may read like a routine replication.",
-                "required_response": "Tie novelty to mechanism, scope, and journal-specific debate.",
-                "route_back_phase": "2",
-            },
-        ],
-    },
-}
-bad_blueprint = copy.deepcopy(generic_blueprint)
-bad_blueprint["publication_readiness"]["mechanism_rival_matrix"] = [bad_blueprint["publication_readiness"]["mechanism_rival_matrix"][0]]
-expect_pass("good publication readiness", validate_publication_readiness(generic_blueprint))
-expect_fail("bad publication readiness", validate_publication_readiness(bad_blueprint), "rival")
-
-sections = {"abstract", "introduction", "background", "data and methods", "results", "discussion"}
-good_drafting_plan = {
-    "verdict": "PASS",
-    "source_phase": "13",
-    "section_briefs": {
-        section: {
-            "section_purpose": "state the specific contribution for readers",
-            "key_claim": "make a bounded and evidence-linked claim",
-            "required_evidence": ["publication readiness evidence map"],
-            "source_roles": ["theory", "mechanism"],
-            "forbidden_moves": ["workflow narration", "unsupported causal upgrade"],
-        }
-        for section in sections
-    },
-    "paragraph_purpose_map": [
-        {
-            "paragraph_id": f"paragraph {idx}",
-            "section": section,
-            "purpose": "develop section claim",
-            "claim": "bounded evidence-linked claim",
-            "source_roles": ["theory" if idx % 2 else "mechanism"],
-        }
-        for idx, section in enumerate(sections, start=1)
-    ],
-    "source_use_plan": [
-        {
-            "citation_key": f"GenericSource{idx:02d}",
-            "argument_role": role,
-            "target_section": "Background and theory section",
-            "claim_supported": "supports a specific argument",
-            "why_necessary": "anchors evidence in literature",
-        }
-        for idx, role in enumerate(["theory", "mechanism", "rival", "method", "design", "context", "population", "domain", "data", "empirical_prior"], start=1)
-    ],
-    "results_interpretation_plan": [
-        {
-            "artifact_path": "tables/model-1.csv",
-            "interpretive_claim": "the headline estimate supports a bounded association",
-            "uncertainty_language": "confidence intervals require cautious interpretation",
-            "mechanism_link": "pattern is consistent with resource strain",
-            "limitation_language": "unobserved shocks still limit inference",
-        },
-        {
-            "artifact_path": "figures/diagnostic-1.png",
-            "interpretive_claim": "diagnostic evidence supports model transparency",
-            "uncertainty_language": "visual diagnostics do not prove identification",
-            "mechanism_link": "diagnostic pattern contextualizes mechanism evidence",
-            "limitation_language": "diagnostics cannot resolve all selection concerns",
-        },
-    ],
-    "revision_workflow": {
-        "outline_completed": True,
-        "draft_after_plan": True,
-        "self_critique_required": True,
-    },
-}
-bad_drafting_plan = {
-    "verdict": "PASS",
-    "source_phase": "13",
-    "source_use_plan": [{"citation_key": f"Source{idx}"} for idx in range(10)],
-}
-expect_pass("good drafting plan", validate_drafting_plan(good_drafting_plan, generic_blueprint))
-expect_fail("bad drafting plan", validate_drafting_plan(bad_drafting_plan, generic_blueprint), "section_briefs")
-
-good_critique = {
-    "verdict": "PASS",
-    "ready_for_verification": True,
-    "strongest_rejection_reason": "Reviewers may reject the paper if claims exceed the observational design.",
-    "unsupported_leap_scan": {"status": "REVISED", "summary": "Revised claims that moved beyond available evidence."},
-    "missing_rival_scan": {"status": "PASS", "summary": "Rival selection explanations are named and bounded."},
-    "claim_strength_scan": {"status": "PASS", "summary": "All claims use associational language consistently."},
-    "workflow_language_scan": {"status": "PASS", "summary": "No internal workflow terms remain visible."},
-    "revision_actions": [{"action": "tightened causal language in contribution paragraph"}],
-}
-bad_critique = {
-    "verdict": "PASS",
-    "ready_for_verification": True,
-    "strongest_rejection_reason": "Looks fine.",
-}
-expect_pass("good draft self critique", validate_self_critique(good_critique))
-expect_fail("bad draft self critique", validate_self_critique(bad_critique), "strongest_rejection_reason")
-
-print("auto-research publication-quality fixture test: PASS")
-print("  synthetic gates: source roles, design continuity, publication readiness, drafting plan, self-critique")
-print("  project data used: none")
+        raise SystemExit(f"phase {phase_id} missing pass_schema fields {missing}")
 PY
+
+PHASE23_GOOD="$TMP_ROOT/phase23-good"
+PHASE1215_GOOD="$TMP_ROOT/phase1215-good"
+python3 "$BUILDER" phase23 "$PHASE23_GOOD"
+python3 "$BUILDER" phase1215 "$PHASE1215_GOOD"
+
+# The immutable seed is also the canonical schema-v2 handoff snapshot.  These
+# setup assertions do not duplicate verifier semantics: they prove only that
+# the fixture carries exactly the Phase 13 identities/payloads into the
+# deterministic Phase 14 and Phase 15 artifacts that later mutation cases use.
+python3 - "$PHASE1215_GOOD" <<'PY'
+import json
+import hashlib
+import sys
+from pathlib import Path
+
+project = Path(sys.argv[1])
+draft = json.loads((project / "manuscript/draft-manifest.json").read_text(encoding="utf-8"))
+phase14 = json.loads((project / "verify/manuscript-verification.json").read_text(encoding="utf-8"))
+phase15 = json.loads((project / "citation/claim-source-map.json").read_text(encoding="utf-8"))
+
+def sha256(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+expected_source_hashes = {
+    "manuscript": sha256(project / "manuscript/manuscript-draft.md"),
+    "draft_manifest": sha256(project / "manuscript/draft-manifest.json"),
+}
+for label, artifact in (("Phase 14", phase14), ("Phase 15", phase15)):
+    if artifact.get("selected_manuscript_hash") != expected_source_hashes["manuscript"]:
+        raise SystemExit(f"publication fixture {label} manuscript hash is stale")
+    if artifact.get("source_hashes") != expected_source_hashes:
+        raise SystemExit(f"publication fixture {label} source hashes are stale")
+
+if draft.get("locked_result_claims_schema_version") != 2:
+    raise SystemExit("publication fixture Phase 13 claims are not schema v2")
+
+expected14 = {}
+expected15 = {}
+for group in draft.get("locked_result_claims", []):
+    for row in group.get("rows", []):
+        identity = (
+            group["binding_type"], group["display_source_path"], group["display_locked_path"],
+            group["source_path"], group["locked_path"], row["row_index"], row["spec_id"],
+            row["display_coordinate_kind"], row["display_coordinate"], row["claim_id"],
+        )
+        expected14[identity] = {
+            "manuscript_anchor": row["manuscript_anchor"],
+            "estimate": row["estimate"],
+            "std_error": row["std_error"],
+            "p_value": row["p_value"],
+            "n": row["n"],
+        }
+        expected15[row["claim_id"]] = {
+            "manuscript_anchor": row["manuscript_anchor"],
+            "result_binding": {
+                "binding_type": group["binding_type"],
+                "display_source_path": group["display_source_path"],
+                "display_locked_path": group["display_locked_path"],
+                "value_source_path": group["source_path"],
+                "value_locked_path": group["locked_path"],
+                "row_index": row["row_index"],
+                "spec_id": row["spec_id"],
+                "display_coordinate_kind": row["display_coordinate_kind"],
+                "display_coordinate": row["display_coordinate"],
+            },
+        }
+
+actual14 = {}
+for row in phase14.get("stage_2_manuscript_to_prose", {}).get("checked", []):
+    identity = (
+        row.get("binding_type"), row.get("display_source_path"), row.get("display_locked_path"),
+        row.get("source_artifact"), row.get("locked_path"), row.get("row_index"), row.get("spec_id"),
+        row.get("display_coordinate_kind"), row.get("display_coordinate"), row.get("claim_id"),
+    )
+    if identity in actual14:
+        raise SystemExit(f"publication fixture duplicate Phase 14 identity: {identity}")
+    actual14[identity] = {field: row.get(field) for field in ("manuscript_anchor", "estimate", "std_error", "p_value", "n")}
+stage2 = phase14.get("stage_2_manuscript_to_prose", {})
+if actual14 != expected14 or stage2.get("claims_scanned") != len(expected14):
+    raise SystemExit("publication fixture Phase 14 bindings do not exactly match Phase 13")
+if (
+    phase14.get("locked_result_claims_schema_version") != 2
+    or stage2.get("verdict") != "PASS"
+    or stage2.get("degraded") is not False
+    or stage2.get("critical_count") != 0
+    or any(
+        row.get(field) != "PASS"
+        for row in stage2.get("checked", [])
+        for field in ("verdict", "direction_verdict", "uncertainty_verdict", "causal_language_verdict", "phase9_constraint_verdict")
+    )
+):
+    raise SystemExit("publication fixture Phase 14 Stage 2 verdict surface is not canonical")
+
+actual15 = {}
+for row in phase15.get("claims", []):
+    if row.get("claim_type") != "empirical":
+        continue
+    claim_id = row.get("claim_id")
+    if claim_id in actual15:
+        raise SystemExit(f"publication fixture duplicate Phase 15 identity: {claim_id}")
+    actual15[claim_id] = {
+        "manuscript_anchor": row.get("manuscript_anchor"),
+        "result_binding": row.get("result_binding"),
+    }
+if actual15 != expected15:
+    raise SystemExit("publication fixture Phase 15 bindings do not exactly match Phase 13")
+if (
+    phase15.get("verdict") != "PASS"
+    or phase15.get("degraded") is not False
+    or phase15.get("total_claims") != len(expected15)
+    or phase15.get("supported_count") != len(expected15)
+    or any(phase15.get(field) != 0 for field in ("unsupported_count", "contradicted_count", "locator_missing_count"))
+    or any(row.get("support_verdict") != "SUPPORTED" or row.get("contradiction") is not False for row in phase15.get("claims", []))
+):
+    raise SystemExit("publication fixture Phase 15 empirical verdict surface is not canonical")
+
+registry = next(item for item in draft["locked_result_coverage"] if item.get("artifact_role") == "results_registry")
+if registry.get("used_in_manuscript") is not False or registry.get("manuscript_anchor"):
+    raise SystemExit("publication fixture provenance registry became reader-facing")
+print(f"PUBLICATION_V2_HANDOFF_CLAIMS={len(expected14)}")
+PY
+
+PHASE2_BAD="$TMP_ROOT/phase2-bad"
+PHASE3_BAD="$TMP_ROOT/phase3-bad"
+PHASE12_BAD="$TMP_ROOT/phase12-bad"
+PHASE13_PLAN_BAD="$TMP_ROOT/phase13-plan-bad"
+PHASE13_CRITIQUE_BAD="$TMP_ROOT/phase13-critique-bad"
+cp -R "$PHASE23_GOOD" "$PHASE2_BAD"
+cp -R "$PHASE23_GOOD" "$PHASE3_BAD"
+cp -R "$PHASE1215_GOOD" "$PHASE12_BAD"
+cp -R "$PHASE1215_GOOD" "$PHASE13_PLAN_BAD"
+cp -R "$PHASE1215_GOOD" "$PHASE13_CRITIQUE_BAD"
+
+mutate_fixture() {
+  local operation="$1" project="$2"
+  python3 - "$operation" "$project" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+operation, project_arg = sys.argv[1:3]
+project = Path(project_arg)
+
+def load(rel):
+    path = project / rel
+    return path, json.loads(path.read_text(encoding="utf-8"))
+
+def save(path, value):
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+if operation == "phase2-source-roles":
+    path, doc = load("literature/literature-coverage-matrix.json")
+    for row in doc["source_role_matrix"]:
+        row["argument_role"] = "background"
+    save(path, doc)
+    manifest_path, manifest = load("literature/lit-theory-manifest.json")
+    manifest["coverage_matrix_hash"] = digest(path)
+    save(manifest_path, manifest)
+elif operation == "phase3-continuity":
+    path, doc = load("design/design-manifest.json")
+    doc.pop("mechanism_result_matrix")
+    save(path, doc)
+    design_mtime = max(
+        (project / rel).stat().st_mtime_ns
+        for rel in ("design/design-blueprint.md", "design/identification-strategy.json", "design/model-specs.json")
+    )
+    for rel in ("design/design-manifest.json", "design/design-evaluation.json", "design/design-evaluation.md"):
+        os.utime(project / rel, ns=(design_mtime + 1_000_000, design_mtime + 1_000_000))
+    for rel in ("design/design-revision-log.json", "design/design-revision-log.md"):
+        os.utime(project / rel, ns=(design_mtime + 2_000_000, design_mtime + 2_000_000))
+elif operation == "phase12-readiness":
+    path, doc = load("manuscript/manuscript-blueprint.json")
+    rows = doc["publication_readiness"]["mechanism_rival_matrix"]
+    doc["publication_readiness"]["mechanism_rival_matrix"] = [row for row in rows if row.get("role") == "mechanism"][:1]
+    save(path, doc)
+elif operation in {"phase13-plan", "phase13-critique"}:
+    manifest_path, manifest = load("manuscript/draft-manifest.json")
+    if operation == "phase13-plan":
+        target_path, target = load("manuscript/drafting-plan.json")
+        target.pop("section_briefs")
+        save(target_path, target)
+        manifest["drafting_plan"]["sha256"] = digest(target_path)
+    else:
+        target_path, target = load("manuscript/draft-self-critique.json")
+        target["strongest_rejection_reason"] = "Too thin."
+        save(target_path, target)
+        manifest["self_critique"]["sha256"] = digest(target_path)
+    save(manifest_path, manifest)
+else:
+    raise SystemExit(f"unknown fixture mutation: {operation}")
+PY
+}
+
+mutate_fixture phase2-source-roles "$PHASE2_BAD"
+mutate_fixture phase3-continuity "$PHASE3_BAD"
+mutate_fixture phase12-readiness "$PHASE12_BAD"
+mutate_fixture phase13-plan "$PHASE13_PLAN_BAD"
+mutate_fixture phase13-critique "$PHASE13_CRITIQUE_BAD"
+
+prepare_mutant() {
+  local operator="$1"
+  MUTANT_PARENT="$TMP_ROOT/mutant-$operator"
+  MUTANT_SKILL="$MUTANT_PARENT/scholar-auto-research"
+  MUTANT_VERIFY="$MUTANT_SKILL/scripts/auto-research-verify.sh"
+  mkdir -p "$MUTANT_PARENT"
+  cp -R "$SKILL_DIR" "$MUTANT_SKILL"
+  LIVE_SOURCE_BEFORE="$(python3 "$CASE_TOOL" source-digest "$SKILL_DIR")"
+  MUTANT_SOURCE_PRISTINE="$(python3 "$CASE_TOOL" source-digest "$MUTANT_SKILL")"
+  [ "$MUTANT_SOURCE_PRISTINE" = "$LIVE_SOURCE_BEFORE" ] \
+    || fail "mutation $operator pristine copy differs from source generation"
+  bash -n "$MUTANT_VERIFY"
+}
+
+apply_production_mutation() {
+  local operator="$1" mutation_kind="$2" token="$3"
+  MUTANT_SOURCE_BEFORE="$(python3 "$CASE_TOOL" source-digest "$MUTANT_SKILL")"
+  [ "$MUTANT_SOURCE_BEFORE" = "$MUTANT_SOURCE_PRISTINE" ] \
+    || fail "mutation $operator pristine baseline changed copied source"
+  python3 - "$MUTANT_SKILL" "$mutation_kind" "$token" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve(strict=True)
+kind = sys.argv[2]
+token = sys.argv[3]
+target = root / "scripts/auto-research-verify.sh"
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def inventory():
+    result = {}
+    for path in sorted(root.rglob("*"), key=lambda item: os.fsencode(item.relative_to(root).as_posix())):
+        rel = path.relative_to(root).as_posix()
+        info = path.lstat()
+        item = {"mode": f"{stat.S_IMODE(info.st_mode):04o}"}
+        if path.is_symlink():
+            item.update(type="symlink", target=os.readlink(path))
+        elif path.is_dir():
+            item["type"] = "directory"
+        elif path.is_file():
+            item.update(type="file", sha256=sha(path), size=info.st_size)
+        else:
+            raise SystemExit(f"special file in copied skill: {rel}")
+        result[rel] = item
+    return result
+
+before = inventory()
+text = target.read_text(encoding="utf-8")
+if kind == "condition":
+    needle = f"    if {token}:\n"
+    replacement = f"    if False and {token}:\n"
+elif kind == "callsite":
+    needle = '        fail("FAIL: Phase 2 source_role_matrix does not assign sources to argument roles", source_role_issues[:30])\n'
+    replacement = "        pass  # F20 mutant: source-role fail callsite removed\n"
+else:
+    raise SystemExit(f"unknown mutation kind: {kind}")
+matches = text.count(needle)
+if matches != 1:
+    raise SystemExit(f"mutation target must match exactly once: kind={kind} token={token} matches={matches}")
+target.write_text(text.replace(needle, replacement), encoding="utf-8")
+after = inventory()
+changed = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+if changed != ["scripts/auto-research-verify.sh"]:
+    raise SystemExit(f"copy-only mutation violated: changed={changed}")
+print("MUTATION_TARGET_MATCHES=1")
+print("MUTATION_CHANGED_PATH=scripts/auto-research-verify.sh")
+PY
+  MUTANT_SOURCE_AFTER="$(python3 "$CASE_TOOL" source-digest "$MUTANT_SKILL")"
+  LIVE_SOURCE_AFTER="$(python3 "$CASE_TOOL" source-digest "$SKILL_DIR")"
+  [ "$MUTANT_SOURCE_AFTER" != "$MUTANT_SOURCE_BEFORE" ] \
+    || fail "mutation $operator did not change canonical copied-source digest"
+  [ "$LIVE_SOURCE_AFTER" = "$LIVE_SOURCE_BEFORE" ] \
+    || fail "mutation $operator changed the live source generation"
+  bash -n "$MUTANT_VERIFY"
+  MUTATION_BINDING="operator=$operator,target_matches=1,changed=scripts/auto-research-verify.sh,before=$MUTANT_SOURCE_BEFORE,after=$MUTANT_SOURCE_AFTER"
+}
+
+# CASE:l3.source_roles.pristine_positive
+prepare_mutant source_roles
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_pass l3.source_roles.pristine_positive "$PHASE23_GOOD" -- bash "$MUTANT_VERIFY" 2 "$PHASE23_GOOD"
+# CASE:l3.source_roles.pristine_negative
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_reject l3.source_roles.pristine_negative "$PHASE2_BAD" -- bash "$MUTANT_VERIFY" 2 "$PHASE2_BAD"
+apply_production_mutation source_roles condition source_role_issues
+# CASE:l3.source_roles.mutant_valid
+SCHOLAR_HARNESS_MUTATION_VERDICT="valid_control:$MUTATION_BINDING" expect_pass l3.source_roles.mutant_valid "$PHASE23_GOOD" -- bash "$MUTANT_VERIFY" 2 "$PHASE23_GOOD"
+# CASE:l3.source_roles.mutant_kill
+SCHOLAR_HARNESS_MUTATION_VERDICT="killed:$MUTATION_BINDING" expect_reject l3.source_roles.mutant_kill "$PHASE2_BAD" -- bash "$SELF" __mutation_oracle source_roles "$MUTANT_VERIFY" 2 "$PHASE2_BAD"
+
+# CASE:l3.design_continuity.pristine_positive
+prepare_mutant design_continuity
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_pass l3.design_continuity.pristine_positive "$PHASE23_GOOD" -- bash "$MUTANT_VERIFY" 3 "$PHASE23_GOOD"
+# CASE:l3.design_continuity.pristine_negative
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_reject l3.design_continuity.pristine_negative "$PHASE3_BAD" -- bash "$MUTANT_VERIFY" 3 "$PHASE3_BAD"
+apply_production_mutation design_continuity condition continuity_issues
+# CASE:l3.design_continuity.mutant_valid
+SCHOLAR_HARNESS_MUTATION_VERDICT="valid_control:$MUTATION_BINDING" expect_pass l3.design_continuity.mutant_valid "$PHASE23_GOOD" -- bash "$MUTANT_VERIFY" 3 "$PHASE23_GOOD"
+# CASE:l3.design_continuity.mutant_kill
+SCHOLAR_HARNESS_MUTATION_VERDICT="killed:$MUTATION_BINDING" expect_reject l3.design_continuity.mutant_kill "$PHASE3_BAD" -- bash "$SELF" __mutation_oracle design_continuity "$MUTANT_VERIFY" 3 "$PHASE3_BAD"
+
+# CASE:l3.publication_readiness.pristine_positive
+prepare_mutant publication_readiness
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_pass l3.publication_readiness.pristine_positive "$PHASE1215_GOOD" -- bash "$MUTANT_VERIFY" 12 "$PHASE1215_GOOD"
+# CASE:l3.publication_readiness.pristine_negative
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_reject l3.publication_readiness.pristine_negative "$PHASE12_BAD" -- bash "$MUTANT_VERIFY" 12 "$PHASE12_BAD"
+apply_production_mutation publication_readiness condition readiness_issues
+# CASE:l3.publication_readiness.mutant_valid
+SCHOLAR_HARNESS_MUTATION_VERDICT="valid_control:$MUTATION_BINDING" expect_pass l3.publication_readiness.mutant_valid "$PHASE1215_GOOD" -- bash "$MUTANT_VERIFY" 12 "$PHASE1215_GOOD"
+# CASE:l3.publication_readiness.mutant_kill
+SCHOLAR_HARNESS_MUTATION_VERDICT="killed:$MUTATION_BINDING" expect_reject l3.publication_readiness.mutant_kill "$PHASE12_BAD" -- bash "$SELF" __mutation_oracle publication_readiness "$MUTANT_VERIFY" 12 "$PHASE12_BAD"
+
+# CASE:l3.drafting_plan.pristine_positive
+prepare_mutant drafting_plan
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_pass l3.drafting_plan.pristine_positive "$PHASE1215_GOOD" -- bash "$MUTANT_VERIFY" 13 "$PHASE1215_GOOD"
+# CASE:l3.drafting_plan.pristine_negative
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_reject l3.drafting_plan.pristine_negative "$PHASE13_PLAN_BAD" -- bash "$MUTANT_VERIFY" 13 "$PHASE13_PLAN_BAD"
+apply_production_mutation drafting_plan condition plan_issues
+# CASE:l3.drafting_plan.mutant_valid
+SCHOLAR_HARNESS_MUTATION_VERDICT="valid_control:$MUTATION_BINDING" expect_pass l3.drafting_plan.mutant_valid "$PHASE1215_GOOD" -- bash "$MUTANT_VERIFY" 13 "$PHASE1215_GOOD"
+# CASE:l3.drafting_plan.mutant_kill
+SCHOLAR_HARNESS_MUTATION_VERDICT="killed:$MUTATION_BINDING" expect_reject l3.drafting_plan.mutant_kill "$PHASE13_PLAN_BAD" -- bash "$SELF" __mutation_oracle drafting_plan "$MUTANT_VERIFY" 13 "$PHASE13_PLAN_BAD"
+
+# CASE:l3.self_critique.pristine_positive
+prepare_mutant self_critique
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_pass l3.self_critique.pristine_positive "$PHASE1215_GOOD" -- bash "$MUTANT_VERIFY" 13 "$PHASE1215_GOOD"
+# CASE:l3.self_critique.pristine_negative
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_reject l3.self_critique.pristine_negative "$PHASE13_CRITIQUE_BAD" -- bash "$MUTANT_VERIFY" 13 "$PHASE13_CRITIQUE_BAD"
+apply_production_mutation self_critique condition critique_issues
+# CASE:l3.self_critique.mutant_valid
+SCHOLAR_HARNESS_MUTATION_VERDICT="valid_control:$MUTATION_BINDING" expect_pass l3.self_critique.mutant_valid "$PHASE1215_GOOD" -- bash "$MUTANT_VERIFY" 13 "$PHASE1215_GOOD"
+# CASE:l3.self_critique.mutant_kill
+SCHOLAR_HARNESS_MUTATION_VERDICT="killed:$MUTATION_BINDING" expect_reject l3.self_critique.mutant_kill "$PHASE13_CRITIQUE_BAD" -- bash "$SELF" __mutation_oracle self_critique "$MUTANT_VERIFY" 13 "$PHASE13_CRITIQUE_BAD"
+
+# Distinct callsite-removal operator with its own pristine and mutant controls.
+# CASE:l3.source_roles_callsite.pristine_positive
+prepare_mutant source_roles_callsite
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_pass l3.source_roles_callsite.pristine_positive "$PHASE23_GOOD" -- bash "$MUTANT_VERIFY" 2 "$PHASE23_GOOD"
+# CASE:l3.source_roles_callsite.pristine_negative
+SCHOLAR_HARNESS_MUTATION_VERDICT="pristine:$MUTANT_SOURCE_PRISTINE" expect_reject l3.source_roles_callsite.pristine_negative "$PHASE2_BAD" -- bash "$MUTANT_VERIFY" 2 "$PHASE2_BAD"
+apply_production_mutation source_roles_callsite callsite source_role_issues
+# CASE:l3.source_roles_callsite.mutant_valid
+SCHOLAR_HARNESS_MUTATION_VERDICT="valid_control:$MUTATION_BINDING" expect_pass l3.source_roles_callsite.mutant_valid "$PHASE23_GOOD" -- bash "$MUTANT_VERIFY" 2 "$PHASE23_GOOD"
+# CASE:l3.source_roles_callsite.mutant_kill
+SCHOLAR_HARNESS_MUTATION_VERDICT="killed:$MUTATION_BINDING" expect_reject l3.source_roles_callsite.mutant_kill "$PHASE2_BAD" -- bash "$SELF" __mutation_oracle source_roles_callsite "$MUTANT_VERIFY" 2 "$PHASE2_BAD"
+
+harness_validate_results >/dev/null
+python3 - "$MANIFEST" "$SCHOLAR_HARNESS_RESULTS_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+expected = {
+    case_id for case_id, case in manifest["cases"].items()
+    if case.get("gating") and case.get("runner_label") == "publication-quality-fixture"
+}
+records = {}
+for path in Path(sys.argv[2]).glob("*.json"):
+    if path.name == ".run-context.json":
+        continue
+    record = json.load(open(path, encoding="utf-8"))
+    if record.get("runner_label") == "publication-quality-fixture":
+        records[record.get("case_id")] = record
+observed = set(records)
+if observed != expected:
+    raise SystemExit(f"L3_RESULT_SET_MISMATCH: missing={sorted(expected-observed)} unexpected={sorted(observed-expected)}")
+failed = sorted(case_id for case_id, record in records.items() if record.get("terminal_status") != "PASS")
+if failed:
+    raise SystemExit(f"L3_RESULT_STATUS_FAILED: {failed}")
+print(f"L3_AUTHORITATIVE_RECORDS={len(records)}")
+PY
+
+printf 'auto-research publication-quality fixture test: PASS\n'
+printf '  production verifier phases: 2, 3, 12, 13\n'
+printf '  authoritative cases: pristine positive/negative + mutant valid/kill per operator\n'
+printf '  production semantic mutations killed: 6 (five families + one callsite removal)\n'
+printf '  copied semantic validators: 0\n'
+printf '  project data used: deterministic vendored fixtures only\n'

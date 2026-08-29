@@ -1,0 +1,72 @@
+{
+  "schema_version": "scholar-auto-research-runtime/v1",
+  "boundary": "The state machine, verifier, bundled gates, safety hook, trace protocol, and optional run-view are packaged in this skill. Peer research skills and user/network/tool providers are explicit external providers.",
+  "required_commands": [
+    "awk",
+    "basename",
+    "bash",
+    "cat",
+    "cut",
+    "date",
+    "dirname",
+    "find",
+    "grep",
+    "head",
+    "jq",
+    "mkdir",
+    "mktemp",
+    "mv",
+    "python3",
+    "readlink",
+    "rm",
+    "sed",
+    "shasum",
+    "sort",
+    "tail",
+    "tr",
+    "wc"
+  ],
+  "required_packaged_files": [
+    "scripts/runtime-preflight.py",
+    "scripts/detect-host-agent.sh",
+    "scripts/setup-project-claudemd.sh",
+    "scripts/setup-codex-hooks.sh",
+    "scripts/templates/claudemd-auto-rules.md",
+    "scripts/auto-research-state.sh",
+    "scripts/auto-research-verify.sh",
+    "scripts/review_evidence.py",
+    "scripts/safety_inventory.py",
+    "scripts/gates/codex-pretooluse-hook.sh",
+    "scripts/gates/pretooluse-data-guard.sh",
+    "scripts/gates/safety-scan.sh",
+    "scripts/gates/safety-scan-presidio.py",
+    "scripts/gates/dua-fingerprints.json",
+    "scripts/gates/sidecar-schema.sh",
+    "scripts/gates/emit-trace.sh",
+    "scripts/gates/render-trace.sh",
+    "scripts/gates/trace-coverage-check.sh",
+    "scripts/gates/ingest-agent-trace.sh",
+    "references/phase-contract.json",
+    "references/contract-migrations.json",
+    "references/review-evidence-contract.md",
+    "references/process-logger.md",
+    "references/agent-trace-contract.md",
+    "references/data-safety-runtime.md"
+  ],
+  "optional_packaged_features": {
+    "run_view": [
+      "scripts/gates/refresh-run-html.sh",
+      "scripts/gates/build-run-model.py",
+      "scripts/gates/render-run-html.py",
+      "scripts/gates/surface-lease.sh",
+      "scripts/gates/seam-summary-check.sh",
+      "scripts/gates/independent-check-requests.sh"
+    ]
+  },
+  "external_providers": {
+    "peer_scholar_skills": "Required phase engines; dispatched explicitly and not imported as runtime helpers.",
+    "zotero_or_local_library": "Optional citation provider; set SCHOLAR_ZOTERO_DIR. Unavailable providers must report YELLOW/UNAVAILABLE.",
+    "crossref_and_web": "Optional network citation providers; unavailability must be explicit.",
+    "analysis_and_rendering_tools": "R and method-specific tools are phase-dependent. Phase 19/20 authenticity verification requires Pandoc plus Poppler pdfinfo/pdftotext/pdftoppm; TeX generation requires a declared engine such as XeTeX. Missing required format tools produce BLOCKED/FAIL, never PASS."
+  }
+}

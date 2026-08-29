@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # composite-measure-validation-check.sh — Phase 8 substantive-quality gate.
 #
-# Rationale: a common failure is a focal predictor built as a multi-item
-# composite asserted as unidimensional with no Cronbach's α / McDonald's ω
-# / EFA / CFA evidence. When such a composite drives the headline
-# contribution, its validity is essentially asserted. This gate adds the
-# requirement — missing at the skill level — that composite measures be
-# validated before they enter a regression as a focal predictor.
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): the focal predictor
+# "platformized information dependence" was a 4-item composite asserted as
+# unidimensional with no Cronbach's α / McDonald's ω / EFA / CFA evidence.
+# The composite drove the headline contribution; its validity was
+# essentially asserted. No skill-level gate caught this — there was no
+# requirement that composite measures be validated before they enter a
+# regression as a focal predictor.
 #
 # Contract
 # --------
@@ -78,9 +79,10 @@ with dict_path.open(newline="", encoding="utf-8") as f:
     if "construct_type" not in (reader.fieldnames or []):
         # Older variable dictionaries don't have construct_type — fall back to
         # detecting composite-like variables via name heuristics so the gate
-        # still catches the typical pattern: e.g. a dictionary with no
-        # construct_type column but a focal predictor that is clearly an
-        # index (a variable name carrying a literal "index" / "_idx" suffix).
+        # still catches the typical pattern. Audit 2026-05-06: cfps-platform-trust
+        # had no construct_type column but the focal predictor was clearly an
+        # index ("platformized_information_dependence_index" with literal
+        # "index" suffix).
         f.seek(0)
         reader = csv.DictReader(f)
         for row in reader:

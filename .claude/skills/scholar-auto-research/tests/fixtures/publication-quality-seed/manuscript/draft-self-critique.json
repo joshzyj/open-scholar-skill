@@ -1,0 +1,31 @@
+{
+  "claim_strength_scan": {
+    "status": "PASS",
+    "summary": "The draft keeps the main claim descriptive and flags uneven robustness evidence."
+  },
+  "missing_rival_scan": {
+    "status": "PASS",
+    "summary": "The background and discussion include compensatory motivation as a rival interpretation."
+  },
+  "ready_for_verification": true,
+  "revision_actions": [
+    {
+      "action": "Replace internal model labels with reader-facing Model 1 through Model 3 labels.",
+      "status": "completed"
+    },
+    {
+      "action": "Keep the weaker timing check subordinate to the headline table result.",
+      "status": "completed"
+    }
+  ],
+  "strongest_rejection_reason": "A reviewer could object that the observational design cannot separate job loss from concurrent household shocks.",
+  "unsupported_leap_scan": {
+    "status": "PASS",
+    "summary": "The manuscript uses associational language and avoids converting estimates into causal claims."
+  },
+  "verdict": "PASS",
+  "workflow_language_scan": {
+    "status": "PASS",
+    "summary": "Visible prose uses journal-facing evidence language and avoids internal workflow labels."
+  }
+}

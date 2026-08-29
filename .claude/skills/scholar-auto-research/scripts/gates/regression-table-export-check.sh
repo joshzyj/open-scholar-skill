@@ -12,12 +12,14 @@
 # does NOT check that the analysis scripts actually CALL `modelsummary()` or
 # that any rich-format file lands in `tables/`.
 #
-# Result: projects can ship `tables/` with only `*-registry.csv` and
-# coefficient-frame CSVs and no rendered tables. Typical failure shapes:
-#   - a tables/ dir with several .csv files but 0 .html / .tex / .docx
-#   - a tables/ dir with focal-coef / results-registry / spec-registry CSVs
-#       only, 0 .html / .tex / .docx, and `library(modelsummary)` absent
-#       from the focal-models script entirely
+# Result: real projects ship `tables/` with only `*-registry.csv` and
+# coefficient-frame CSVs, no rendered tables. Examples observed in audit:
+#   - workshop/cfps-example/output/gender-housework-cfps-auto/tables/
+#       6 .csv files, 0 .html / .tex / .docx
+#   - workshop/GSS/Projects/output/segregation-health-gss/tables/
+#       3 .csv files (focal-coefs, results-registry, spec-registry),
+#       0 .html / .tex / .docx, and `library(modelsummary)` is absent
+#       from p5-03-focal-models.R entirely
 # Downstream Phase 11 manuscript assembly cannot embed publication-quality
 # regression tables; the LLM either hand-crafts a markdown table from the
 # CSV or skips it.
@@ -191,7 +193,7 @@ ENGINE_PATTERNS=(
   '(^|[^a-zA-Z._])(kable|kbl)\s*\('
 )
 
-# Descriptive-only engines:
+# Descriptive-only engines (audit 2026-05-06 cfps-platform-trust-asr-auto):
 # `modelsummary::datasummary_df()` and `datasummary()` produce display
 # tables from data frames, NOT regression tables from fitted model objects.
 # A `tables/table-main-regression.*` file produced solely by these engines

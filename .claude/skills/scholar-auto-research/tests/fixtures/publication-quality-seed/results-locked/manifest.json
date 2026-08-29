@@ -1,0 +1,75 @@
+{
+  "created_at": "2026-04-29T12:00:00Z",
+  "degraded": false,
+  "latest_matches": true,
+  "lock_engine": {
+    "auto_research_contract": "phase_11",
+    "deterministic_lock": true,
+    "mode": "results_lock",
+    "skill": "scholar-auto-research"
+  },
+  "lock_id": "LOCK-20260429-001",
+  "locked_artifacts": [
+    {
+      "artifact_role": "execution_report",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/analysis/execution-report.json",
+      "sha256": "db3a565ee053b4e9b90cd7ccde7da09aa919df5aebe04e99aea504b705eda421",
+      "source_path": "analysis/execution-report.json"
+    },
+    {
+      "artifact_role": "results_registry",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+      "sha256": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+      "source_path": "tables/results-registry.csv"
+    },
+    {
+      "artifact_role": "diagnostic",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/model-results.csv",
+      "sha256": "85859949cad0dc38d596699174004f0b75944afc8fd7228caedbaa552fc7701d",
+      "source_path": "tables/model-results.csv"
+    },
+    {
+      "artifact_role": "main_regression_table",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+      "sha256": "8a0d41f7cd3f855dc1db4706205dee7657dd6e052058931d5358cff3c6490cf5",
+      "source_path": "tables/regression-main.html"
+    },
+    {
+      "artifact_role": "figure_registry",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/figures/figure-registry.csv",
+      "sha256": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+      "source_path": "figures/figure-registry.csv"
+    },
+    {
+      "artifact_role": "figure_file",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/figures/event-study.png",
+      "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+      "source_path": "figures/event-study.png"
+    },
+    {
+      "artifact_role": "post_execution_review",
+      "lock_status": "copied",
+      "locked_path": "results-locked/LOCK-20260429-001/review/post-execution-review.json",
+      "sha256": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc",
+      "source_path": "review/post-execution-review.json"
+    }
+  ],
+  "manifest_sha256": "3e046cc64e69c53384991e654cfed6d33b3322ed34ef9c43fa9ea28d801d2e92",
+  "ready_for_phase_12": true,
+  "source_hashes": {
+    "execution_report": "db3a565ee053b4e9b90cd7ccde7da09aa919df5aebe04e99aea504b705eda421",
+    "figure_registry": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+    "post_execution_review": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc",
+    "results_registry": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+    "runtime_sanity": "e158d55af6bc4e86df54ced46a2a8437f7fdb081fb1304ff9aa3564f6ca3de41",
+    "runtime_sanity_md": "b9973f25f05b7b00e2fe216bd50373a38f89fda54ecd5be5b3e1df9d16ff0d64"
+  },
+  "stage1_verdict": "PASS",
+  "verdict": "PASS"
+}

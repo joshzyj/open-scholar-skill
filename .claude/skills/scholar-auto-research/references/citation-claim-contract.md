@@ -88,3 +88,6 @@ Hard failures:
 - fake exported bibliography that is only a key dump, placeholder list, or non-BibTeX text
 
 If Phase 15 fails, it must emit structured findings. Route unsupported or contradicted prose/citation problems to Phase 13; missing/unverified references to Phase 15; citation pool problems to Phase 2; and result-claim citation conflicts that contradict Phase 14 to Phase 14.
+# Empirical claim identity propagation
+
+Phase 15 requires Phase 13 locked-result claim schema v2. Each empirical `claim_id` occurs exactly once in `claim-source-map.json` and repeats the Results anchor plus the display/value-source binding, locked paths, row index, `spec_id`, coordinate kind, and coordinate. Exact set equality is required independently of record order; literature citation records retain their existing semantics.

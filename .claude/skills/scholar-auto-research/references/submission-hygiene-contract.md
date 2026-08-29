@@ -29,7 +29,7 @@ Immutable versioned outputs:
 
 Use `final/manuscript-final.md` as the source of substantive content for `submission/manuscript-submission.md`, but do not rely on scrub-only transformation. Assemble the submission manuscript as a reviewer-facing derivative with an explicit section allowlist: title, abstract, keywords, introduction, literature/theory, methods, results, discussion, and references. Exclude draft-only workflow appendices, trace anchors, lock metadata, and pipeline scaffolding by construction. Then render `submission/manuscript-submission.docx`, `submission/manuscript-submission.tex`, and `submission/manuscript-submission.pdf` from that reviewer-facing Markdown.
 
-The submission manuscript MUST declare a title before the first `##` section heading. The title is required structurally (gate `scripts/gates/manuscript-title-check.sh`), not merely as an allowlisted section. A submission whose first non-comment line is `## Abstract` fails Phase 20.
+The submission manuscript MUST declare a title before the first `##` section heading. The title is required structurally (gate `scripts/gates/manuscript-title-check.sh`), not merely as an allowlisted section. A submission whose first non-comment line is `## Abstract` fails Phase 20. (Audit 2026-05-06 cfps-platform-trust-asr-auto.)
 
 The submission manuscript MUST normalize visible front matter to `Title -> Abstract -> Keywords -> Introduction`: `Keywords:` belongs after the abstract text and before `## Introduction`, not in the title prefix before `## Abstract`. A visible `Keywords:` line before Abstract, after Introduction, missing entirely, duplicated, or placed before abstract prose fails Phase 20.
 
@@ -42,7 +42,14 @@ Each `format_generation` command must invoke Pandoc, read `submission/manuscript
 Phase 20 has two mandatory stages:
 
 1. **Stage A: deterministic machinery scan.** `auto-research-verify.sh 20` independently scans the current `submission/manuscript-submission.md` for known submission-killing machinery prose. This includes `[VERIFIED-*]` citation markers, pipeline-jargon headers such as `Robustness Ladder`, `Multiple-Comparison Correction`, `BH Correction Summary`, `Limitations Acknowledged at Estimation Time`, "we carry N accepted limitations" / "pre-registered families" enumeration prose, 3+ consecutive bulleted spec-ID lines such as `- **M1.**`, `- **M2.**`, `- **M3.**`, and proposal-style hypothesis display blocks such as `- **H1.** ...`, `1. Hypothesis 1: ...`, `H1: ...`, or a separate `## Hypotheses` section.
-2. **Stage B: semantic body-prose read.** After Stage A is GREEN, dispatch an independent body-prose-reader subagent to read `submission/manuscript-submission.md` top-to-bottom for novel structural prose markers that regex rules do not yet know how to catch. The reader must ignore argument substance and numeric accuracy and focus only on prose that reads like orchestration output rather than journal prose, including `H1/H2` hypothesis lists that read like a proposal or PAP instead of a journal article.
+2. **Stage B: semantic body-prose read.** After Stage A is GREEN, begin the
+   registered `semantic_body_reader` evidence round and dispatch its reserved
+   role to read `submission/manuscript-submission.md` top-to-bottom for novel
+   structural prose markers that regex rules do not yet know how to catch. The
+   reader must ignore argument substance and numeric accuracy and focus only on
+   prose that reads like orchestration output rather than journal prose,
+   including `H1/H2` hypothesis lists that read like a proposal or PAP instead
+   of a journal article.
 
 Save the Stage B report to `submission/semantic-body-prose-read.md` with these literal audit fields:
 
@@ -55,6 +62,16 @@ STRUCTURAL_PATTERN_COUNT: 0
 ```
 
 `YELLOW` and `RED` reports do not complete Phase 20. A YELLOW report means the suggestions must be resolved and the semantic reader rerun until it returns GREEN. A RED report should also be converted into a deterministic regression rule if it identifies a class-new machinery pattern.
+
+The stable report above remains a submission-package output. The evidence
+driver also persists its reserved copy and RAO sidecar under
+`review-evidence/phase-20/<session>/`. In `semantic_body_prose_read`, keep
+`report_path: submission/semantic-body-prose-read.md` for package semantics and
+bind `evidence_report_path` plus `evidence_task_invocation_id` to the registered
+completion. Neither field substitutes for the other. Verification reads both
+files, requires the registered evidence report itself to be current and GREEN,
+and compares the decision-bearing audit fields. The stable package report
+cannot override a YELLOW/RED or contradictory evidence-bound report.
 
 ## Required Hygiene Checks
 

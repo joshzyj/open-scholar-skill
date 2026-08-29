@@ -34,10 +34,16 @@ fi
 
 # reference snippets ----------------------------------------------------------
 mkdir -p "$SCHOLAR_RAG_DIR"
+# "timeout": 120000 (ms) — P15-A (2026-08-25): without it, a hung rag call
+# burns the 1800s global MCP default before the caller learns anything; a
+# local vector search that has not answered in 2 minutes is not going to.
+# (The server ALSO self-bounds each search at SCHOLAR_RAG_SEARCH_TIMEOUT=90s
+# and returns an explicit server-timeout payload — the client timeout is the
+# backstop for hangs outside the search path.)
 cat > "$SCHOLAR_RAG_DIR/mcp.claude.json" <<JSON
 {
   "mcpServers": {
-    "scholar-rag": { "command": "$PY", "args": ["$SERVER"] }
+    "scholar-rag": { "command": "$PY", "args": ["$SERVER"], "timeout": 120000 }
   }
 }
 JSON

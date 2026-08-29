@@ -1,0 +1,2046 @@
+#!/usr/bin/env bash
+# PreToolUse hook — data-file safety guard.
+#
+# Claude Code calls this script before every tool invocation. It reads the
+# hook payload from stdin (JSON with tool_name, tool_input, cwd, ...) and
+# decides whether to allow or block the call.
+#
+# Behavior:
+#   - Inspects tool_name ∈ {Read, NotebookRead, NotebookEdit, Grep, Glob,
+#     Bash, Edit, Write, MultiEdit}. Any other tool passes through.
+#     (REQUIRES the ~/.claude/settings.json PreToolUse matcher to list these
+#     tools; the matcher is snapshotted at session start, so a matcher edit
+#     only takes effect after the Claude Code session is restarted.)
+#   - For Read / NotebookRead / NotebookEdit:
+#     * Extracts the file_path (or notebook_path) argument.
+#     * Canonicalizes it via realpath (resolves symlinks + relative segments).
+#     * Checks if the extension is a data-file type. Non-data files pass.
+#     * Checks the sidecar <cwd>/.claude/safety-status.json — honors
+#       CLEARED/ANONYMIZED/OVERRIDE as allow; LOCAL_MODE/HALTED/
+#       NEEDS_REVIEW:* as block.
+#     * For image files, applies path-based classification (raw-data
+#       directories → block; output/screenshot paths → allow).
+#     * For other data files, delegates to safety-scan.sh.
+#   - For Grep / Glob:
+#     * Extracts the path/pattern argument.
+#     * If it targets a raw-data directory segment, blocks the call
+#       (Grep would return matching lines from sensitive files into
+#       Claude's context, which is exactly what the guard must prevent).
+#   - For Bash (Standard-tier SPEED-BUMP, see §2d):
+#     * Parses tool_input.command, finds path tokens that resolve to a
+#       sensitive data target (is_rawdata_path / is_qual_path / sidecar
+#       LOCAL_MODE|HALTED|NEEDS_REVIEW), and blocks obvious content-dump
+#       commands (cat/head/sed/awk/grep-rows/sqlite3/python|R row dumps).
+#     * This is NOT a containment boundary — arbitrary shell can bypass it
+#       (other interpreters, encodings, var-assembled paths). It FAILS OPEN
+#       on any ambiguity so the shell is never bricked. The real wall is the
+#       OS sandbox configured by the Lockdown safety level.
+#   - For Edit / Write / MultiEdit:
+#     * Passes through instantly UNLESS the target is .claude/safety-status.json,
+#       in which case it blocks a CLEARED/OVERRIDE promotion of a restricted
+#       file that lacks /scholar-init review provenance (E4 tamper guard).
+#       Also fails OPEN on ambiguity.
+#
+# Exit codes (Claude Code hook semantics):
+#   0 → allow the tool call
+#   2 → block; stderr is surfaced to Claude as the refusal reason
+#
+# Bypass: there is no env-var bypass. To override a single file, write
+# {"path": "OVERRIDE"} into <cwd>/.claude/safety-status.json. To disable
+# globally, remove the hook from ~/.claude/settings.json.
+
+set -uo pipefail
+
+# ─── FA-9 fail-closed backstop ──────────────────────────────────────────
+# This guard refuses unsafe data reads via explicit `exit 2`. Without this
+# trap, an UNEXPECTED termination (a `set -u` unbound var, a syntax/runtime
+# error mid-script) exits with a non-2 code, which PreToolUse semantics
+# treat as NON-blocking → the Read proceeds = fail OPEN. The EXIT trap below
+# converts an abnormal exit (code not in {0,2}) into a BLOCK (exit 2) — but
+# ONLY when the target looked like data (`_DATA_RISK=1`), so a crash while
+# evaluating a non-data path (a .md / .R / .sh read) stays non-blocking and
+# does not brick the harness on unrelated failures. `_DATA_RISK` is set to 0
+# here, before anything can fail, and raised to 1 right after the parse.
+_DATA_RISK=0
+_GUARD_RISK_TARGET=""
+_guard_on_exit() {
+  local rc=$?
+  rm -f "${SCAN_LOG:-}" 2>/dev/null || true
+  case "$rc" in
+    0|2) : ;;  # intended allow / block — leave the decision as-is
+    *)
+      if [ "${_DATA_RISK:-0}" = 1 ]; then
+        echo "SAFETY GUARD: data-guard terminated abnormally (rc=${rc}) while evaluating a data-risk target '${_GUARD_RISK_TARGET}'. Failing closed (block) rather than allowing the read." >&2
+        trap - EXIT
+        exit 2
+      fi
+      ;;
+  esac
+}
+trap _guard_on_exit EXIT
+
+# ─── Shared: §14 trace-profile verdict (handoff 2026-08-25 P7-A) ────────
+# Echoes CLEAN | VIOLATIONS <k=v …> | NOT-A-TRACE for a candidate RAO trace
+# file. Used by BOTH the Read arm (§7b) and the Grep arm — a §14-clean trace
+# is pipeline metadata, and refusing one tool while allowing another cost a
+# review seat a whole round (the seat recorded "unreadable" off the Grep
+# refusal and never tried Read; P7-A correction, 2026-08-25).
+_trace_profile_verdict() {
+  python3 - "$1" <<'PY_TRACE' 2>/dev/null
+import json, re, sys
+path = sys.argv[1]
+schema_ok = True
+viol = {}
+def hit(k):
+    viol[k] = viol.get(k, 0) + 1
+try:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            line = line.strip()
+            if not line:
+                continue
+            if i > 5000:
+                break
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                schema_ok = False
+                break
+            if not isinstance(rec, dict) or "ts" not in rec or not (
+                    "seq" in rec or "action" in rec or "observation" in rec):
+                schema_ok = False
+                break
+            blob = json.dumps(rec, ensure_ascii=False)
+            # §14 violations only — never person-shaped strings:
+            if re.search(r"\b\d{3}-\d{2}-\d{4}\b", blob):
+                hit("ssn-shaped")
+            if re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", blob):
+                hit("email")
+            for v in rec.values():
+                # row-dump heuristic: a LONG run of comma-separated numerics
+                # with several decimals reads as respondent measurements (a
+                # data row). Calibrated against the 10-file corpus sweep:
+                # pure-integer lists are legitimate metadata (line numbers,
+                # "27:148,171,190,…" — 4 false hits at the first cut), and
+                # SHORT decimal runs are coefficient/sample-size lists
+                # ("0.924, 0.0929, …, 16,832" — 1 false hit at the second
+                # cut; thousands-commas double-count). Thresholds ≥10
+                # numerics AND ≥4 decimals clear every real trace while
+                # still catching a survey-row dump. Residual risk accepted
+                # and documented: a SHORT row fragment passes this arm —
+                # the §14 emitter contract and trace audits remain the
+                # primary enforcement; this arm is defense against gross
+                # dumps only.
+                if isinstance(v, str):
+                    m = re.search(r"(\b\d+(\.\d+)?\s*,\s*){10,}\d+(\.\d+)?", v)
+                    if m and len(re.findall(r"\d+\.\d+", m.group(0))) >= 4:
+                        hit("row-dump-shaped")
+                        break
+            if isinstance(rec.get("quote"), str) and rec["quote"].strip():
+                hit("inline-quote")
+except OSError:
+    schema_ok = False
+if not schema_ok:
+    print("NOT-A-TRACE")
+elif viol:
+    print("VIOLATIONS " + " ".join("%s=%d" % kv for kv in sorted(viol.items())))
+else:
+    print("CLEAN")
+PY_TRACE
+}
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GATE_SCRIPT="${HOOK_DIR}/safety-scan.sh"
+
+# Shared sidecar schema validator (sourced, not executed). Defines
+# is_valid_status() and validate_sidecar_schema(). If the file is
+# missing, we fall back to the in-script definitions below so the guard
+# still works from old checkouts — but prefer the shared version.
+if [ -f "${HOOK_DIR}/sidecar-schema.sh" ]; then
+  # shellcheck source=./sidecar-schema.sh
+  . "${HOOK_DIR}/sidecar-schema.sh"
+fi
+
+# ─── Helper: canonicalize a path (follow symlinks, resolve `..`) ────────
+#
+# Returns the resolved absolute path on stdout.
+# Exit codes:
+#   0 = resolved successfully (stdout has the canonical path)
+#   1 = could not resolve, and the target is (or might be) a symlink.
+#       Callers MUST fail closed on exit 1.
+#
+# Resolution order: python3 → realpath → readlink -f → bash fallback.
+# The bash fallback does NOT resolve symlinks. If none of python3,
+# realpath, or readlink -f is available AND the target is a symlink,
+# return 1 to force callers into fail-closed behavior — otherwise a
+# symlink pointing to /etc/passwd could evade the I4 system-dir check.
+canonicalize() {
+  local target="$1"
+  [ -z "$target" ] && return 1
+  local result
+
+  # Relative paths must be resolved against the tool-call's cwd, not the
+  # guard process's cwd (which is always the user's shell, not Claude's
+  # logical directory). Prepend ${CWD:-$PWD} so downstream realpath /
+  # readlink calls get an absolute starting point. Without this fix, a
+  # Grep with `path="data/raw"` (relative) would bypass the data-path
+  # classifier because `is_rawdata_path` requires a leading `*/` and
+  # bare "data/raw" without a parent segment does not match.
+  case "$target" in
+    /*) ;;
+    *)
+      local anchor="${CWD:-$PWD}"
+      if [ -n "$anchor" ]; then
+        target="${anchor%/}/${target}"
+      fi
+      ;;
+  esac
+
+  if command -v python3 >/dev/null 2>&1; then
+    result=$(python3 -c 'import os,sys; p=sys.argv[1]; print(os.path.realpath(p) if os.path.exists(p) else os.path.abspath(p))' "$target" 2>/dev/null)
+    if [ -n "$result" ]; then
+      printf '%s\n' "$result"
+      return 0
+    fi
+  fi
+
+  # GNU coreutils realpath (sometimes installed on macOS via brew)
+  if command -v realpath >/dev/null 2>&1; then
+    result=$(realpath "$target" 2>/dev/null)
+    if [ -n "$result" ]; then
+      printf '%s\n' "$result"
+      return 0
+    fi
+  fi
+
+  # Linux GNU readlink -f
+  if result=$(readlink -f "$target" 2>/dev/null) && [ -n "$result" ]; then
+    printf '%s\n' "$result"
+    return 0
+  fi
+
+  # No symlink-resolving tool available. If the target IS a symlink (or
+  # contains a symlink in its path), we cannot safely canonicalize it —
+  # refuse. The I4 system-directory check depends on symlink resolution.
+  if [ -L "$target" ]; then
+    return 1
+  fi
+  # Walk parent directories looking for any symlink component.
+  local parent="$target"
+  while [ "$parent" != "/" ] && [ -n "$parent" ]; do
+    parent=$(dirname "$parent")
+    if [ -L "$parent" ]; then
+      return 1
+    fi
+  done
+
+  # Target is a plain file / directory with no symlinks in its path.
+  # The bash fallback is safe here.
+  if [ -e "$target" ]; then
+    local dir base
+    dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd)"
+    base="$(basename "$target")"
+    if [ -n "$dir" ]; then
+      printf '%s\n' "${dir}/${base}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$target"
+  return 0
+}
+
+# ─── Helper: LEXICAL absolute path (does NOT resolve symlinks) ──────────
+#
+# Companion to canonicalize(). canonicalize() resolves symlinks — required
+# for the §4a system-directory escape check, which must see the real target.
+# But that same resolution rewrites an in-project symlink such as
+#   <proj>/data/raw/x.dta  ->  /elsewhere/YW/CFPS/x.dta
+# so the resolved path no longer matches the sidecar key NOR the
+# is_rawdata_path classifier — both keyed on the in-project location.
+# lexical_abspath() absolutizes (against CWD, like canonicalize) and collapses
+# '.'/'..' WITHOUT following symlinks, preserving the in-project path. It is
+# consulted ALONGSIDE the canonical path for sidecar lookup and data/qual
+# classification — NEVER for the system-dir escape check.
+#
+# Always prints something (never fails closed on its own): callers OR its
+# result with the canonical path, so an empty result simply contributes no
+# extra match.
+lexical_abspath() {
+  local target="$1"
+  [ -z "$target" ] && return 0
+  case "$target" in
+    /*) ;;
+    *)
+      local anchor="${CWD:-$PWD}"
+      [ -n "$anchor" ] && target="${anchor%/}/${target}"
+      ;;
+  esac
+  if command -v python3 >/dev/null 2>&1; then
+    local result
+    result=$(python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "$target" 2>/dev/null)
+    if [ -n "$result" ]; then
+      printf '%s\n' "$result"
+      return 0
+    fi
+  fi
+  # Fallback: emit the (CWD-anchored) target as-is; normpath is lexical-only
+  # so its absence just means '..' segments are not collapsed — still usable
+  # for prefix matching against is_rawdata_path.
+  printf '%s\n' "$target"
+  return 0
+}
+
+# ─── Data extension list (shared between Read and Grep/Glob checks) ─────
+# Extensions here are ALWAYS inspected. Document formats (.txt, .rtf, .docx)
+# are NOT in this list — they're conditionally inspected only when inside a
+# data-ish directory (see the CONDITIONAL_TEXT_EXTS check below), because a
+# README.txt at the project root is overwhelmingly non-sensitive and should
+# not require OVERRIDE every time Claude reads it.
+DATA_EXTS=(
+  # Tabular / structured
+  csv tsv dta sav rds rdata xlsx xls parquet feather arrow db sqlite
+  # Semi-structured
+  jsonl ndjson
+  # Audio (inherent biometric identifier)
+  wav mp3 flac m4a ogg aac aiff
+  # Video
+  mp4 mov avi mkv webm
+  # Images (often PII — faces, documents)
+  jpg jpeg png tiff tif heic heif bmp webp gif
+  # Linguistics-specific
+  eaf textgrid trs cha praat
+  # Geospatial
+  shp geojson kml gpx
+)
+
+# Text/document extensions that are inspected ONLY when in data-ish paths.
+# Policy §0 says these count as data when they contain interview transcripts,
+# field notes, open-ended survey responses, consent forms, etc. — typically
+# files in data/raw/, materials/, corpus/, subjects/, etc.
+CONDITIONAL_TEXT_EXTS=(txt rtf docx doc odt md)
+
+is_data_ext() {
+  local ext="$1"
+  for E in "${DATA_EXTS[@]}"; do
+    [ "$ext" = "$E" ] && return 0
+  done
+  return 1
+}
+
+is_image_ext() {
+  case "$1" in
+    jpg|jpeg|png|tiff|tif|heic|heif|bmp|webp|gif) return 0 ;;
+  esac
+  return 1
+}
+
+# Path segments that indicate raw/sensitive data directories.
+#
+# This is the SINGLE authoritative classifier for "is this path inside a
+# sensitive data tree." Every gated channel (Read / NotebookRead / Grep / Glob
+# AND the Bash dump-verb gate) routes its target through this function.
+# Earlier versions maintained separate taxonomies for Read vs. Grep/Glob,
+# which let qualitative text leak through Grep even though Read would have
+# blocked it.
+#
+# The list deliberately includes qualitative-research directories
+# (materials/, transcripts/, interviews/, field-notes/, fieldnotes/) so
+# that verbatim participant text gets the same protection as tabular data.
+is_rawdata_path() {
+  case "$1" in
+    */data/raw/*|*/data/raw|\
+    */data/interim/*|*/data/interim|\
+    */data/processed/*|*/data/processed|\
+    */data/*|*/raw/*|*/input/*|*/inputs/*|\
+    */datasets/*|*/dataset/*|*/corpus/*|*/corpora/*|\
+    */photos/*|*/subjects/*|*/participants/*|*/respondents/*|\
+    */media/*|*/imagery/*|*/scans/*|*/originals/*|*/source_images/*|\
+    */materials/*|*/materials|\
+    */transcripts/*|*/transcripts|\
+    */interviews/*|*/interviews|\
+    */field-notes/*|*/field-notes|\
+    */fieldnotes/*|*/fieldnotes|\
+    */field_notes/*|*/field_notes)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# Qualitative-text path segments. Files classified here are subject to the
+# strictest policy: OVERRIDE is refused regardless of extension, because a
+# .txt / .docx / .md in a transcripts/ directory quotes participants
+# verbatim. The per-extension audio/video list in the OVERRIDE handler is
+# a SUPERSET of this: extension OR path classifies a file as qualitative.
+#
+# IMPORTANT: this list must stay AT LEAST AS WIDE as the qualitative
+# subset of is_rawdata_path — every directory that is_rawdata_path treats
+# as qualitative (materials/, transcripts/, interviews/, field-notes/,
+# participants/, subjects/, respondents/) MUST also be is_qual_path, or
+# OVERRIDE re-opens a bypass for those paths (CLAUDE_FIX_BRIEF P0 #4).
+# We include the entire materials/ subtree because materials/ routinely
+# contains consent forms, interview transcripts, and field notes alongside
+# public items like codebooks. Refusing OVERRIDE on the whole subtree is
+# the conservative default.
+is_qual_path() {
+  case "$1" in
+    */transcripts/*|*/transcripts|\
+    */interviews/*|*/interviews|\
+    */field-notes/*|*/field-notes|\
+    */fieldnotes/*|*/fieldnotes|\
+    */field_notes/*|*/field_notes|\
+    */materials/*|*/materials|\
+    */participants/*|*/participants|\
+    */subjects/*|*/subjects|\
+    */respondents/*|*/respondents)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# ─── S2.3 narrow Bash-channel exemptions (system-fix 2026-08-23) ────────
+# Two DOCUMENTED false-positive classes, exempted narrowly and only with a
+# provenance backstop — the sidecar stays authoritative (handoff P3-1):
+#   (a) $HOME/.claude/plugins/** — Claude Code's own plugin state. The
+#       */data/* segment matched ~/.claude/plugins/data/<plugin>/… and
+#       blocked Codex job polling four times on 2026-08-23. Tool
+#       infrastructure, never research data.
+#   (b) */tables/raw/** — model OUTPUT (coefficient tables), matched by the
+#       bare */raw/* token. Pipeline products carry no sidecar entry BY
+#       DESIGN (the --bundle clearance rule), so any sidecar status present
+#       means the file was INGESTED → the exemption does not apply and the
+#       status governs.
+# The caller passes BOTH the canonical (symlink-resolved) and lexical
+# lowercased paths; every non-empty candidate must sit inside an exemption
+# root, so tables/raw/link.csv → data/raw/real.csv resolves outside the
+# root and is still blocked. Bash channel ONLY — the Read/Grep/Glob channel
+# is deliberately untouched (stricter is safer there; revisit only with the
+# rule-10 corpus sweep). Considered and REJECTED this round: enumeration
+# exemptions (filenames can carry PII), tee (reads and echoes), unquoted
+# heredocs (substitutions execute).
+_s23_under_exempt_root() {
+  local lower_home lower_home_canon p matched=1
+  # The candidates arrive in BOTH forms — canonical (symlink-resolved) and
+  # lexical (unresolved) — and HOME itself can sit behind a symlink (macOS
+  # /var/folders → /private/var/folders), so each candidate is compared
+  # against BOTH home spellings. The security property is carried by the
+  # CANONICAL candidate: if the resolved path escapes the exemption roots
+  # (a tables/raw symlink into data/raw), it fails its own comparison and
+  # the whole exemption is refused.
+  lower_home="$(printf '%s' "$HOME" | tr 'A-Z' 'a-z')"
+  lower_home_canon="$(canonicalize "$HOME" 2>/dev/null || printf '%s' "$HOME")"
+  lower_home_canon="$(printf '%s' "$lower_home_canon" | tr 'A-Z' 'a-z')"
+  for p in "$@"; do
+    [ -n "$p" ] || continue
+    matched=0
+    case "$p" in
+      "$lower_home"/.claude/plugins/*) : ;;
+      "$lower_home_canon"/.claude/plugins/*) : ;;
+      */tables/raw/*|*/tables/raw) : ;;
+      *) return 1 ;;
+    esac
+  done
+  return "$matched"
+}
+
+# ─── Multi-path classifiers: match if ANY passed (lowercased) path is a ──
+# raw-data / qualitative path. Used to classify a target by BOTH its
+# symlink-resolved (canonical) path AND its lexical in-project path, so a
+# file symlinked into data/raw whose realpath escapes the tree is still
+# recognized. Empty args are skipped.
+is_rawdata_any() {
+  local p
+  for p in "$@"; do
+    [ -n "$p" ] || continue
+    is_rawdata_path "$p" && return 0
+  done
+  return 1
+}
+is_qual_any() {
+  local p
+  for p in "$@"; do
+    [ -n "$p" ] || continue
+    is_qual_path "$p" && return 0
+  done
+  return 1
+}
+
+# ─── Nearest-ancestor project-root discovery ────────────────────────────
+#
+# Walks upward from $1 looking for the first directory that contains
+# .claude/safety-status.json. Returns the absolute path to that directory
+# on stdout, or the empty string if none exists up to /.
+#
+# Use this instead of $CWD-only lookup — earlier versions only checked
+# "$CWD/.claude/safety-status.json", so a tool call issued from
+# project/subdir/ would bypass project/.claude/safety-status.json entirely.
+find_project_root() {
+  local start="$1"
+  [ -z "$start" ] && return 0
+  # If start is a file, walk up to its directory first.
+  local dir
+  if [ -d "$start" ]; then
+    dir="$start"
+  else
+    dir="$(dirname "$start")"
+  fi
+  # Canonicalize to an absolute path. REQUIRE an absolute result — if
+  # canonicalize returned empty (no resolver available AND path is a
+  # symlink) or a still-relative result, we cannot reliably walk upward
+  # and must return "no project root" so callers don't leak project
+  # state against the wrong directory tree.
+  local abs
+  abs="$(canonicalize "$dir" 2>/dev/null || true)"
+  case "$abs" in
+    /*) dir="$abs" ;;
+    *)  return 0 ;;   # empty or relative → no project root
+  esac
+  # Walk upward until / (inclusive).
+  while :; do
+    if [ -f "${dir}/.claude/safety-status.json" ]; then
+      printf '%s\n' "$dir"
+      return 0
+    fi
+    if [ "$dir" = "/" ] || [ -z "$dir" ]; then
+      return 0
+    fi
+    local parent
+    parent="$(dirname "$dir")"
+    if [ "$parent" = "$dir" ]; then
+      return 0
+    fi
+    dir="$parent"
+  done
+}
+
+# ─── Sidecar schema validation (fallback shim) ──────────────────────────
+#
+# The canonical implementations of is_valid_status() and
+# validate_sidecar_schema() live in scripts/gates/sidecar-schema.sh and
+# are sourced at the top of this file. If that source failed (older
+# checkout without the shared library), define minimal fallbacks here
+# so the guard still fails closed rather than crashing on an undefined
+# function.
+if ! declare -F is_valid_status >/dev/null 2>&1; then
+  is_valid_status() {
+    case "$1" in
+      CLEARED|ANONYMIZED|OVERRIDE|LOCAL_MODE|HALTED) return 0 ;;
+      NEEDS_REVIEW|NEEDS_REVIEW:*) return 0 ;;
+    esac
+    return 1
+  }
+fi
+if ! declare -F validate_sidecar_schema >/dev/null 2>&1; then
+  validate_sidecar_schema() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    # Match sidecar-schema.sh: fail closed if jq is missing. The jq
+    # expression below would silently produce an empty SCHEMA_ERRORS
+    # (stderr redirected), which an upstream caller would read as
+    # "sidecar OK" and proceed. That's exactly the opposite of what
+    # a missing validator should do on a data-file.
+    if ! command -v jq >/dev/null 2>&1; then
+      printf '  - (cannot validate: jq not installed)\n'
+      return 1
+    fi
+    local invalid
+    invalid="$(jq -r '
+        if type != "object" then
+          "  - <root>: not a JSON object"
+        else
+          to_entries
+          | map(
+              if (.key | startswith("_")) then
+                if .key == "_safety_level" then
+                  if (.value | type) != "string" then
+                    "  - \(.key): non-string value (\(.value | type))"
+                  elif (.value | test("^(standard|strict|lockdown)$")) | not then
+                    "  - \(.key): unknown safety level \"\(.value)\" (want standard|strict|lockdown)"
+                  else empty end
+                else
+                  "  - \(.key): unknown meta key (only _safety_level is allowed)"
+                end
+              elif (.value | type) != "string" then
+                "  - \(.key): non-string value (\(.value | type))"
+              elif (.value | test("^(CLEARED|ANONYMIZED|OVERRIDE|LOCAL_MODE|HALTED|NEEDS_REVIEW(:.+)?)$")) | not then
+                "  - \(.key): unknown status \"\(.value)\""
+              else empty
+              end
+            )
+          | .[]
+        end
+      ' "$file" 2>/dev/null)"
+    if [ -n "$invalid" ]; then
+      printf '%s\n' "$invalid"
+      return 1
+    fi
+    return 0
+  }
+fi
+
+# ─── 1. Read payload ────────────────────────────────────────────────────
+INPUT="$(cat)"
+if [ -z "$INPUT" ]; then
+  exit 0    # nothing to inspect
+fi
+
+# ─── 2. Parse tool_name + target paths ──────────────────────────────────
+# Prefer jq; fall back to a crude sed parser that handles the minimum we
+# need to make a safe decision.
+if command -v jq >/dev/null 2>&1; then
+  TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)"
+  FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null)"
+  CWD="$(printf '%s'      "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)"
+  # For Grep/Glob the targetable path is `.tool_input.path` (Grep) or the
+  # pattern itself (Glob). We extract whichever the tool uses.
+  GREP_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.path // empty' 2>/dev/null)"
+  GLOB_PATTERN="$(printf '%s' "$INPUT" | jq -r '.tool_input.pattern // empty' 2>/dev/null)"
+  # Bash channel: the shell command string. (NB: do NOT name this BASH_COMMAND —
+  # that is a bash-reserved auto-variable bash overwrites before each command.)
+  TOOL_CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"
+  # Edit/Write/MultiEdit channel: the new content being written. We only use
+  # this to guard writes to .claude/safety-status.json (E4 sidecar tamper).
+  EDIT_NEW="$(printf '%s' "$INPUT" | jq -r '[.tool_input.new_string, .tool_input.content, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")' 2>/dev/null)"
+  JQ_OK=1
+else
+  # Pure-bash fallback. We extract only the fields we need to make a
+  # fail-closed decision on data-file reads.
+  TOOL_NAME="$(printf '%s' "$INPUT" | sed -n 's/.*"tool_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  FILE_PATH="$(printf '%s' "$INPUT" | sed -n 's/.*"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  if [ -z "$FILE_PATH" ]; then
+    FILE_PATH="$(printf '%s' "$INPUT" | sed -n 's/.*"notebook_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fi
+  CWD="$(printf '%s' "$INPUT" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  GREP_PATH="$(printf '%s' "$INPUT" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  GLOB_PATTERN="$(printf '%s' "$INPUT" | sed -n 's/.*"pattern"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  # The Bash/Edit/Write guards REQUIRE jq for reliable extraction of the
+  # command / new-content fields (sed cannot handle embedded quotes, newlines,
+  # or JSON-escapes in a shell command). Without jq we leave these empty, which
+  # makes the Bash/Edit/Write branches FAIL OPEN (allow) — bricking the shell
+  # escape hatch on a parse limitation is worse than a missed dump. The read
+  # tools still fail CLOSED below; the OS sandbox (Lockdown) is the real wall.
+  TOOL_CMD=""
+  EDIT_NEW=""
+  JQ_OK=0
+fi
+
+# ─── 2a. FA-9: classify the target as data-risk (path string only) ──────
+# Armed right after parse so the fail-closed EXIT trap covers nearly the
+# whole decision path. No disk I/O, so it is set even if a later step
+# crashes. Mirrors DATA_EXTS + data-ish directories; conservative by design
+# (a false positive only fails closed ON A CRASH, never on the happy path).
+_GUARD_RISK_TARGET="${FILE_PATH:-}${GREP_PATH:-}${GLOB_PATTERN:-}"
+case "$(printf '%s' "$_GUARD_RISK_TARGET" | tr 'A-Z' 'a-z')" in
+  *.csv|*.tsv|*.dta|*.sav|*.rds|*.rdata|*.xlsx|*.xls|*.parquet|*.feather|*.arrow|*.db|*.sqlite|\
+  *.jsonl|*.ndjson|*.wav|*.mp3|*.flac|*.m4a|*.ogg|*.aac|*.aiff|\
+  *.mp4|*.mov|*.avi|*.mkv|*.webm|*.jpg|*.jpeg|*.png|*.tiff|*.tif|*.heic|*.heif|*.bmp|*.webp|*.gif|\
+  *.eaf|*.textgrid|*.trs|*.cha|*.praat|*.shp|*.geojson|*.kml|*.gpx|\
+  */data/*|*/raw/*|*/materials/*|*/transcripts/*|*/interviews/*|*/corpus/*|*/subjects/*|*/participants/*)
+    _DATA_RISK=1 ;;
+esac
+
+# ─── 2b. Fail-closed check when sed fallback couldn't extract FILE_PATH
+# If jq is missing AND the tool name matches a gated tool AND we failed
+# to extract a file path via sed (empty FILE_PATH / empty GREP_PATH /
+# empty GLOB_PATTERN), fail closed. The sed regex can't handle escaped
+# quotes or malformed JSON, so an empty result may be a parse failure
+# rather than a legitimately absent field. Never silently allow a gated
+# tool call that we couldn't parse.
+if [ "$JQ_OK" = 0 ]; then
+  case "$TOOL_NAME" in
+    Read|NotebookRead|NotebookEdit)
+      if [ -z "$FILE_PATH" ]; then
+        cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked.
+
+jq is not installed, and the pure-bash fallback parser could not extract
+tool_input.file_path from the hook payload. This may be a parse failure
+(escaped quotes, unicode, or malformed JSON), not a legitimately absent
+field — failing closed as a precaution.
+
+Install jq so the guard can parse payloads reliably:
+  macOS:  brew install jq
+  Linux:  apt-get install jq  (or dnf / pacman)
+EOF
+        exit 2
+      fi
+      ;;
+    Grep|Glob)
+      if [ -z "$GREP_PATH" ] && [ -z "$GLOB_PATTERN" ]; then
+        cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked.
+
+jq is not installed, and the pure-bash fallback parser could not extract
+tool_input.path / tool_input.pattern from the hook payload. Failing
+closed as a precaution.
+
+Install jq to restore parse reliability: brew install jq
+EOF
+        exit 2
+      fi
+      ;;
+  esac
+fi
+
+# ─── 2c. Hard-require python3 for gated tools ──────────────────────────
+#
+# `canonicalize` needs a path resolver. In order of preference it uses
+# python3 → realpath → readlink -f → bash fallback. The bash fallback
+# only resolves `..` when the target's parent directory exists; on a
+# pathological path with a nonexistent intermediate component, it
+# returns the input unchanged. That leaves literal `..` in the path,
+# which can break `find_project_root`'s dirname walk and produce
+# false-negative project-root detection.
+#
+# Every other layer (safety-scan.sh, the anonymizer, the init script)
+# already hard-requires python3, so declaring the dependency here is
+# free: we're tightening the guarantee, not adding a new dependency.
+# Bash / Edit / Write have their OWN dispatch branches below (the Standard-tier
+# speed-bump + sidecar-tamper guard); they are deliberately EXEMPT from this
+# python3 hard-require and from the jq fail-closed above, and they FAIL OPEN —
+# the OS sandbox (Lockdown level) is the real boundary, not this hook, so we
+# must never let a missing interpreter brick the shell or the editor.
+case "$TOOL_NAME" in
+  Read|NotebookRead|NotebookEdit|Grep|Glob)
+    if ! command -v python3 >/dev/null 2>&1; then
+      cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked.
+
+python3 is not available on this system. The data-safety guard uses
+python3 as its primary path canonicalizer — without it, pathological
+paths containing '..' segments with nonexistent intermediate components
+can evade the project-root and sensitive-directory classifiers.
+
+Every other layer of the open-scholar-skills data-safety pipeline
+(safety-scan.sh, scholar-init, the presidio anonymizer) also requires
+python3. Install it before using the plugin:
+
+  macOS:  xcode-select --install       (XCode CLT ships python3 in /usr/bin)
+          brew install python          (Homebrew alternative)
+  Linux:  apt-get install python3      (or dnf / pacman / apk)
+
+Non-gated tool calls (Bash, Edit, Write, …) are unaffected.
+EOF
+      exit 2
+    fi
+    ;;
+esac
+
+# ─── 2d. Bash / Edit / Write helpers (Standard tier) ────────────────────
+#
+# These guard the two channels the read-tool gate never covered:
+#   - Bash: cat/sed/awk/python… dumping rows into context (→ API)
+#   - Edit/Write: tampering with .claude/safety-status.json to flip a
+#     restricted file to CLEARED/OVERRIDE
+#
+# BY DESIGN this is a COOPERATIVE-AGENT SPEED-BUMP, not a containment
+# boundary. Arbitrary shell cannot be vetted in bash, so a determined agent
+# can bypass it (other interpreters like ruby/node, base64/gzip/hex
+# encodings, variable-assembled paths, `< file` redirection into a non-dump
+# verb, a copy-to-benign-path then Read). The real boundary is the OS sandbox
+# wired by the Lockdown safety level. Accordingly EVERY path here FAILS OPEN
+# on ambiguity — bricking the universal Bash escape hatch is worse than a
+# missed exotic dump.
+
+# Look up a path's sidecar SAFETY_STATUS (best-effort; prints "" if none).
+bash_sidecar_status() {
+  local p="$1" root sf=""
+  [ -n "$p" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  root="$(find_project_root "$p" 2>/dev/null || true)"
+  [ -n "$root" ] && [ -f "${root}/.claude/safety-status.json" ] && sf="${root}/.claude/safety-status.json"
+  if [ -z "$sf" ] && [ -n "${CWD:-}" ]; then
+    root="$(find_project_root "$CWD" 2>/dev/null || true)"
+    [ -n "$root" ] && [ -f "${root}/.claude/safety-status.json" ] && sf="${root}/.claude/safety-status.json"
+  fi
+  [ -n "$sf" ] || return 0
+  jq -r --arg k "$p" '(.[$k] // empty) | if type=="string" then . else empty end' "$sf" 2>/dev/null || true
+}
+
+# Find the command's primary verb: skip leading VAR=val assignments and
+# transparent wrappers (env/sudo/time/…), strip any /dir/ prefix, lowercase.
+# Relies on the caller having `set -f` (noglob) so an unquoted `$s` word-split
+# cannot glob-expand `*.csv` etc.
+bash_primary_verb() {
+  local s="$1" w first=""
+  for w in $s; do
+    case "$w" in
+      *=*) continue ;;                                  # VAR=val assignment
+      env|command|builtin|nohup|nice|stdbuf|time|sudo|exec|then|do|'{'|'(') continue ;;
+      *) first="$w"; break ;;
+    esac
+  done
+  first="${first##*/}"                                  # strip dir prefix
+  printf '%s' "$first" | tr 'A-Z' 'a-z'
+}
+
+# Echo the first path token in $1 that resolves to a SENSITIVE data target
+# (is_rawdata_path / is_qual_path, or a sidecar status that forbids reads).
+# NEVER a bare extension and NEVER output/tables/.claude (is_rawdata_path
+# already excludes those). Empty output = no sensitive target found.
+# Emit candidate command-path tokens, one per line, for the classifier below.
+# Two UNIONED passes (additive — only ever ADDS tokens, never drops a match the
+# historical split would have made):
+#   (1) shlex (quote/escape-aware) FIRST — preserves spaced paths like
+#       `.../Dropbox Project/.../x.dta` that the historical whitespace split SHREDDED.
+#       That shredding defeated sidecar exact-key matching for every path with a
+#       space (confirmed bypass: a LOCAL_MODE file outside data/* with a space in
+#       its name was ALLOWED). Emitted first so the whole, correct path is the one
+#       classified/reported. Only run when a quote or backslash is present (the
+#       only ways a spaced path reaches a command) and python3 exists.
+#   (2) historical punctuation+whitespace split — exposes assignment RHS
+#       (`D=data/raw`) and covers the no-python3 / unquoted cases.
+_bash_tokenize() {
+  local cmd="$1"
+  case "$cmd" in
+    *\"*|*\'*|*\\*)
+      if command -v python3 >/dev/null 2>&1; then
+        python3 - "$cmd" <<'PY' 2>/dev/null
+import shlex, sys
+try:
+    parts = shlex.split(sys.argv[1], posix=True)
+except Exception:
+    parts = []
+seen = set()
+for t in parts:
+    if not t:
+        continue
+    if t not in seen:
+        seen.add(t); print(t)
+    if "=" in t:                       # expose assignment RHS: FOO=/a b.csv
+        rhs = t.split("=", 1)[1]
+        if rhs and rhs not in seen:
+            seen.add(rhs); print(rhs)
+PY
+      fi
+      ;;
+  esac
+  # (3) VARIABLE-EXPANSION pass. Resolve $VAR / ${VAR} against assignments made
+  #     in THIS SAME command, plus a small allowlist of ambient environment
+  #     variables, and emit the fully-literal result. Purely ADDITIVE (same
+  #     contract as pass 1): it only ever adds concrete tokens, so it can never
+  #     turn a previously-blocked command into an allowed one.
+  #
+  #     WHY: the classifier skips any token containing '$' (it cannot resolve
+  #     one), so a sensitive path reached through a variable slipped the gate
+  #     entirely — `SP=/abs/proj; grep x "$SP/corpus/transcripts/i.txt"` was not
+  #     caught at all, and `D=data; cat "$D/raw/x.csv"` was missed because the
+  #     bare RHS `data` is not itself a sensitive path. (`D=data/raw;
+  #     cat "$D/x.csv"` was caught only by accident, via the RHS token.)
+  #
+  #     Why intra-command assignments are the right scope: Claude Code starts a
+  #     FRESH shell for every Bash call, so shell variables do not persist. A
+  #     variable that is neither assigned in the same command nor an exported
+  #     env var expands to empty at runtime and cannot address a real file.
+  #     Expanded tokens are concrete paths, so the existence gate still applies
+  #     to them — this closes the hole without reopening the false positives.
+  if command -v python3 >/dev/null 2>&1; then
+    GUARD_CWD="${CWD:-$PWD}" python3 - "$cmd" <<'PY' 2>/dev/null
+import os, re, shlex, sys
+
+cmd = sys.argv[1]
+env = {}
+for k in ("HOME", "TMPDIR", "PWD", "USER"):
+    v = os.environ.get(k)
+    if v:
+        env[k] = v
+gc = os.environ.get("GUARD_CWD")
+if gc:
+    env["PWD"] = gc
+
+# Assignments in this same command: VAR=value, export VAR=value; value may be
+# quoted. Later assignments win, matching shell evaluation order.
+assign = re.compile(
+    r'''(?:^|[\n;&|]|\bexport\s+)\s*([A-Za-z_][A-Za-z0-9_]*)='''
+    r'''("[^"]*"|'[^']*'|[^\s;&|]*)'''
+)
+for m in assign.finditer(cmd):
+    name, val = m.group(1), m.group(2)
+    if val[:1] in ('"', "'"):
+        val = val[1:-1]
+    if val:
+        env[name] = val
+
+if env:
+    ref = re.compile(r'\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)')
+
+    def sub(m):
+        return env.get(m.group(1) or m.group(2), m.group(0))
+
+    # Values may themselves reference variables (BASE=/p; D="$BASE/raw").
+    for _ in range(3):
+        changed = False
+        for k, v in list(env.items()):
+            nv = ref.sub(sub, v)
+            if nv != v:
+                env[k] = nv
+                changed = True
+        if not changed:
+            break
+
+    cands = []
+    try:
+        cands.extend(shlex.split(cmd, posix=True))
+    except Exception:
+        pass
+    cands.extend(re.split(r'''[\s"'`(){}\[\],;|&<>]+''', cmd))
+
+    seen = set()
+    for raw in cands:
+        if not raw or '$' not in raw:
+            continue
+        out = ref.sub(sub, raw)
+        # Only emit fully-resolved literals; a leftover '$' is unresolvable.
+        if not out or '$' in out or out in seen:
+            continue
+        seen.add(out)
+        print(out)
+PY
+  fi
+
+  # (4) INNER-STRING-LITERAL pass (2026-08-16, found on the cohab-divorce-e2e
+  #     end-to-end run). Purely ADDITIVE like passes 1 and 3.
+  #
+  #     WHY: an interpreter call — `Rscript -e '…read_dta("/a b/data/raw/x.dta")…
+  #     print(head(d))'` — reaches pass 1 as ONE shlex token (the whole R
+  #     expression), which is not a path; and the historical pass below shreds
+  #     `/a b/…` at the space. So a SENSITIVE PATH WITH A SPACE, quoted INSIDE
+  #     the code argument, was yielded by NO pass. `bash_first_sensitive_target`
+  #     came back empty and the Bash arm exited 0 before `bash_command_is_dump`
+  #     was ever consulted — even though that dump regex DOES match
+  #     `print(head(d))` and `.head(` (verified: the identical command with a
+  #     space-free path is blocked). Every Dropbox or other space-bearing
+  #     path carries a space, so this was the common case, not an edge — and it
+  #     sat on the guard's own "sanctioned LOCAL_MODE channel", i.e. the one
+  #     place a row dump is most likely to be written. DC-11: the check that
+  #     would have blocked could not see its input, and permitted.
+  #
+  #     WHAT: pull every quoted string literal ("…" / '…') out of the command's
+  #     shlex tokens that themselves contain quotes (i.e. code arguments), and
+  #     emit each literal as a candidate token. Only literals containing a '/'
+  #     are emitted, so ordinary string constants add nothing. The existence
+  #     gate downstream still applies, so a literal that names no real file
+  #     cannot block anything (no new false positives). Nothing that matched
+  #     before can stop matching: this pass only ADDS tokens.
+  if command -v python3 >/dev/null 2>&1; then
+    case "$cmd" in
+      *\"*|*\'*)
+        python3 - "$cmd" <<'PY' 2>/dev/null
+import re, shlex, sys
+cmd = sys.argv[1]
+try:
+    parts = shlex.split(cmd, posix=True)
+except Exception:
+    parts = [cmd]
+seen = set()
+# Double- or single-quoted literal, backslash-escape aware. Two alternatives only.
+lit = re.compile(r'"((?:[^"\\]|\\.)*)"' r"|'((?:[^'\\]|\\.)*)'")
+for t in parts:
+    if '"' not in t and "'" not in t:
+        continue          # not a code argument; passes 1/2 already cover it
+    for m in lit.finditer(t):
+        s = next((g for g in m.groups() if g is not None), "")
+        s = s.strip()
+        if "/" in s and s not in seen:
+            seen.add(s); print(s)
+PY
+        ;;
+    esac
+  fi
+
+  # Historical pass: shell punctuation -> space (KEEP '/' and '$'), then squeeze
+  # whitespace runs into newlines so tokens split exactly as they did before.
+  # printf '%s\n' (NOT '%s'): the output stream MUST end with a newline. The
+  # consumer is a `while read` loop, and `read` returns nonzero on the final
+  # unterminated line, silently DROPPING the last token — which for a plain
+  # `cat data/raw/x.csv` is exactly the sensitive path (fail-open; fixed
+  # 2026-07-04, caught by test-pretooluse-guard.sh Bash-channel cases).
+  printf '%s\n' "$cmd" | tr '"'"'"'`(){}[],;|&<>=' '              ' | tr -s ' \t\n' '\n'
+}
+
+# Does a candidate token correspond to something that ACTUALLY EXISTS on disk
+# (file OR directory), or — for a glob token — to an existing directory prefix?
+#
+# WHY existence is consulted here, and ONLY here: this is a READ gate. A dump
+# verb aimed at a path that does not exist reveals zero bytes, so declining to
+# classify nonexistent tokens cannot open a data-leak bypass. What it DOES
+# remove is the large false-positive class where a token merely LOOKS like a
+# sensitive path without being a file operand at all — a regex handed to grep
+# (`grep -n "data/raw|materials/" script.sh`), a literal inside a for-loop, or
+# an example path in a heredoc. Those were blocked purely because the command
+# text contained a path-shaped string next to a dump verb.
+#
+# TWO RULES THAT MUST NOT BE RELAXED — each one is load-bearing:
+#
+#   1. file OR DIRECTORY, never file-only. `D=data/raw; cat "$D/x.csv"` is
+#      caught solely because the assignment-RHS token `data/raw` is an existing
+#      DIRECTORY — the `$D/x.csv` token is skipped for containing `$`. A
+#      file-only existence test would silently turn that regression-locked
+#      BLOCK (test-pretooluse-guard.sh "Bash var-assembled (S2)") into a real
+#      bypass.
+#
+#   2. glob tokens are REWRITTEN to their literal directory prefix by the
+#      caller before they reach here (see bash_first_sensitive_target), because
+#      a glob can only reach files underneath that prefix. `data/raw/*.csv`
+#      becomes `data/raw`, which exists and is sensitive. Do NOT reintroduce a
+#      glob fallback in this function: testing "some existing ancestor" instead
+#      of the literal prefix makes a token like `*/raw/*` resolve to the
+#      current directory, which trivially exists — and then the pattern itself
+#      gets reported as a sensitive target.
+#
+# Residual (documented, accepted): TOCTOU — a path that does not exist when the
+# hook runs but does by the time the command executes. Consistent with this
+# gate's stated scope as a cooperative-agent speed-bump, not a containment wall.
+_path_token_exists() {
+  local p head
+  for p in "$@"; do
+    [ -n "$p" ] || continue
+    [ -e "$p" ] && return 0
+  done
+  return 1
+}
+
+# Return the FIRST command path token that resolves to a sensitive target
+# (is_rawdata_path / is_qual_path, or a sidecar status that forbids reads).
+# NEVER a bare extension and NEVER output/tables/.claude (is_rawdata_path
+# already excludes those). Empty output = no sensitive target found.
+bash_first_sensitive_target() {
+  local cmd="$1" tok canon lex lower lowerlex st ext
+  # `|| [ -n "$tok" ]` processes a final unterminated line too — belt-and-
+  # braces with the tokenizer's trailing-newline contract (see _bash_tokenize).
+  while IFS= read -r tok || [ -n "$tok" ]; do
+    case "$tok" in
+      -*|'') continue ;;
+      *'$'*) continue ;;                                # unexpanded var — cannot resolve
+    esac
+    # De-escape backslash-quoted tokens BEFORE resolution. A command assembled
+    # with \" quoting — e.g. a Codex/JSON payload carrying
+    #   python3 -c "...read_csv(\"data/raw/x.csv\")..."
+    # — leaves stray backslashes glued to the path (`\data/raw/x.csv\`), because
+    # the punctuation pass strips quotes but not backslashes. The old substring
+    # classifier still matched that mangled form via `*/raw/*`, but such a path
+    # can never EXIST, so the existence gate would skip a genuine target.
+    # (Regression-locked by test-codex-data-guard.sh T2.) Backslashes in real
+    # Unix filenames are vanishingly rare; de-escaping is the accurate reading.
+    case "$tok" in *\\*) tok="${tok//\\/}" ;; esac
+    # Glob token -> classify its LITERAL DIRECTORY PREFIX, since that is the only
+    # place the glob can reach. `data/raw/*.csv` becomes `data/raw` (exists,
+    # sensitive -> blocked). A token with no literal prefix (`*/raw/*`, which is
+    # what a pattern written in prose looks like) reduces to nothing and is
+    # skipped — classifying it against "the nearest existing ancestor" would
+    # resolve to the cwd and report the pattern itself as the target.
+    case "$tok" in
+      *'*'*|*'?'*|*'['*)
+        tok="${tok%%\**}"; tok="${tok%%\?*}"; tok="${tok%%\[*}"
+        case "$tok" in
+          */*) tok="${tok%/*}" ;;
+          *)   continue ;;
+        esac
+        [ -n "$tok" ] || continue
+        ;;
+    esac
+    # Only worth resolving if it has a path separator OR a data extension.
+    case "$tok" in
+      */*) : ;;
+      *.*) ext="$(printf '%s' "${tok##*.}" | tr 'A-Z' 'a-z')"; is_data_ext "$ext" || continue ;;
+      *) continue ;;
+    esac
+    canon="$(canonicalize "$tok" 2>/dev/null || true)"
+    [ -n "$canon" ] || canon="$tok"
+    lex="$(lexical_abspath "$tok" 2>/dev/null || true)"
+    # Existence gate (see _path_token_exists): a token that resolves to nothing
+    # on disk cannot be a read target, so it is not classified. This is what
+    # keeps a grep PATTERN or a loop literal that merely looks like a sensitive
+    # path from being reported as the command's target.
+    _path_token_exists "$canon" "$lex" || continue
+    lower="$(printf '%s' "$canon" | tr 'A-Z' 'a-z')"
+    lowerlex="$(printf '%s' "$lex" | tr 'A-Z' 'a-z')"
+    # Classify by BOTH the symlink-resolved and lexical in-project path — a
+    # data/raw/*.csv symlinked to an out-of-tree target must still be caught.
+    if is_rawdata_any "$lower" "$lowerlex" || is_qual_any "$lower" "$lowerlex"; then
+      # S2.3: infrastructure / model-output exemption — only when EVERY
+      # resolved form sits inside an exemption root AND the sidecar carries
+      # no status for the path (a tracked file is governed by its status,
+      # exemption or not).
+      if _s23_under_exempt_root "$lower" "$lowerlex"; then
+        st="$(bash_sidecar_status "$canon")"
+        [ -n "$st" ] || st="$(bash_sidecar_status "$lex")"
+        if [ -z "$st" ]; then
+          continue
+        fi
+        case "$st" in
+          LOCAL_MODE|HALTED|NEEDS_REVIEW|NEEDS_REVIEW:*) printf '%s\n' "$canon"; return 0 ;;
+        esac
+        continue   # CLEARED/ANONYMIZED/OVERRIDE — readable statuses
+      fi
+      printf '%s\n' "$canon"; return 0
+    fi
+    st="$(bash_sidecar_status "$canon")"
+    [ -n "$st" ] || st="$(bash_sidecar_status "$lex")"
+    case "$st" in
+      LOCAL_MODE|HALTED|NEEDS_REVIEW|NEEDS_REVIEW:*) printf '%s\n' "$canon"; return 0 ;;
+    esac
+  done < <(_bash_tokenize "$cmd")
+  return 0
+}
+
+# Decide whether $1 uses a CONTENT-REVEALING mechanism. Returns 0 = block,
+# 1 = allow. Best-effort, pure-bash (NOT a real shell lexer):
+#   - primary verb is an interpreter (python/R/ruby/node/…) → the sanctioned
+#     LOCAL_MODE channel; allow UNLESS the code has an obvious whole-file/row
+#     dump. This deliberately does NOT word-scan for `cat`, so `cat("N=",…)`
+#     inside R is not mistaken for a shell `cat`.
+#   - otherwise → scan each segment's leading verb for dump / row-matching
+#     commands.
+bash_command_is_dump() {
+  local cmd="$1" pv seg segs verb
+  pv="$(bash_primary_verb "$cmd")"
+  case "$pv" in
+    python|python2|python3|rscript|r|ruby|node|nodejs|php|lua)
+      # Sanctioned LOCAL_MODE channel. Allow UNLESS the code has an obvious
+      # whole-file / row dump. The forbidden set is deliberately narrow so the
+      # policy's own aggregate loaders pass: print(df.dtypes), print(summary(df)),
+      # df.describe(), cat("N=", nrow(df)) must NOT match. We flag only:
+      #   open(...).read() · readLines( · .to_string( · .to_csv() [stdout]
+      #   .head/.tail/.sample/.iloc/.values/.to_dict · head(df)/tail(df)/str(df)/View(df)
+      #   print(<bareframe>)  [no dot → excludes print(df.dtypes)]
+      #   cat(df$col) · File.read / readFileSync / file_get_contents / io.read
+      if printf '%s' "$cmd" | grep -Eq 'open[[:space:]]*\([^)]*\)[[:space:]]*\.[[:space:]]*read[[:space:]]*\(|readLines[[:space:]]*\(|\.to_string[[:space:]]*\(|\.to_csv[[:space:]]*\([[:space:]]*\)|\.(head|tail|sample|iloc|values|to_dict)[[:space:]]*[([]|(^|[^A-Za-z0-9_.])(head|tail|str|View)[[:space:]]*\([[:space:]]*[A-Za-z_.]|(^|[^A-Za-z0-9_.])print[[:space:]]*\([[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)|cat[[:space:]]*\([^)]*\$|File\.read|readFileSync|file_get_contents|io\.read' 2>/dev/null; then
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+  # Non-interpreter: split into segments (translate separators + sub-shell
+  # parens/backticks to newlines) and inspect each segment's leading verb.
+  segs="$(printf '%s' "$cmd" | tr '|;&()`' '\n\n\n\n\n\n')"
+  while IFS= read -r seg; do
+    [ -n "$seg" ] || continue
+    verb="$(bash_primary_verb "$seg")"
+    case "$verb" in
+      cat|tac|nl|rev|head|tail|more|less|bat|fold|od|xxd|hexdump|hd|strings|base64|base32|column|csvlook|csvcut|xsv|mlr|datamash|pbcopy|zcat|gzcat|bzcat|xzcat|sqlite3|duckdb|jq|yq|open|textutil)
+        return 0 ;;
+      grep|egrep|fgrep|rg|ag|ack)
+        case " $seg " in
+          *" -c "*|*" --count "*|*" -l "*|*" --files-with-matches "*|*" -L "*|*" --files-without-match "*|*" -q "*|*" --quiet "*) : ;;
+          *) return 0 ;;
+        esac ;;
+      sed|awk|gawk|nawk|mawk|perl)
+        return 0 ;;
+    esac
+  done <<EOF
+$segs
+EOF
+  return 1
+}
+
+# E4 — guard a write to .claude/safety-status.json. BLOCK only when the new
+# content promotes a path to CLEARED/OVERRIDE while its current on-disk status
+# is restricted (NEEDS_REVIEW:RED / HALTED) or the file currently scans RED,
+# AND there is no human-review provenance entry in logs/init-report.md.
+# Downgrades and LOCAL_MODE / ANONYMIZED / HALTED writes are always allowed.
+# Returns 0 = allow, 2 = block.
+inspect_sidecar_write() {
+  local sidecar="$1" newc="$2" root report keys key cur suspect
+  root="$(find_project_root "$sidecar" 2>/dev/null || true)"
+  report=""
+  [ -n "$root" ] && report="${root}/logs/init-report.md"
+  keys="$(printf '%s\n' "$newc" \
+    | grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*"(CLEARED|OVERRIDE)"' 2>/dev/null \
+    | sed -E 's/^"([^"]+)".*/\1/' || true)"
+  [ -n "$keys" ] || return 0
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    case "$key" in _*) continue ;; esac               # skip meta keys (_safety_level)
+    cur=""
+    [ -f "$sidecar" ] && cur="$(jq -r --arg k "$key" '(.[$k] // empty) | if type=="string" then . else empty end' "$sidecar" 2>/dev/null || true)"
+    suspect=0
+    # LOCAL_MODE belongs here for internal consistency: the Read arm of THIS
+    # SAME script already treats LOCAL_MODE as restricted and blocks it
+    # ("honors CLEARED/ANONYMIZED/OVERRIDE as allow; LOCAL_MODE/HALTED/
+    # NEEDS_REVIEW:* as block"). Omitting it here meant one status was
+    # "restricted" for reading and "not restricted" for promotion, so a
+    # hand-edited sidecar could unlock respondent-level reads with no review
+    # provenance. The scan fallback below only catches data that is sensitive by
+    # PATTERN; it cannot see data restricted by POLICY — a DUA / restricted-use
+    # microdata extract that is de-identified enough to scan clean is exactly the
+    # case LOCAL_MODE exists for, and exactly the case that slipped through.
+    # Downgrades and LOCAL_MODE/ANONYMIZED/HALTED writes remain allowed, and
+    # '/scholar-init review' provenance still clears it (checked below).
+    case "$cur" in NEEDS_REVIEW:RED|HALTED|LOCAL_MODE) suspect=1 ;; esac
+    if [ "$suspect" = 0 ] && [ -e "$key" ] && [ -f "$GATE_SCRIPT" ]; then
+      bash "$GATE_SCRIPT" "$key" >/dev/null 2>&1
+      [ "$?" = 1 ] && suspect=1                        # safety-scan RED
+    fi
+    [ "$suspect" = 1 ] || continue
+    if [ -n "$report" ] && [ -f "$report" ] && { grep -qF "$key" "$report" 2>/dev/null || grep -qF "$(basename "$key")" "$report" 2>/dev/null; }; then
+      continue                                         # human-review provenance exists
+    fi
+    cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked — safety-status.json tamper protection.
+
+This write promotes a restricted file to CLEARED/OVERRIDE with no human-review
+provenance:
+    $key
+Current status: ${cur:-RED (fresh scan)}
+
+A status may only be raised to CLEARED/OVERRIDE through '/scholar-init review',
+which records a typed rationale in logs/init-report.md. No decision entry was
+found for this path. Resolve it via:
+
+    /scholar-init review
+
+(Downgrades and LOCAL_MODE / ANONYMIZED / HALTED writes are allowed.)
+EOF
+    return 2
+  done <<EOF
+$keys
+EOF
+  return 0
+}
+
+# ─── 3. Dispatch by tool name ───────────────────────────────────────────
+case "$TOOL_NAME" in
+  Read|NotebookRead|NotebookEdit)
+    # Continue to the file-path checks below.
+    ;;
+  Grep)
+    # Grep returns matching lines from the target path directly into
+    # Claude's context. Its tool_input has TWO fields:
+    #   - `pattern`  (the regex to match — NEVER a path)
+    #   - `path`     (the file or directory to search; defaults to cwd
+    #                 when absent per the Grep tool contract)
+    #
+    # IMPORTANT: an earlier version did `TARGET="${GREP_PATH:-${GLOB_PATTERN:-}}"`
+    # which substituted the GREP PATTERN as the search path when `path`
+    # was absent — a bypass. We must use only `path` here, and treat
+    # "absent path" as "Grep will search cwd".
+    TARGET=""
+    if [ -n "$GREP_PATH" ]; then
+      TARGET="$GREP_PATH"
+    elif [ -n "$CWD" ]; then
+      TARGET="$CWD"
+    else
+      # No path arg AND no cwd in payload — fail closed.
+      cat >&2 <<EOF
+SAFETY GUARD: Grep blocked.
+The payload has no tool_input.path and no cwd, so we cannot determine
+what Grep would actually search. Failing closed.
+EOF
+      exit 2
+    fi
+
+    CANON_TARGET="$(canonicalize "$TARGET")"
+    if [ -z "$CANON_TARGET" ]; then
+      cat >&2 <<EOF
+SAFETY GUARD: Grep blocked on '$TARGET'.
+Cannot safely canonicalize this target (no symlink resolver and the
+path contains a symlink). Failing closed.
+EOF
+      exit 2
+    fi
+    LOWER_TARGET="$(printf '%s' "$CANON_TARGET" | tr '[:upper:]' '[:lower:]')"
+    LEX_TARGET="$(lexical_abspath "$TARGET" 2>/dev/null || true)"
+    LOWER_LEX_TARGET="$(printf '%s' "$LEX_TARGET" | tr '[:upper:]' '[:lower:]')"
+
+    # (a) Target is/under a raw-data OR qualitative-data directory.
+    #     is_rawdata_path now includes materials/transcripts/interviews/
+    #     field-notes, so Grep on verbatim-text paths is blocked the same
+    #     way Read is. Classify by BOTH the resolved and lexical path so a
+    #     symlinked data dir/file that escapes the tree is still caught.
+    if is_rawdata_any "$LOWER_TARGET" "$LOWER_LEX_TARGET" || is_qual_any "$LOWER_TARGET" "$LOWER_LEX_TARGET"; then
+      cat >&2 <<EOF
+SAFETY GUARD: Grep blocked on '$TARGET'.
+
+Grep returns matching lines from the target path into Claude's context.
+This target points into a sensitive data directory ($CANON_TARGET),
+which may contain PII, HIPAA-covered, restricted-use, or qualitative
+verbatim-text content.
+
+If you need aggregate statistics, run a Bash call with summary-only
+output (e.g., 'wc -l', 'grep -c PATTERN' — count only, no row output).
+See references/data-safety-runtime.md §3 for the Bash-only pattern.
+EOF
+      exit 2
+    fi
+
+    # (b) Target is under (or is) a scholar-init project root.
+    #     Walk upward from CANON_TARGET to find the nearest ancestor
+    #     containing .claude/safety-status.json. If found AND the target
+    #     equals that root, block — Grep would enumerate the entire
+    #     project tree including data/raw/, materials/, etc.
+    PROJ_ROOT="$(find_project_root "$CANON_TARGET")"
+    if [ -n "$PROJ_ROOT" ] && [ "$CANON_TARGET" = "$PROJ_ROOT" ]; then
+      cat >&2 <<EOF
+SAFETY GUARD: Grep blocked on '$TARGET'.
+
+This target is a scholar-init project root ($PROJ_ROOT). Grep with no
+explicit path argument (or path=<project-root>) would search the entire
+project, including sensitive files in data/raw/, materials/transcripts/,
+etc., and return matching lines into Claude's context.
+
+If you need to search only non-data subdirectories (e.g., scripts/ or
+drafts/), call Grep with an explicit path that excludes sensitive trees:
+    Grep(pattern="...", path="scripts/")
+    Grep(pattern="...", path="drafts/")
+
+Or run the search in Bash with summary-only output:
+    grep -rcI --include='*.py' PATTERN scripts/ | head
+EOF
+      exit 2
+    fi
+
+    # (c) Direct file target with data extension
+    TARGET_EXT="${LOWER_TARGET##*.}"
+    if [ "$TARGET_EXT" != "$LOWER_TARGET" ] && is_data_ext "$TARGET_EXT"; then
+      if [ ! -d "$CANON_TARGET" ]; then
+        # RAO traces (P7-A correction, 2026-08-25): a §14-clean trace is
+        # pipeline metadata — allow Grep the same way §7b allows Read. The
+        # asymmetry (Grep refused, Read allowed) cost a review seat a whole
+        # round: it recorded the trace "unreadable" off this arm's refusal
+        # and never tried the tool the message named.
+        case "$CANON_TARGET" in
+          */logs/trace-*.ndjson)
+            _TGV="$(_trace_profile_verdict "$CANON_TARGET")"
+            case "$_TGV" in
+              CLEAN) exit 0 ;;
+              VIOLATIONS*)
+                echo "SAFETY GUARD: Grep blocked on '$TARGET' — RAO trace-profile scan found §14 violations (counts only): ${_TGV#VIOLATIONS }. Fix the EMITTER; do not grep this file." >&2
+                exit 2 ;;
+              *) : ;;  # not a valid trace — fall through to the data-ext block
+            esac ;;
+        esac
+        cat >&2 <<EOF
+SAFETY GUARD: Grep blocked on '$TARGET'.
+
+This target is a direct file with a data-file extension (.$TARGET_EXT).
+Grep on a data file returns matching rows into Claude's context, which
+defeats the guard. Use 'grep -c PATTERN' in a Bash call for counts, or
+Read the file (which routes through the sidecar gate).
+
+Policy: references/data-safety-runtime.md §3
+EOF
+        exit 2
+      fi
+    fi
+
+    exit 0
+    ;;
+
+  Glob)
+    # Glob returns matching file paths into Claude's context. Classification:
+    #
+    #   (A) Project-root enumeration — if cwd (or the Glob tool_input.path,
+    #       when supplied) is a scholar-init project root, Glob will walk
+    #       data/raw/, materials/, etc. That leaks sensitive file names and
+    #       paths. BLOCK regardless of whether the pattern is empty or a
+    #       broad wildcard ("**/*", "*"). The ONLY way to Glob from a
+    #       project root is to scope the pattern to a known-safe subtree
+    #       (scripts/**, drafts/**, output/**, etc.).
+    #
+    #   (B) Literal-prefix targets a sensitive directory
+    #       (data/raw/**/*.csv, materials/transcripts/*.txt, ...).
+    #
+    #   (C) Pattern's extension is a data extension (**/*.csv).
+    #
+    # Earlier versions only ran (A) when the pattern was empty — a bypass,
+    # because "**/*" from the project root leaks just as much as an empty
+    # pattern does. We now always run (A) first.
+
+    # (A) — project-root enumeration check.
+    # Per Glob tool contract, tool_input may include a `path` field that
+    # narrows the search. If absent, Glob searches from cwd.
+    GLOB_SCOPE=""
+    if [ -n "$GREP_PATH" ]; then
+      GLOB_SCOPE="$GREP_PATH"    # Glob's `path` key is parsed into GREP_PATH
+    elif [ -n "$CWD" ]; then
+      GLOB_SCOPE="$CWD"
+    fi
+    if [ -n "$GLOB_SCOPE" ]; then
+      CANON_SCOPE="$(canonicalize "$GLOB_SCOPE")"
+      if [ -n "$CANON_SCOPE" ]; then
+        PROJ_ROOT="$(find_project_root "$CANON_SCOPE")"
+        if [ -n "$PROJ_ROOT" ] && [ "$CANON_SCOPE" = "$PROJ_ROOT" ]; then
+          # Scope is the project root itself. The only way this is safe
+          # is if the pattern has a literal prefix that escapes the
+          # sensitive subtrees. Check (B) inline: if the pattern is empty
+          # OR its literal prefix is empty / wildcard-first, refuse.
+          LITERAL_PREFIX="${GLOB_PATTERN%%[*?\[\{]*}"
+          # Strip leading "./"
+          LITERAL_PREFIX="${LITERAL_PREFIX#./}"
+          # Lowercase the prefix for a case-insensitive allowlist match.
+          # On macOS case-insensitive volumes, a user typing
+          # `Scripts/**/*.py` would otherwise miss the `scripts/*`
+          # allowlist entry and get blocked, even though Scripts/ and
+          # scripts/ resolve to the same directory. The sensitive-path
+          # classifier at (B) below already lowercases, so doing the
+          # same here keeps the two checks symmetric.
+          LOWER_LITERAL_PREFIX="$(printf '%s' "$LITERAL_PREFIX" | tr '[:upper:]' '[:lower:]')"
+          SAFE_SCOPE=0
+          if [ -n "$LOWER_LITERAL_PREFIX" ]; then
+            # A literal prefix exists — does it land in a known-safe subtree?
+            case "$LOWER_LITERAL_PREFIX" in
+              scripts/*|scripts|\
+              drafts/*|drafts|\
+              output/*|output|\
+              figures/*|figures|\
+              tables/*|tables|\
+              reports/*|reports|\
+              protocols/*|protocols|\
+              logs/*|logs|\
+              eda/*|eda|\
+              replication/*|replication|\
+              presentation/*|presentation|\
+              citations/*|citations|\
+              .claude/*|.claude)
+                SAFE_SCOPE=1 ;;
+            esac
+          fi
+          if [ "$SAFE_SCOPE" = 0 ]; then
+            cat >&2 <<EOF
+SAFETY GUARD: Glob blocked on '$GLOB_PATTERN'.
+
+The Glob scope is a scholar-init project root ($PROJ_ROOT). Glob would
+enumerate file paths across the entire project — including sensitive
+trees like data/raw/, data/interim/, materials/transcripts/, etc. —
+and return those paths into Claude's context. This leaks file names
+and structure even when it does not return content.
+
+To Glob from this project, scope the pattern to a known-safe subtree:
+    Glob(pattern="scripts/**/*.py")
+    Glob(pattern="output/**/*.csv")
+    Glob(pattern="drafts/*.md")
+
+Or enumerate via Bash with summary-only output:
+    find scripts -name '*.py' | wc -l
+EOF
+            exit 2
+          fi
+        fi
+      fi
+    fi
+
+    if [ -z "$GLOB_PATTERN" ]; then
+      exit 0
+    fi
+
+    # (B) Extract literal prefix (chars before first glob metachar * ? [ {).
+    LITERAL_PREFIX="${GLOB_PATTERN%%[*?\[\{]*}"
+    if [ -n "$LITERAL_PREFIX" ]; then
+      CANON_PREFIX="$(canonicalize "$LITERAL_PREFIX")"
+      if [ -n "$CANON_PREFIX" ]; then
+        LOWER_PREFIX="$(printf '%s' "$CANON_PREFIX" | tr '[:upper:]' '[:lower:]')"
+        LEX_PREFIX="$(lexical_abspath "$LITERAL_PREFIX" 2>/dev/null || true)"
+        LOWER_LEX_PREFIX="$(printf '%s' "$LEX_PREFIX" | tr '[:upper:]' '[:lower:]')"
+        if is_rawdata_any "$LOWER_PREFIX" "$LOWER_LEX_PREFIX" || is_qual_any "$LOWER_PREFIX" "$LOWER_LEX_PREFIX"; then
+          cat >&2 <<EOF
+SAFETY GUARD: Glob blocked on '$GLOB_PATTERN'.
+
+The literal prefix of this pattern points into a sensitive data
+directory ($CANON_PREFIX). Glob would return matching file paths,
+giving Claude visibility into sensitive file names and locations.
+
+Use a Bash call with summary-only output instead:
+    find data/raw -name '*.csv' | wc -l
+EOF
+          exit 2
+        fi
+      fi
+    fi
+
+    # (C) The pattern's extension is a data extension
+    LOWER_PATTERN="$(printf '%s' "$GLOB_PATTERN" | tr '[:upper:]' '[:lower:]')"
+    PAT_EXT="${LOWER_PATTERN##*.}"
+    # Strip glob metachars from the extension to handle patterns like `*.csv*`
+    PAT_EXT="${PAT_EXT%%[*?\[\{]*}"
+    if [ -n "$PAT_EXT" ] && [ "$PAT_EXT" != "$LOWER_PATTERN" ] && is_data_ext "$PAT_EXT"; then
+      cat >&2 <<EOF
+SAFETY GUARD: Glob blocked on '$GLOB_PATTERN'.
+
+This glob pattern matches a data-file extension (.$PAT_EXT). Enumerating
+data files and returning their paths into Claude's context reveals the
+structure and locations of sensitive data. Use 'find ... | wc -l' for a
+count-only Bash call instead.
+EOF
+      exit 2
+    fi
+
+    exit 0
+    ;;
+  Bash)
+    # Standard-tier Bash speed-bump (see the §2d helper header). Blocks the
+    # obvious content-dump commands on a sensitive data path; fails OPEN on any
+    # ambiguity so the shell is never bricked. NOT a containment boundary —
+    # that is the Lockdown OS sandbox.
+    set -f                # noglob: an unquoted `$cmd` split must not glob-expand
+    _DATA_RISK=0          # Bash gate fails OPEN on crash — never brick the shell
+    [ -n "${TOOL_CMD:-}" ] || exit 0
+    _SENS="$(bash_first_sensitive_target "$TOOL_CMD")"
+    [ -n "$_SENS" ] || exit 0
+    if bash_command_is_dump "$TOOL_CMD"; then
+      cat >&2 <<EOF
+SAFETY GUARD: Bash blocked — command appears to read sensitive data into context.
+
+This token in the command matched a sensitive path (raw-data / qualitative /
+LOCAL_MODE-restricted) AND exists on disk:
+    $_SENS
+
+The command uses a content-revealing mechanism (cat/head/tail/sed/awk/grep/
+sqlite3 or a python/R row dump) on that path. Reading row-level data via Bash
+transmits it to the API exactly as the Read tool would.
+
+Do this instead:
+  - Aggregates only: one Rscript -e / python3 -c call that prints summaries
+    (nrow, names+classes, summary(), table() with n<10 suppressed) — see
+    references/data-safety-runtime.md §3a/§3b.
+  - Counts: 'wc -l <file>'  or  'grep -c PATTERN <file>'.
+
+If that token is NOT a file you are reading — e.g. it is a regex handed to
+grep, or a literal inside a loop — then this is a false positive: the token is
+classified by path shape, not by its position in the command. Rewrite the
+pattern so it does not spell a real sensitive path (split it, drop the trailing
+slash, or match on a distinctive substring instead).
+
+NOTE: this Bash gate is a cooperative-agent SPEED-BUMP, not a containment wall.
+For a kernel-enforced boundary, enable the Lockdown safety level.
+EOF
+      exit 2
+    fi
+    exit 0
+    ;;
+
+  Edit|Write|MultiEdit)
+    # E4 — sidecar tamper protection. Only .claude/safety-status.json is
+    # guarded; every other edit/write passes through instantly. Fails OPEN on
+    # any ambiguity (no jq, no content) so normal editing is never bricked.
+    _DATA_RISK=0
+    case "$(basename "${FILE_PATH:-}")" in
+      safety-status.json) : ;;
+      *) exit 0 ;;
+    esac
+    command -v jq >/dev/null 2>&1 || exit 0
+    [ -n "${EDIT_NEW:-}" ] || exit 0
+    inspect_sidecar_write "$FILE_PATH" "$EDIT_NEW"
+    exit $?
+    ;;
+
+  *)
+    # Not a file-reading tool — pass through.
+    exit 0
+    ;;
+esac
+
+# ─── 4. Read / NotebookRead / NotebookEdit path checks ──────────────────
+[ -n "$FILE_PATH" ] || exit 0
+
+# Non-existent files pass through — Claude gets its own "not found" error.
+[ -e "$FILE_PATH" ] || exit 0
+
+# Keep the original (raw) path so we can try it as a sidecar key fallback
+# when the canonical form doesn't match (e.g., macOS /var → /private/var).
+RAW_FILE_PATH="$FILE_PATH"
+
+# Canonicalize for scanning and path-rule checks. Fail closed if the
+# canonicalizer refused (no resolver available AND target is a symlink).
+CANON_PATH="$(canonicalize "$FILE_PATH")"
+if [ -z "$CANON_PATH" ]; then
+  cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked on '$RAW_FILE_PATH'.
+
+Cannot safely canonicalize this path — no symlink-resolving tool is
+available on this system (python3, realpath, readlink -f are all
+missing), and the target is a symlink whose target cannot be verified.
+
+The I4 system-directory check depends on symlink resolution, so we
+refuse rather than allow a potentially escaped symlink.
+
+Install one of:
+  python3 (recommended — already required by safety-scan.sh)
+  coreutils realpath  (brew install coreutils on macOS)
+  GNU coreutils readlink (Linux default)
+EOF
+  exit 2
+fi
+FILE_PATH="$CANON_PATH"
+
+# LEXICAL in-project path (symlinks NOT resolved) — used ALONGSIDE the
+# canonical FILE_PATH for the sidecar lookup (§6) and the data/qual
+# classification (§5, §7), so a data/raw/*.dta symlinked to an out-of-tree
+# target is still matched to its in-project sidecar key and recognized as
+# raw-data. Deliberately NOT used by the §4a system-dir escape check below,
+# which must inspect the real (resolved) target.
+LEXICAL_PATH="$(lexical_abspath "$RAW_FILE_PATH" 2>/dev/null || true)"
+
+# ─── 4a. Refuse canonical paths that escape into system directories ────
+# A symlink inside a scholar-init project could point to /etc/passwd,
+# /dev/mem, /proc/self/environ, etc. Canonicalization above resolves
+# symlinks, so we can check the REAL target. Block if it lies under any
+# of these sensitive roots. This is a weak TOCTOU mitigation — it does
+# not close the race between scan-time and Read-time, but it closes the
+# obvious symlink-escape attack.
+case "$FILE_PATH" in
+  /etc|/etc/*|\
+  /dev|/dev/*|\
+  /proc|/proc/*|\
+  /sys|/sys/*|\
+  /System|/System/*|\
+  /var/db|/var/db/*|\
+  /var/log|/var/log/*|\
+  /private/etc|/private/etc/*|\
+  /private/var/db|/private/var/db/*|\
+  /private/var/log|/private/var/log/*)
+    cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$RAW_FILE_PATH'.
+
+The canonicalized path resolves into a system directory:
+    $FILE_PATH
+
+The guard refuses reads into /etc, /dev, /proc, /sys, /System, /var/db,
+/var/log, or their /private/ aliases. If this is a symlink inside a
+scholar-init project that points out of the project tree, remove or
+replace the symlink — the guard does not permit the Read tool to follow
+symlinks into OS-owned directories even when the file is nominally
+inside the project.
+EOF
+    exit 2
+    ;;
+esac
+
+LOWER_PATH="$(printf '%s' "$FILE_PATH" | tr '[:upper:]' '[:lower:]')"
+LOWER_LEXICAL_PATH="$(printf '%s' "$LEXICAL_PATH" | tr '[:upper:]' '[:lower:]')"
+EXT="${LOWER_PATH##*.}"
+# Strip trailing whitespace that might sneak in
+EXT="${EXT%%[[:space:]]*}"
+
+# ─── 5. Extension gate: only act on data-file extensions ────────────────
+IS_DATA=0
+if is_data_ext "$EXT"; then
+  IS_DATA=1
+fi
+
+# .json is data only in data-ish directories
+if [ "$IS_DATA" = 0 ] && [ "$EXT" = "json" ]; then
+  case "$LOWER_PATH" in
+    */data/*|*/raw/*|*/datasets/*|*/dataset/*|*/corpus/*|*/corpora/*)
+      IS_DATA=1 ;;
+  esac
+fi
+
+# Text document extensions (.txt, .rtf, .docx, .doc, .odt, .md) are data
+# only when they live in a data-ish directory. Policy §0 says these count
+# as data when they contain interview transcripts, field notes, etc. A
+# README.md at the project root is NOT data; an interview.txt in
+# data/raw/ IS data.
+if [ "$IS_DATA" = 0 ]; then
+  for E in "${CONDITIONAL_TEXT_EXTS[@]}"; do
+    if [ "$EXT" = "$E" ]; then
+      case "$LOWER_PATH" in
+        */data/*|*/raw/*|*/datasets/*|*/dataset/*|\
+        */corpus/*|*/corpora/*|*/materials/*|\
+        */interviews/*|*/transcripts/*|*/field-notes/*|*/fieldnotes/*|\
+        */subjects/*|*/participants/*|*/respondents/*)
+          IS_DATA=1
+          ;;
+      esac
+      break
+    fi
+  done
+fi
+
+# Files with no extension in a raw-data directory are still inspected —
+# attackers could save `secrets` or `dump` to bypass the extension check.
+# Classify by BOTH the resolved and the lexical in-project path: a file
+# symlinked INTO data/raw (whose realpath escapes the tree) must still be
+# treated as data even when its extension is unknown/non-data.
+if [ "$IS_DATA" = 0 ] && is_rawdata_any "$LOWER_PATH" "$LOWER_LEXICAL_PATH"; then
+  IS_DATA=1
+fi
+
+[ "$IS_DATA" = 1 ] || exit 0
+
+# ─── 5b. jq availability — fail CLOSED on data files if jq is missing ──
+# The sidecar check and the scan both need jq-parsed payloads and JSON
+# inspection. Without jq we cannot verify either reliably, and the
+# policy is "fail closed on data files" — so we refuse the Read.
+if [ "$JQ_OK" = 0 ]; then
+  cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+This file appears to be a data file (extension '$EXT') but 'jq' is not
+installed on this system. The data-safety guard requires jq to parse the
+hook payload and consult .claude/safety-status.json reliably. Failing
+closed on data files as a precaution.
+
+Install jq and re-try:
+  macOS:   brew install jq
+  Linux:   apt-get install jq   (or dnf / pacman / etc.)
+
+Non-data tool calls (code files, docs, scripts) are unaffected.
+EOF
+  exit 2
+fi
+
+IS_IMAGE=0
+if is_image_ext "$EXT"; then
+  IS_IMAGE=1
+fi
+
+# ─── 6. Honor sidecar safety-status.json ────────────────────────────────
+#
+# Walk upward from the file's directory (and from cwd, as a fallback) to
+# find the nearest ancestor containing .claude/safety-status.json. This
+# closes the subdirectory-bypass bug: previously the guard only checked
+# "$CWD/.claude/safety-status.json" and "./.claude/safety-status.json",
+# so a Read issued from project/subdir/ with cwd=project/subdir would
+# bypass project/.claude/safety-status.json entirely.
+STATUS_FILE=""
+# First try: nearest ancestor of the FILE itself — this is the correct
+# answer for most cases, including when cwd has drifted.
+PROJ_ROOT="$(find_project_root "$FILE_PATH")"
+if [ -n "$PROJ_ROOT" ] && [ -f "${PROJ_ROOT}/.claude/safety-status.json" ]; then
+  STATUS_FILE="${PROJ_ROOT}/.claude/safety-status.json"
+fi
+# Also try the file's LEXICAL location. When the file is a symlink whose
+# target escapes the project, find_project_root on the resolved path misses
+# the in-project .claude/, but the lexical path still lands inside it.
+if [ -z "$STATUS_FILE" ] && [ -n "${LEXICAL_PATH:-}" ]; then
+  LEX_ROOT="$(find_project_root "$LEXICAL_PATH")"
+  if [ -n "$LEX_ROOT" ] && [ -f "${LEX_ROOT}/.claude/safety-status.json" ]; then
+    STATUS_FILE="${LEX_ROOT}/.claude/safety-status.json"
+  fi
+fi
+# Fallback: nearest ancestor of cwd. (If the file is outside any project
+# but cwd is inside one, we still apply the cwd project's policy.)
+if [ -z "$STATUS_FILE" ] && [ -n "$CWD" ]; then
+  CWD_ROOT="$(find_project_root "$CWD")"
+  if [ -n "$CWD_ROOT" ] && [ -f "${CWD_ROOT}/.claude/safety-status.json" ]; then
+    STATUS_FILE="${CWD_ROOT}/.claude/safety-status.json"
+  fi
+fi
+# Last-ditch fallback: literal ./.claude/safety-status.json in $PWD.
+if [ -z "$STATUS_FILE" ] && [ -f ".claude/safety-status.json" ]; then
+  STATUS_FILE=".claude/safety-status.json"
+fi
+
+if [ -n "$STATUS_FILE" ]; then
+  # Validate the sidecar schema BEFORE consulting it. A malformed sidecar
+  # (non-string values, unknown statuses) must not be treated as a soft
+  # "no entry" — that would silently convert a HALTED-with-typo into an
+  # allow. Fail closed instead and tell the user exactly which keys are
+  # wrong.
+  SCHEMA_ERRORS="$(validate_sidecar_schema "$STATUS_FILE" 2>/dev/null)"
+  if [ -n "$SCHEMA_ERRORS" ]; then
+    cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked on '$FILE_PATH'.
+
+${STATUS_FILE} failed schema validation. Every value must be a JSON
+string matching one of:
+  CLEARED | ANONYMIZED | OVERRIDE | LOCAL_MODE | HALTED | NEEDS_REVIEW[:LEVEL]
+
+Invalid entries:
+${SCHEMA_ERRORS}
+
+Fix the sidecar (edit by hand or re-run /scholar-init) and retry.
+Failing closed on data files per the "fail closed" policy.
+EOF
+    exit 2
+  fi
+
+  # Try THREE key forms in order: the canonical (realpath-resolved) form,
+  # the LEXICAL in-project form (symlinks NOT resolved — this is the key
+  # scholar-init writes for a data/raw/*.dta symlink, whose realpath escapes
+  # the project), and the raw form that came in on the tool_input. All are
+  # project-scoped absolute paths (or CWD-anchored), so no cross-project
+  # collision.
+  #
+  # On macOS, `cd ... && pwd` in init-project.sh returns /var/folders/...
+  # while the guard's python3 realpath returns /private/var/folders/...
+  # The raw-path fallback handles that. Beyond these, we do NOT fall
+  # back to basename — an OVERRIDE for `foo.csv` in project A must not
+  # match a different `foo.csv` in project B.
+  #
+  # We require the value to be a string (schema validation above already
+  # enforced this, but we do it again at the lookup site so future
+  # refactors stay safe).
+  STATUS=""
+  for KEY in "$FILE_PATH" "$LEXICAL_PATH" "$RAW_FILE_PATH"; do
+    [ -z "$KEY" ] && continue
+    LOOKUP="$(jq -r --arg fp "$KEY" '(.[$fp] // empty) | if type=="string" then . else empty end' "$STATUS_FILE" 2>/dev/null || echo "")"
+    if [ -n "$LOOKUP" ]; then
+      STATUS="$LOOKUP"
+      break
+    fi
+  done
+
+  # Reject unknown status strings — defense in depth. The schema check
+  # above should have caught these, but if someone hand-edits a sidecar
+  # concurrent with a Read, fail closed rather than allow.
+  if [ -n "$STATUS" ] && ! is_valid_status "$STATUS"; then
+    cat >&2 <<EOF
+SAFETY GUARD: $TOOL_NAME blocked on '$FILE_PATH'.
+
+${STATUS_FILE} has an unknown status "${STATUS}" for this file.
+Allowed values: CLEARED, ANONYMIZED, OVERRIDE, LOCAL_MODE, HALTED,
+NEEDS_REVIEW[:LEVEL].
+
+Failing closed. Fix the sidecar and retry.
+EOF
+    exit 2
+  fi
+
+  # Qualitative-OVERRIDE refusal: the policy (§4, §6) forbids OVERRIDE on
+  # audio/video/transcript/qualitative-text data because voiceprints are
+  # biometric PII and transcripts quote participants verbatim. scholar-init
+  # interactively refuses to offer OVERRIDE for these, but we also
+  # enforce it HERE so the guard cannot be bypassed by a hand-edited
+  # sidecar or a buggy upstream skill.
+  #
+  # Classification is PATH-OR-EXTENSION: a .txt in transcripts/ is just
+  # as sensitive as a .wav anywhere. Earlier versions checked extension
+  # only, which let OVERRIDE slip past for verbatim-text transcripts.
+  if [ "$STATUS" = "OVERRIDE" ]; then
+    QUAL_HIT=0
+    case "$EXT" in
+      wav|mp3|flac|m4a|ogg|aac|aiff|\
+      mp4|mov|avi|mkv|webm|\
+      eaf|textgrid|trs|cha|praat)
+        QUAL_HIT=1 ;;
+    esac
+    if [ "$QUAL_HIT" = 0 ] && is_qual_any "$LOWER_PATH" "$LOWER_LEXICAL_PATH"; then
+      # Only text-document extensions in a qualitative-text path count
+      # for THIS rule — an analysis.py in transcripts/ is code, not data.
+      for E in "${CONDITIONAL_TEXT_EXTS[@]}"; do
+        if [ "$EXT" = "$E" ]; then
+          QUAL_HIT=1
+          break
+        fi
+      done
+    fi
+    if [ "$QUAL_HIT" = 1 ]; then
+      cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+The sidecar marks this file SAFETY_STATUS=OVERRIDE, but it is classified
+as qualitative data — either by extension ('.$EXT' is audio/video/
+interview transcript) or by path (lives under transcripts/, interviews/,
+field-notes/, participants/, subjects/, respondents/, or a materials/
+subtree for those). Policy §4 forbids OVERRIDE on qualitative data:
+
+  - Audio files contain voiceprints (biometric PII)
+  - Video files contain identifying faces and voices
+  - Interview transcripts quote participants verbatim
+  - Field notes and open-ended responses quote participants verbatim
+
+There is no rationale under which this file is "safe to transmit." Only
+three resolutions are valid for qualitative data:
+
+  LOCAL_MODE  — Claude analyzes via Rscript/python3 without reading
+                the file; only aggregated output enters context.
+  ANONYMIZED  — run scholar-qual's presidio anonymizer first, then
+                treat the ANON_ output as CLEARED.
+  HALTED      — do not process this file at all.
+
+Fix: edit ${STATUS_FILE} and change the entry for this file from
+"OVERRIDE" to one of the three statuses above.
+EOF
+      exit 2
+    fi
+  fi
+
+  case "$STATUS" in
+    CLEARED|ANONYMIZED|OVERRIDE)
+      exit 0
+      ;;
+    LOCAL_MODE)
+      cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+This file is marked SAFETY_STATUS=LOCAL_MODE in ${STATUS_FILE}.
+LOCAL_MODE forbids the Read tool on this file. Load it via a single
+Rscript -e / python3 -c Bash call and emit summary-only output.
+
+See: references/data-safety-runtime.md §3 (LOCAL_MODE execution contract)
+     references/data-safety-runtime.md §3a/§3b (R / Python loader templates)
+
+Do NOT retry this Read. Switch to Bash.
+EOF
+      exit 2
+      ;;
+    HALTED)
+      cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+This file is marked SAFETY_STATUS=HALTED in ${STATUS_FILE}. The user
+previously declined to process it. Do not retry.
+EOF
+      exit 2
+      ;;
+    NEEDS_REVIEW*)
+      LVL="${STATUS#NEEDS_REVIEW:}"
+      cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+This file was ingested by scholar-init and marked SAFETY_STATUS=${STATUS}
+in ${STATUS_FILE}. The user has NOT yet reviewed the safety-scan result
+(initial scan level: ${LVL}).
+
+Before Claude is allowed to Read this file, the user must run:
+
+  /scholar-init review
+
+…which walks through each NEEDS_REVIEW entry interactively and replaces
+it with CLEARED, LOCAL_MODE, ANONYMIZED, OVERRIDE, or HALTED.
+
+Policy: references/data-safety-runtime.md §2 (state machine)
+EOF
+      exit 2
+      ;;
+  esac
+fi
+
+# ─── 7. Image files: path-based classification ──────────────────────────
+if [ "$IS_IMAGE" = 1 ]; then
+  if is_rawdata_any "$LOWER_PATH" "$LOWER_LEXICAL_PATH"; then
+    cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+This is an image file in a raw-data directory. safety-scan.sh cannot
+inspect pixel content for faces, license plates, street signs, medical
+imagery, or other identifying visuals, so image Reads from raw-data
+directories are blocked by default.
+
+If this image is a public / fully-aggregated output, add an OVERRIDE
+entry to .claude/safety-status.json:
+  jq --arg fp "$FILE_PATH" '. + {(\$fp): "OVERRIDE"}' \\
+     .claude/safety-status.json > .claude/safety-status.json.new \\
+     && mv .claude/safety-status.json.new .claude/safety-status.json
+
+If this image contains people, documents, or private locations, DO NOT
+override. Process it via a Python script that emits only aggregates:
+  - Face detection → emit counts / bounding-box sizes / de-identified embeddings
+  - OCR → redact detected PII, save a redacted copy, then Read the copy
+  - CLIP/DINOv2/ConvNeXt → emit label counts or pooled features
+
+Policy: references/data-safety-runtime.md §3
+        scholar-compute MODULE 6 (computer vision under LOCAL_MODE)
+EOF
+    exit 2
+  fi
+  # Image outside raw-data paths (output figures, screenshots, icons) — allow.
+  exit 0
+fi
+
+# ─── 7b. RAO trace files: §14-profile scan, not general NER ─────────────
+# Handoff 2026-08-25 P7-A (rule-10 sweep, 2 projects, 10 files): the general
+# scanner REDs the suite's own MANDATORY evidence trail — 7/10 real traces
+# blocked, 351/352 hits were PERSON (cited-author names and id strings in
+# `reasoning` prose). The result was a rule enforceable but never auditable:
+# trace-coverage-check RED-fails a phase without a trace, while every review
+# seat was refused permission to read one. The §14 trace privacy contract
+# already forbids what actually matters (verbatim respondent values, row
+# dumps, PII); this arm scans for THOSE, and only for those. Precedence is
+# unchanged: an explicit sidecar status (CLEARED/HALTED/...) was honored in
+# §6 before we get here. A file that merely LOOKS like a trace but fails
+# RAO-schema validation falls through to the FULL scan (fail closed), and
+# the fallthrough says so — "cannot scan as a trace" is distinguished from
+# "contains PII".
+case "$FILE_PATH" in
+  */logs/trace-*.ndjson)
+    _TRACE_VERDICT="$(_trace_profile_verdict "$FILE_PATH")"
+    case "$_TRACE_VERDICT" in
+      CLEAN)
+        exit 0
+        ;;
+      VIOLATIONS*)
+        cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+RAO trace-profile scan found §14 privacy-contract violations (counts only,
+values never printed): ${_TRACE_VERDICT#VIOLATIONS }
+
+Traces must carry aggregate metrics, verdicts, counts, and file refs ONLY —
+never respondent values, row dumps, PII, or inline quotes (quotes belong in
+the evidence ledger by anchor_id). Fix the EMITTER, then regenerate the
+trace; do not read this file into context.
+
+Policy: references/process-logger.md (trace privacy / C-01)
+EOF
+        exit 2
+        ;;
+      *)
+        echo "SAFETY GUARD note: '$FILE_PATH' is named like an RAO trace but does not validate as one — applying the FULL data scan instead (this is a cannot-scan-as-trace fallthrough, not a PII verdict)." >&2
+        ;;
+    esac
+    ;;
+esac
+
+# ─── 8. Non-image data file: run safety-scan.sh ─────────────────────────
+if [ ! -f "$GATE_SCRIPT" ]; then
+  cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+Could not locate safety-scan.sh at: $GATE_SCRIPT
+The data-safety gate cannot run, so Read is failing CLOSED on data files.
+EOF
+  exit 2
+fi
+
+SCAN_LOG="$(mktemp -t safety-guard.XXXXXX)"
+# $SCAN_LOG cleanup is handled by the _guard_on_exit EXIT trap set at top.
+
+bash "$GATE_SCRIPT" "$FILE_PATH" >"$SCAN_LOG" 2>&1
+LEVEL=$?
+
+case "$LEVEL" in
+  0)
+    exit 0
+    ;;
+  2)
+    DETAIL="$(cat "$SCAN_LOG")"
+    cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+safety-scan.sh returned YELLOW (review needed).
+
+Scanner output:
+$DETAIL
+
+Before reading this file via Read you must:
+  1. Present the YELLOW finding to the user.
+  2. Get an explicit choice: [Y] PROCEED / [C] LOCAL_MODE / [B] ANONYMIZE / [A] HALT.
+  3. Record the decision in .claude/safety-status.json.
+
+Policy: references/data-safety-runtime.md
+EOF
+    exit 2
+    ;;
+  *)
+    DETAIL="$(cat "$SCAN_LOG")"
+    cat >&2 <<EOF
+SAFETY GUARD: Read blocked on '$FILE_PATH'.
+
+safety-scan.sh returned RED (sensitive patterns detected).
+
+Scanner output:
+$DETAIL
+
+This file appears to contain PII, HIPAA-covered, restricted-use, or other
+sensitive content. Reading it via the Read tool would transmit row-level
+data to the Anthropic API.
+
+DO NOT retry this Read. Instead:
+
+  1. Switch to LOCAL_MODE. Load the file inside a single Rscript -e
+     (or python3 -c) Bash call and print only aggregated output:
+     see references/data-safety-runtime.md §3a / §3b.
+
+  2. If this is a false positive, add an OVERRIDE entry to
+     .claude/safety-status.json with a typed rationale logged verbatim
+     to logs/init-report.md.
+
+  3. To anonymize first, use scripts/gates/anonymize-presidio.py.
+
+Policy: references/data-safety-runtime.md §1 "Core rule"
+EOF
+    exit 2
+    ;;
+esac

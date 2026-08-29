@@ -42,7 +42,11 @@ Phase 6 has five functions:
 
 Do not advance to Phase 7 with unresolved Phase 6 blockers. The next phase is not the repair mechanism for pre-execution defects.
 
-The final `pre-execution-review.json` is a final-state artifact. It may summarize first-round findings, but it must be written only after blockers are fixed and re-reviewed. First-round reviewer details live in each `report_path` under `review/agents/`.
+The final `pre-execution-review.json` is a final-state artifact. It may summarize first-round findings, but it must be written only after blockers are fixed and re-reviewed.
+
+The selected first-round reviewer details live at the immutable reservation
+paths under `review-evidence/phase-06/<session-id>/reports/`; the canonical JSON
+must bind those exact paths. `review/agents/` is not evidence authority.
 
 `pre-execution-review.json` must include:
 
@@ -111,30 +115,14 @@ Phase 6 fails if any execution artifacts already exist. Execution belongs to Pha
 
 Markdown summaries must not contradict JSON pass status. If the markdown says a critical or blocking issue remains unresolved, Phase 6 fails even when JSON says `PASS`.
 
-## Codex cross-model review gate (added 2026-05-10)
+## Portable execution evidence
 
-Phase 6 verification runs `scripts/gates/codex-trigger-phase6.sh` after the JSON/markdown integrity checks. The gate enforces the following rule whenever `SCHOLAR_CODEX_DEFAULT=true` (the default as of 2026-05-10) AND the `codex` CLI is on PATH:
+The six initial roles and any conditional fix re-review must use the registered
+lifecycle in `review-evidence-contract.md`. The canonical `reviewers` records
+bind their `report_path` and `task_invocation_id` to the selected evidence
+completion. The default assurance is `process_recorded`; it does not require a
+particular provider, ID syntax, or exposed model name.
 
-- Either Codex code-mode artifacts must exist under `${PROJ}/reviews/codex/A[1-3]-*.md` (canonical layout for `/scholar-openai code` runs), OR
-- The phase report must contain the literal annotation `[EXCUSED:codex-review: <reason>]` in `review/pre-execution-review.md` (or any string-valued field in `review/pre-execution-review.json`).
-
-If neither is satisfied, the gate emits `STATUS=RED` and Phase 6 verification fails.
-
-Verdict matrix:
-
-| `SCHOLAR_CODEX_DEFAULT` | codex CLI | artifacts | excuse | verdict |
-|:-----------------------:|:---------:|:---------:|:------:|:--------|
-| true (default)          | present   | present   | —      | GREEN (fired) |
-| true (default)          | present   | absent    | present | GREEN (excused) |
-| true (default)          | present   | absent    | absent | RED (strong trigger, no dispatch) |
-| true (default)          | missing   | —         | —      | YELLOW (cannot fire) |
-| false                   | —         | —         | —      | GREEN (no trigger) |
-
-Opt-out paths:
-
-- Per shell: `export SCHOLAR_CODEX_DEFAULT=false`
-- Per phase: append `[EXCUSED:codex-review: codex CLI not available]` (or any reason ≤ 200 chars) to `review/pre-execution-review.md`.
-
-When not excused, dispatch via `/scholar-openai code <manuscript-path> <scripts-dir>`. The `code` mode runs three Codex agents (A1 correctness, A2 robustness, A3 statistics) and saves reports under `${PROJ}/reviews/codex/`.
-
-The gate is **self-contained** within scholar-auto-research: it does not depend on the parent `scholar-skill/scripts/gates/` directory. The phase wrapper calls a sibling `codex-trigger-check.sh` in the same `skills/scholar-auto-research/scripts/gates/` dir.
+The packaged Codex cross-model gate is an optional diversity enhancement. It
+runs only when the operator explicitly sets `SCHOLAR_CODEX_REVIEW=1`. Codex on
+`PATH` has no effect by itself and cannot replace the six-role evidence panel.

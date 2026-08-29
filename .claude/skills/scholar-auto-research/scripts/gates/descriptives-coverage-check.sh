@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # descriptives-coverage-check.sh — Phase 8 / Phase 13 coverage gate.
 #
-# Rationale: a common failure is a descriptives script that builds
-# `tables/table1-descriptives.csv` from a HARDCODED variable subset rather
-# than from the live spec-registry × variable-dictionary. Every modeled
-# variable should have a descriptive row; this gate closes the gap that
-# would otherwise let a hardcoded subset pass.
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): the original
+# 03-descriptives-and-missingness.R built `tables/table1-descriptives.csv`
+# from a HARDCODED 14-variable subset rather than from the live
+# spec-registry × variable-dictionary. Every modeled variable should
+# have a descriptive row, but the gate that would have caught the gap
+# did not exist. The audit enumerated the subset bug as system-level
+# fix #5.
 #
 # Contract
 # --------

@@ -1,0 +1,90 @@
+{
+  "no_execution_yet": true,
+  "script_order": [
+    "analysis/scripts/01_load_data.R",
+    "analysis/scripts/02_build_sample.R",
+    "analysis/scripts/03_construct_variables.R",
+    "analysis/scripts/04_plan_models.R"
+  ],
+  "dependency_graph": {
+    "analysis/scripts/01_load_data.R": [],
+    "analysis/scripts/02_build_sample.R": ["analysis/scripts/01_load_data.R"],
+    "analysis/scripts/03_construct_variables.R": ["analysis/scripts/02_build_sample.R"],
+    "analysis/scripts/04_plan_models.R": ["analysis/scripts/03_construct_variables.R"]
+  },
+  "scripts": [
+    {
+      "path": "analysis/scripts/01_load_data.R",
+      "purpose": "load public panel file without running models",
+      "uses": ["data/raw/panel.csv"],
+      "produces": ["data/interim/panel-loaded.rds"],
+      "status": "planned"
+    },
+    {
+      "path": "analysis/scripts/02_build_sample.R",
+      "purpose": "construct analytic sample",
+      "uses": ["data/interim/panel-loaded.rds"],
+      "produces": ["data/processed/analytic-sample.rds"],
+      "status": "planned"
+    },
+    {
+      "path": "analysis/scripts/03_construct_variables.R",
+      "purpose": "construct model variables and missingness indicators",
+      "uses": ["data/processed/analytic-sample.rds"],
+      "produces": ["data/processed/analytic-variables.rds"],
+      "status": "planned"
+    },
+    {
+      "path": "analysis/scripts/04_plan_models.R",
+      "purpose": "prepare planned model calls without executing them",
+      "uses": ["data/processed/analytic-variables.rds", "analysis/spec-registry.csv"],
+      "produces": ["analysis/planned-model-calls.json"],
+      "status": "planned"
+    }
+  ],
+  "test_inventory": [
+    {
+      "id": "T1",
+      "target": "analysis/scripts/01_load_data.R",
+      "category": "data_loading",
+      "assertion": "source file loads and required columns are present",
+      "status": "planned"
+    },
+    {
+      "id": "T2",
+      "target": "analysis/scripts/02_build_sample.R",
+      "category": "analytic_sample",
+      "assertion": "analytic sample has nonzero rows and correct unit of analysis",
+      "status": "planned"
+    },
+    {
+      "id": "T3",
+      "target": "analysis/scripts/03_construct_variables.R",
+      "category": "variable_construction",
+      "assertion": "constructed variables match the Phase 4 variable dictionary",
+      "status": "planned"
+    },
+    {
+      "id": "T4",
+      "target": "analysis/scripts/03_construct_variables.R",
+      "category": "missingness",
+      "assertion": "missing value codes and indicators match the Phase 4 missing data plan",
+      "status": "planned"
+    },
+    {
+      "id": "T5",
+      "target": "analysis/scripts/04_plan_models.R",
+      "category": "model_spec",
+      "spec_ids": ["S1", "S2", "S3"],
+      "assertion": "every planned spec has a non-executed model call and valid variables",
+      "status": "planned"
+    },
+    {
+      "id": "T6",
+      "target": "analysis/scripts/04_plan_models.R",
+      "category": "output_registry",
+      "assertion": "planned result and figure registry schemas can be written during Phase 8",
+      "status": "planned"
+    }
+  ]
+}

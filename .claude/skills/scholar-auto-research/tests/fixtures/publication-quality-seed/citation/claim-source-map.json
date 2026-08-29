@@ -1,0 +1,92 @@
+{
+  "claims": [
+    {
+      "citation_keys": [
+        "work01"
+      ],
+      "claim_id": "lrc2:719e9179d1e82b6fe57b9b5aba7f871a963b9e441052f7bb7a3adbc00477e3ca",
+      "claim_text": "Locked empirical row claim for S1.",
+      "claim_type": "empirical",
+      "contradiction": false,
+      "evidence_span_summary": "Locked row 0 supports the displayed Model 1 estimate and its Results sentence.",
+      "manuscript_anchor": "In Model 1, the primary specification",
+      "manuscript_location": "results",
+      "result_binding": {
+        "binding_type": "mapped_structured_source",
+        "display_coordinate": "Model 1",
+        "display_coordinate_kind": "column",
+        "display_locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+        "display_source_path": "tables/regression-main.html",
+        "row_index": 0,
+        "spec_id": "S1",
+        "value_locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+        "value_source_path": "tables/results-registry.csv"
+      },
+      "source_locator": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+      "support_verdict": "SUPPORTED"
+    },
+    {
+      "citation_keys": [
+        "work02"
+      ],
+      "claim_id": "lrc2:0f0c662041d0e7e819cf383259d6bf106de69333d612e6fe47ef1c3f56450ce4",
+      "claim_text": "Locked empirical row claim for S2.",
+      "claim_type": "empirical",
+      "contradiction": false,
+      "evidence_span_summary": "Locked row 1 supports the displayed Model 2 estimate and its Results sentence.",
+      "manuscript_anchor": "For Model 2, the timing-oriented specification",
+      "manuscript_location": "results",
+      "result_binding": {
+        "binding_type": "mapped_structured_source",
+        "display_coordinate": "Model 2",
+        "display_coordinate_kind": "column",
+        "display_locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+        "display_source_path": "tables/regression-main.html",
+        "row_index": 1,
+        "spec_id": "S2",
+        "value_locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+        "value_source_path": "tables/results-registry.csv"
+      },
+      "source_locator": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+      "support_verdict": "SUPPORTED"
+    },
+    {
+      "citation_keys": [
+        "work03"
+      ],
+      "claim_id": "lrc2:9815451e730ea99584a98ef5f2a7e2b4209b6ae67838bb29eaffd5da3d3a1ab4",
+      "claim_text": "Locked empirical row claim for S3.",
+      "claim_type": "empirical",
+      "contradiction": false,
+      "evidence_span_summary": "Locked row 2 supports the displayed Model 3 estimate and its Results sentence.",
+      "manuscript_anchor": "For Model 3, the attrition-weighted specification",
+      "manuscript_location": "results",
+      "result_binding": {
+        "binding_type": "mapped_structured_source",
+        "display_coordinate": "Model 3",
+        "display_coordinate_kind": "column",
+        "display_locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+        "display_source_path": "tables/regression-main.html",
+        "row_index": 2,
+        "spec_id": "S3",
+        "value_locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+        "value_source_path": "tables/results-registry.csv"
+      },
+      "source_locator": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+      "support_verdict": "SUPPORTED"
+    }
+  ],
+  "contradicted_count": 0,
+  "degraded": false,
+  "fixture_scope": "schema_v2_empirical_result_binding_handoff",
+  "locator_missing_count": 0,
+  "selected_manuscript_hash": "c217da03962493579929597e6d5fe50694d8dd4e4e27d5ceadf6fb48fa7b6d28",
+  "source_hashes": {
+    "draft_manifest": "59ab49b292c214ace5345b9577d6bd3abe1cc53d94c3dc8d731f4e9f45aaff4c",
+    "manuscript": "c217da03962493579929597e6d5fe50694d8dd4e4e27d5ceadf6fb48fa7b6d28"
+  },
+  "supported_count": 3,
+  "total_claims": 3,
+  "unsupported_count": 0,
+  "verdict": "PASS"
+}

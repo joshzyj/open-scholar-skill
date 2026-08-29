@@ -1292,6 +1292,55 @@ bgp_chk 0 "Bash wc -l raw"          "$(bgp_bash 'wc -l data/raw/x.csv')"
 bgp_chk 0 "Bash cp raw"             "$(bgp_bash 'cp data/raw/x.csv data/interim/y.csv')"
 bgp_chk 0 "Bash R aggregate loader" "$(bgp_bash "Rscript -e 'd<-read.csv(\"data/raw/x.csv\"); cat(\"N=\", nrow(d))'")"
 bgp_chk 0 "Bash py aggregate (dtypes)" "$(bgp_bash "python3 -c \"import pandas as pd; df=pd.read_csv('data/raw/x.csv'); print(df.dtypes)\"")"
+
+# ─── S2.3 narrow exemptions (2026-08-23) + their negative controls ──────
+# (a) tables/raw/ is model OUTPUT (coefficients); the bare */raw/* token
+#     used to block it (handoff P3-1). Exempt ONLY untracked files whose
+#     resolved path stays inside tables/raw — a symlink into data/raw and a
+#     sidecar-tracked file must still block.
+mkdir -p "$BGP/tables/raw"
+printf 'term,estimate,se\ncohab,0.31,0.04\n' > "$BGP/tables/raw/main_results.csv"
+ln -s "$BGP/data/raw/x.csv" "$BGP/tables/raw/link.csv"
+printf 'term,estimate\nx,1\n' > "$BGP/tables/raw/tracked.csv"
+jq -n --arg raw "$BGP/data/raw/x.csv" --arg cl "$BGP/cleared.csv" \
+      --arg tr "$BGP/tables/raw/tracked.csv" \
+  '{($raw):"NEEDS_REVIEW:RED", ($cl):"CLEARED", ($tr):"LOCAL_MODE"}' \
+  > "$BGP/.claude/safety-status.json"
+bgp_chk 0 "S2.3a cat tables/raw model output (untracked) → ALLOW" \
+  "$(bgp_bash 'cat tables/raw/main_results.csv')"
+bgp_chk 2 "S2.3a NEGATIVE: tables/raw symlink → data/raw still BLOCKS" \
+  "$(bgp_bash 'cat tables/raw/link.csv')"
+bgp_chk 2 "S2.3a NEGATIVE: sidecar-tracked file under tables/raw still BLOCKS" \
+  "$(bgp_bash 'cat tables/raw/tracked.csv')"
+bgp_chk 2 "S2.3a REGRESSION: data/raw direct read still BLOCKS" \
+  "$(bgp_bash 'cat data/raw/x.csv')"
+
+# (b) ~/.claude/plugins/** is Claude Code's own plugin state; */data/*
+#     matched ~/.claude/plugins/data/<plugin>/… and blocked Codex job
+#     polling (4 transcript hits, 2026-08-23). HOME is overridden so the
+#     fixture exercises the real pattern without touching the user's home.
+FAKEHOME="$TMPDIR_BASE/fakehome"
+mkdir -p "$FAKEHOME/.claude/plugins/data/codex-plug/state/jobs"
+printf '{"job":"j1","status":"running"}\n' > "$FAKEHOME/.claude/plugins/data/codex-plug/state/jobs/j1.json"
+P_PLUG="$(jq -n --arg c "cat '$FAKEHOME/.claude/plugins/data/codex-plug/state/jobs/j1.json'" --arg cwd "$BGP" \
+  '{session_id:"t",transcript_path:"",cwd:$cwd,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
+RC_PLUG=$(printf '%s' "$P_PLUG" | HOME="$FAKEHOME" bash "$GUARD" >/dev/null 2>&1; echo $?)
+if [ "$RC_PLUG" = 0 ]; then
+  pass "S2.3b cat plugin job state under ~/.claude/plugins/data → ALLOW (exit 0)"
+else
+  fail "S2.3b plugin-state read — want 0 got $RC_PLUG"
+fi
+# NEGATIVE: an identical path shape OUTSIDE the plugins root still blocks.
+mkdir -p "$FAKEHOME/other/data"
+printf 'id,ssn\n1,123-45-6789\n' > "$FAKEHOME/other/data/rows.csv"
+P_OTH="$(jq -n --arg c "cat '$FAKEHOME/other/data/rows.csv'" --arg cwd "$BGP" \
+  '{session_id:"t",transcript_path:"",cwd:$cwd,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
+RC_OTH=$(printf '%s' "$P_OTH" | HOME="$FAKEHOME" bash "$GUARD" >/dev/null 2>&1; echo $?)
+if [ "$RC_OTH" = 2 ]; then
+  pass "S2.3b NEGATIVE: */data/* outside plugins root still BLOCKS (exit 2)"
+else
+  fail "S2.3b negative — want 2 got $RC_OTH"
+fi
 bgp_chk 0 "Bash ls raw dir"         "$(bgp_bash 'ls -la data/raw')"
 bgp_chk 0 "Bash cat CLEARED file"   "$(bgp_bash 'cat cleared.csv')"
 bgp_chk 0 "Bash cat README"         "$(bgp_bash 'cat README.md')"
@@ -1416,9 +1465,94 @@ bgps_chk 0 "SPACED R -e print(summary(d))" "$(bgps_bash "Rscript -e 'd<-read.csv
 # NO NEW FALSE POSITIVE: a quoted literal that names no real file must not block
 bgps_chk 0 "SPACED literal names no file"  "$(bgps_bash "Rscript -e 'x<-\"$BGPS/data/raw/does-not-exist.csv\"; print(head(mtcars))'")"
 
+# ─── Interpreter row-dump with a SPACED sensitive path (2026-08-16, cohab-divorce-e2e) ──
+# Every case above uses `data/raw/x.csv` — no space — which is why this class was never
+# caught. On a real Dropbox / "My Drive" path, an `Rscript -e` / `python3 -c` row dump
+# reached the guard as ONE shlex token (the whole code string, not a path) while the
+# historical whitespace split shredded the path at the space, so no pass yielded it,
+# bash_first_sensitive_target came back empty, and the Bash arm exited 0 BEFORE the
+# dump-verb check ran — even though that check matches print(head(d)) / .head(.
+# The identical command on a space-free path was (and is) blocked. Fix: tokenizer pass 4
+# extracts quoted string literals from inside code arguments (additive only).
+BGPS="$TMPDIR_BASE/bash gate spaced"        # deliberate space in the directory name
+mkdir -p "$BGPS/data/raw"; printf 'a,b\n1,2\n' > "$BGPS/data/raw/x.csv"
+bgps_bash() { jq -n --arg c "$1" --arg cwd "$BGPS" \
+  '{session_id:"t",transcript_path:"",cwd:$cwd,hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}'; }
+bgps_chk() { local want="$1" desc="$2" pl="$3" rc; rc=$(run_guard_capture "$pl")
+  if [ "$rc" = "$want" ]; then pass "$desc (exit $rc)"; else fail "$desc — want $want got $rc"; fi; }
+SP="$BGPS/data/raw/x.csv"
+# BLOCK: row dumps through the interpreter channel on a spaced path
+bgps_chk 2 "SPACED R -e print(head(d))"    "$(bgps_bash "Rscript -e 'd<-read.csv(\"$SP\"); print(head(d))'")"
+bgps_chk 2 "SPACED R -e print(d)"          "$(bgps_bash "Rscript -e 'd<-read.csv(\"$SP\"); print(d)'")"
+bgps_chk 2 "SPACED py -c .head()"          "$(bgps_bash "python3 -c \"import pandas as pd; print(pd.read_csv('$SP').head())\"")"
+bgps_chk 2 "SPACED py -c .to_string()"     "$(bgps_bash "python3 -c \"import pandas as pd; print(pd.read_csv('$SP').to_string())\"")"
+# ALLOW: the sanctioned aggregate channel must keep working on the same spaced path
+bgps_chk 0 "SPACED R -e cat(nrow(d))"      "$(bgps_bash "Rscript -e 'd<-read.csv(\"$SP\"); cat(nrow(d))'")"
+bgps_chk 0 "SPACED py -c print(len(df))"   "$(bgps_bash "python3 -c \"import pandas as pd; print(len(pd.read_csv('$SP')))\"")"
+bgps_chk 0 "SPACED R -e print(summary(d))" "$(bgps_bash "Rscript -e 'd<-read.csv(\"$SP\"); print(summary(d))'")"
+# NO NEW FALSE POSITIVE: a quoted literal that names no real file must not block
+bgps_chk 0 "SPACED literal names no file"  "$(bgps_bash "Rscript -e 'x<-\"$BGPS/data/raw/does-not-exist.csv\"; print(head(mtcars))'")"
+
 # ─── Summary ────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════"
+# ─── T-P7A: RAO trace-profile scan (handoff 2026-08-25 P7-A) ────────────
+# The general NER scan blocked 7/10 real trace files (351/352 hits were
+# PERSON on cited-author names), blinding every review seat to the suite's
+# own mandatory evidence trail. Traces now get a §14-violations-only scan.
+echo ""
+echo "T-P7A: trace-profile scan — metadata readable, violations blocked, fakes fall through"
+TP7="$TMPDIR_BASE/tp7a"; mkdir -p "$TP7/logs"
+# (a) valid trace with author names + integer line-number lists → allowed
+cat > "$TP7/logs/trace-scholar-analyze-2026-08-25.ndjson" <<'EOF'
+{"seq":1,"ts":"2026-08-25T01:00:00Z","action":"gate:phase-verify.sh 5","observation":"STATUS=GREEN per Angrist and Pischke; guarded blocks (27:148,171,190,207,229,237,253,268)","reasoning":"Maria Gonzalez argues the estimator follows the blueprint"}
+EOF
+if run_guard "$(payload Read "$TP7/logs/trace-scholar-analyze-2026-08-25.ndjson" "$TP7")" >/dev/null 2>&1; then
+  pass "T-P7A-a valid trace with person names + integer lists → readable"
+else
+  fail "T-P7A-a trace still blocked (rc=$?)"
+fi
+# (b) trace carrying an SSN-shaped token → blocked, counts only
+printf '{"seq":1,"ts":"t","action":"x","observation":"id 123-45-6789 recorded"}\n' > "$TP7/logs/trace-bad-2026.ndjson"
+OUT=$(payload Read "$TP7/logs/trace-bad-2026.ndjson" "$TP7" | bash "$GUARD" 2>&1); RC=$?
+if [ "$RC" = 2 ] && grep -q "ssn-shaped=1" <<<"$OUT" && ! grep -q "123-45-6789" <<<"$OUT"; then
+  pass "T-P7A-b §14 violation blocked with counts, value never printed"
+else
+  fail "T-P7A-b (rc=$RC)"
+fi
+# (c) long decimal run (row-dump shape) → blocked; short coefficient list → allowed
+printf '{"seq":1,"ts":"t","action":"x","observation":"row: 34, 2.15, 0.85, 1.20, 3.40, 12000.50, 1, 2.9, 4, 7.7, 8, 12.1, 9"}\n' > "$TP7/logs/trace-row-2026.ndjson"
+printf '{"seq":1,"ts":"t","action":"grepped memo for 0.924, 0.0929, 1.297, 16,832, 16,919","observation":"ok"}\n' > "$TP7/logs/trace-coef-2026.ndjson"
+payload Read "$TP7/logs/trace-row-2026.ndjson" "$TP7" | bash "$GUARD" >/dev/null 2>&1; R1=$?
+payload Read "$TP7/logs/trace-coef-2026.ndjson" "$TP7" | bash "$GUARD" >/dev/null 2>&1; R2=$?
+if [ "$R1" = 2 ] && [ "$R2" = 0 ]; then
+  pass "T-P7A-c long decimal row blocked; short coefficient list readable"
+else
+  fail "T-P7A-c (row rc=$R1, coef rc=$R2)"
+fi
+# (c2) Grep parity (P7-A correction): a §14-clean trace is greppable —
+# the old asymmetry (Grep refused, Read allowed) cost a review seat a
+# round: it recorded "unreadable" off the Grep refusal and never tried Read.
+G_OUT=$(jq -n --arg p "$TP7/logs/trace-scholar-analyze-2026-08-25.ndjson" --arg cwd "$TP7" \
+  '{cwd:$cwd, hook_event_name:"PreToolUse", tool_name:"Grep", tool_input:{pattern:"seq", path:$p}}' \
+  | bash "$GUARD" 2>&1); G_RC=$?
+G2_OUT=$(jq -n --arg p "$TP7/logs/trace-bad-2026.ndjson" --arg cwd "$TP7" \
+  '{cwd:$cwd, hook_event_name:"PreToolUse", tool_name:"Grep", tool_input:{pattern:"seq", path:$p}}' \
+  | bash "$GUARD" 2>&1); G2_RC=$?
+if [ "$G_RC" = 0 ] && [ "$G2_RC" = 2 ] && grep -q "ssn-shaped=1" <<<"$G2_OUT"; then
+  pass "T-P7A-c2 Grep parity: clean trace greppable, violation trace blocked with counts"
+else
+  fail "T-P7A-c2 (clean rc=$G_RC, violation rc=$G2_RC)"
+fi
+# (d) file NAMED like a trace but not RAO schema → full scan applies (fail closed)
+printf 'not json\n' > "$TP7/logs/trace-fake-2026.ndjson"
+OUT=$(payload Read "$TP7/logs/trace-fake-2026.ndjson" "$TP7" | bash "$GUARD" 2>&1); RC=$?
+if grep -q "cannot-scan-as-trace" <<<"$OUT"; then
+  pass "T-P7A-d schema-invalid trace falls through to the full scan, honestly labelled"
+else
+  fail "T-P7A-d (rc=$RC): $(echo "$OUT" | head -2)"
+fi
+
 echo "Results: $PASS passed, $FAIL failed"
 if [ "$FAIL" -gt 0 ]; then
   echo ">>> FAILED"

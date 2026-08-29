@@ -1,0 +1,399 @@
+{
+  "blocking_findings": [],
+  "degraded": false,
+  "fix_status": {
+    "all_blocking_fixed": true,
+    "fix_log": "review/pre-execution-fix-log.json",
+    "required": false,
+    "rereview": "review/pre-execution-rereview.json"
+  },
+  "inventory_hash": "4d3b3543015b6a005b83b69c35b445d36ca448a1b08c36334d4200b147b59514",
+  "ready_for_phase_7": true,
+  "review_engine": {
+    "input_artifacts": [
+      "analysis/analysis-plan.md",
+      "analysis/scripts-inventory.json",
+      "analysis/spec-registry.csv",
+      "design/identification-strategy.json",
+      "data/variable-dictionary.csv"
+    ],
+    "invoked_at_utc": "2026-04-29T08:30:00Z",
+    "mode": "pre_execution_planned",
+    "output_artifacts": [
+      "review/pre-execution-review.json",
+      "review/pre-execution-fix-log.json",
+      "review/pre-execution-rereview.json"
+    ],
+    "skill": "scholar-code-review",
+    "task_invocation_id": "phase6-code-review-001"
+  },
+  "reviewed_missing_data_alignment": {
+    "reviewed": true,
+    "reviewed_by": [
+      "correctness",
+      "robustness",
+      "statistical",
+      "reproducibility",
+      "style_ai_patterns",
+      "data_handling"
+    ],
+    "status": "PASS"
+  },
+  "reviewed_no_execution_boundary": {
+    "reviewed": true,
+    "reviewed_by": [
+      "correctness",
+      "robustness",
+      "statistical",
+      "reproducibility",
+      "style_ai_patterns",
+      "data_handling"
+    ],
+    "status": "PASS"
+  },
+  "reviewed_robustness_coverage": {
+    "reviewed": true,
+    "reviewed_by": [
+      "correctness",
+      "robustness",
+      "statistical",
+      "reproducibility",
+      "style_ai_patterns",
+      "data_handling"
+    ],
+    "status": "PASS"
+  },
+  "reviewed_script_dag": {
+    "reviewed": true,
+    "reviewed_by": [
+      "correctness",
+      "robustness",
+      "statistical",
+      "reproducibility",
+      "style_ai_patterns",
+      "data_handling"
+    ],
+    "status": "PASS"
+  },
+  "reviewed_scripts": [
+    {
+      "exists_or_stub_declared": true,
+      "path": "analysis/scripts/01_load_data.R",
+      "reviewed_by": [
+        "correctness",
+        "robustness",
+        "statistical",
+        "reproducibility",
+        "style_ai_patterns",
+        "data_handling"
+      ],
+      "status_in_inventory": "planned"
+    },
+    {
+      "exists_or_stub_declared": true,
+      "path": "analysis/scripts/02_build_sample.R",
+      "reviewed_by": [
+        "correctness",
+        "robustness",
+        "statistical",
+        "reproducibility",
+        "style_ai_patterns",
+        "data_handling"
+      ],
+      "status_in_inventory": "planned"
+    },
+    {
+      "exists_or_stub_declared": true,
+      "path": "analysis/scripts/03_construct_variables.R",
+      "reviewed_by": [
+        "correctness",
+        "robustness",
+        "statistical",
+        "reproducibility",
+        "style_ai_patterns",
+        "data_handling"
+      ],
+      "status_in_inventory": "planned"
+    },
+    {
+      "exists_or_stub_declared": true,
+      "path": "analysis/scripts/04_plan_models.R",
+      "reviewed_by": [
+        "correctness",
+        "robustness",
+        "statistical",
+        "reproducibility",
+        "style_ai_patterns",
+        "data_handling"
+      ],
+      "status_in_inventory": "planned"
+    }
+  ],
+  "reviewed_spec_coverage": {
+    "reviewed": true,
+    "reviewed_by": [
+      "correctness",
+      "robustness",
+      "statistical",
+      "reproducibility",
+      "style_ai_patterns",
+      "data_handling"
+    ],
+    "status": "PASS"
+  },
+  "reviewed_specs": [
+    "S1",
+    "S2",
+    "S3"
+  ],
+  "reviewed_tests": [
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6"
+  ],
+  "reviewers": [
+    {
+      "agent_type": "scholar-code-review-preexecution-agent",
+      "findings": [],
+      "report_path": "review/agents/correctness.md",
+      "reviewed_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewed_tests": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "reviewed_upstream_artifacts": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "reviewer_id": "A1",
+      "role": "correctness",
+      "task_invocation_id": "preexec-correctness-001",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "scholar-code-review-preexecution-agent",
+      "findings": [],
+      "report_path": "review/agents/robustness.md",
+      "reviewed_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewed_tests": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "reviewed_upstream_artifacts": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "reviewer_id": "A2",
+      "role": "robustness",
+      "task_invocation_id": "preexec-robustness-001",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "scholar-code-review-preexecution-agent",
+      "findings": [],
+      "report_path": "review/agents/statistical.md",
+      "reviewed_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewed_tests": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "reviewed_upstream_artifacts": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "reviewer_id": "A3",
+      "role": "statistical",
+      "task_invocation_id": "preexec-statistical-001",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "scholar-code-review-preexecution-agent",
+      "findings": [],
+      "report_path": "review/agents/reproducibility.md",
+      "reviewed_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewed_tests": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "reviewed_upstream_artifacts": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "reviewer_id": "A4",
+      "role": "reproducibility",
+      "task_invocation_id": "preexec-reproducibility-001",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "scholar-code-review-preexecution-agent",
+      "findings": [],
+      "report_path": "review/agents/style_ai_patterns.md",
+      "reviewed_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewed_tests": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "reviewed_upstream_artifacts": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "reviewer_id": "A5",
+      "role": "style_ai_patterns",
+      "task_invocation_id": "preexec-style_ai_patterns-001",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "scholar-code-review-preexecution-agent",
+      "findings": [],
+      "report_path": "review/agents/data_handling.md",
+      "reviewed_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewed_tests": [
+        "T1",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "reviewed_upstream_artifacts": [
+        "analysis/analysis-plan.md",
+        "analysis/analysis-plan-manifest.json",
+        "analysis/scripts-inventory.json",
+        "analysis/spec-registry.csv",
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/variable-dictionary.csv",
+        "data/data-measurement-manifest.json"
+      ],
+      "reviewer_id": "A6",
+      "role": "data_handling",
+      "task_invocation_id": "preexec-data_handling-001",
+      "verdict": "PASS"
+    }
+  ],
+  "source_hashes": {
+    "analysis_plan": "3d758ac2a6f9df20779418ea708922b3726968dd0aea513494fc62d4de9b4cfb",
+    "analysis_plan_manifest": "36feb8d1572a4e99320bbde73aa83d7e57f1e1a7a4b3987e21f3c117af044940",
+    "data_measurement_manifest": "b2bb04efc832403d61b0d0971d93fbe6aaaa562a01dc05d67b314c9eadd43ccd",
+    "identification_strategy": "201fa9c250f2758147e89c563d854704c4d83baa4eba5ba280a0956fe62b6046",
+    "model_specs": "cec2bb5ee6cef7a301859ea117ce0919492a51d8c58f916177eb2875cdb890d2",
+    "scripts_inventory": "4d3b3543015b6a005b83b69c35b445d36ca448a1b08c36334d4200b147b59514",
+    "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8",
+    "variable_dictionary": "f7c4b63bfc2b2a66e2046b556a64961b2cd3ec0ccbdf16bd04a71793b58c058a"
+  },
+  "unresolved_critical_count": 0,
+  "verdict": "PASS"
+}

@@ -6,9 +6,11 @@
 #   review and that the reviewed bytes are the bytes on disk, BEFORE any
 #   of those scripts execute. Companion to _shared/pre-execution-review.md.
 #   Consumed by scholar-analyze A2.5, scholar-eda Phase 11, scholar-compute
-#   MODULE 0.7, scholar-data W4/W6/W7, scholar-simulate, scholar-ling.
-#   NOT wired into phase-verify.sh — orchestrated runs use the existing
-#   5A.5 / 5B-gate / 6-gate wiring instead.
+#   MODULE 0.7, scholar-data W4/W6/W7, scholar-simulate, scholar-ling —
+#   AND, since 2026-08-22 (RCA Round 1 #1), wired HARD into phase-verify.sh
+#   at 5A.5 (--phase 5A.5) and at 5.5 (--phase 5.5, the fix path: the
+#   reviewed-scripts-fix-<round>.json receipt matches the default manifest
+#   glob, so a fix round that changed bytes without a receipt REDs).
 #
 # RULE-SET
 #   R1  Manifest pairing: the reviewed-scripts manifest (code-review-manifest/v1,
@@ -50,12 +52,20 @@
 #   --required     coverage mode handed to code-review-coverage-check.sh
 #                  (default fast).
 #   --phase        dispatch-manifest phase tag handed to the coverage check
-#                  (default pre-exec).
+#                  (default pre-exec). MUST equal the tag used at the ORIGINAL
+#                  reviewer dispatch (emit-task-dispatch.sh --phase, i.e. the
+#                  dispatch manifest rows' "phase" field) — the coverage check
+#                  counts dispatches by this tag, so a mismatched tag reads an
+#                  empty dispatch set and REDs an honestly-reviewed round.
+#                  Convention (findings-ledger.md): a finding's ledger `phase`
+#                  equals the phase tag of the dispatch that reviewed it.
 #
 # EXIT CODES
 #   0 GREEN   review is current, hash-bound, clean — reviewed files may execute
 #   1 RED     any R1–R7 failure — fix + re-review; do NOT execute
-#   2 YELLOW  legacy-only (R8) — non-executable; re-review first
+#   2 YELLOW  legacy-only (R8) — non-executable; re-review first — OR
+#             R6b: fixed_finding_ids whose latest ledger state is FIXED with no
+#             VERIFIED line (receipt valid, closure pending; DC-03)
 #   3 INERT   no reviewable scripts in scope
 #
 # FIXTURES: tests/smoke/test-pre-exec-review-check.sh
@@ -248,6 +258,61 @@ if [ -n "$_R2B_SUP" ]; then
 fi
 unset _R2B_SUP _R2B_PRIOR R2B_FAILS N_OOS O_PATH PRIOR_SHA O_ABS O_DISK 2>/dev/null || true
 
+# ── R2b: out_of_scope[] is a CLAIM of non-modification — hash-bind it ─────
+# (R3 verification round, 2026-08-22, spiral-walk s3b): a lying fix receipt
+# declared a silently-rewritten file "out of scope — not touched" and the
+# full gate cleared it for execution: R2 hashes only scripts[], R3 checks
+# name-coverage only, and nothing anywhere hashed an out_of_scope[] path.
+# When the manifest names a superseded manifest, every out_of_scope[] path
+# that the PRIOR manifest hashed must still match the PRIOR sha on disk —
+# "out of scope" defers to the review that DID cover the file, so drift
+# since that review makes the claim false. No prior manifest → no baseline
+# to bind against (the R3 name-coverage rule still applies); this is the
+# documented limit, not a silent one.
+_R2B_SUP=$(jq -r '.supersedes_review_id // empty' "$MANIFEST")
+if [ -n "$_R2B_SUP" ]; then
+  _R2B_PRIOR=""
+  for _pm in "$PROJ"/code-review/reviewed-scripts-*.json; do
+    [ -f "$_pm" ] || continue
+    if [ "$(jq -r '.review_id // empty' "$_pm" 2>/dev/null)" = "$_R2B_SUP" ]; then
+      _R2B_PRIOR="$_pm"
+      break
+    fi
+  done
+  if [ -n "$_R2B_PRIOR" ]; then
+    R2B_FAILS=""
+    N_OOS=$(jq -r '.out_of_scope | length' "$MANIFEST" 2>/dev/null || echo 0)
+    case "$N_OOS" in ''|*[!0-9]*) N_OOS=0 ;; esac
+    i=0
+    while [ "$i" -lt "$N_OOS" ]; do
+      O_PATH=$(jq -r ".out_of_scope[$i].path // empty" "$MANIFEST")
+      i=$((i + 1))
+      [ -n "$O_PATH" ] || continue
+      PRIOR_SHA=$(jq -r --arg p "$O_PATH" '.scripts[] | select(.path == $p) | .sha256' "$_R2B_PRIOR" 2>/dev/null | head -1)
+      [ -n "$PRIOR_SHA" ] || continue
+      case "$O_PATH" in
+        /*) O_ABS="$O_PATH" ;;
+        *)  O_ABS="$PROJ/$O_PATH" ;;
+      esac
+      [ -f "$O_ABS" ] || continue
+      O_DISK=$(_sha256 "$O_ABS")
+      if [ -n "$O_DISK" ] && [ "$O_DISK" != "$PRIOR_SHA" ]; then
+        R2B_FAILS="${R2B_FAILS}\n  - $O_PATH (declared out_of_scope, but its bytes MOVED since review $_R2B_SUP — the claim of non-modification is false)"
+      fi
+    done
+    if [ -n "$R2B_FAILS" ]; then
+      echo "STATUS=RED"
+      echo "FAIL: out_of_scope[] hash binding failed (review_id=$REVIEW_ID supersedes $_R2B_SUP):"
+      printf '%b\n' "$R2B_FAILS"
+      echo "A file declared out of scope defers to the review that covered it; changed bytes"
+      echo "make that declaration a lie. Either move the file into scripts[] (it was touched"
+      echo "— review the new bytes) or restore the reviewed bytes."
+      exit 1
+    fi
+  fi
+fi
+unset _R2B_SUP _R2B_PRIOR R2B_FAILS N_OOS O_PATH PRIOR_SHA O_ABS O_DISK 2>/dev/null || true
+
 # ── R3: completeness (no unreviewed script in scope) ──────────────────────
 COVERED=$( { jq -r '.scripts[].path' "$MANIFEST"; jq -r '.out_of_scope[]?.path // empty' "$MANIFEST"; } 2>/dev/null | sort -u)
 EXTRA=""
@@ -273,6 +338,11 @@ if grep -qE '([Oo]verall[[:space:]]+[Vv]erdict|^VERDICT)[[:space:]]*:[[:space:]]
   echo "STATUS=RED"
   echo "FAIL: report $(basename "$REPORT_PATH") carries a blocking verdict (CRITICAL/HALT/FAIL/MAJOR ISSUES/FIXES NEEDED/DO NOT TRUST)."
   echo "Apply the fix loop (_shared/code-review-fix-loop.md), re-review, and re-run this gate."
+  echo "If instead a finding is being formally ACCEPTED rather than fixed, use the §7b"
+  echo "acceptance lane: draft a PROPOSED-ACCEPTANCE entry in logs/gate-acceptances.md for"
+  echo "the PI to ratify ([ACCEPTED: <phase> | NUMBER_EFFECT=…]), then RE-REVIEW to a clean"
+  echo "verdict that cites the acceptance — this gate reads the report's verdict; it does"
+  echo "not (and must not) resolve acceptances itself."
   exit 1
 fi
 
@@ -292,6 +362,57 @@ if [ "$REMAINING" != "0" ] && [ "$REMAINING" != "null" ]; then
   echo "FAIL: manifest $REVIEW_ID reports remaining_blocking_count=$REMAINING — blocking findings unresolved."
   exit 1
 fi
+# R6c (R3 eval rehearsal, 2026-08-22): remaining_blocking_count=0 was pure
+# self-report — an understated count sailed through every gate. Cross-check
+# it against the findings ledger: any id whose LATEST state is OPEN and
+# whose locus file is among this manifest's scripts[] contradicts the
+# claim of zero remaining blockers on these very files.
+R6C_LEDGER="$PROJ/logs/findings.ndjson"
+if [ -f "$R6C_LEDGER" ]; then
+  R6C_OPEN=$(MANIFEST="$MANIFEST" LEDGER="$R6C_LEDGER" python3 - <<'PY_R6C' 2>/dev/null
+import json, os
+paths = set()
+try:
+    m = json.load(open(os.environ["MANIFEST"], encoding="utf-8"))
+    for s in (m.get("scripts") or []):
+        if isinstance(s, dict) and s.get("path"):
+            p = s["path"]
+            while p.startswith("./"):
+                p = p[2:]
+            paths.add(p)
+except (OSError, ValueError):
+    pass
+latest = {}
+for line in open(os.environ["LEDGER"], encoding="utf-8", errors="replace"):
+    try:
+        r = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(r, dict) and r.get("id") and r.get("status"):
+        latest[r["id"]] = (r["status"], str(r.get("locus") or ""))
+out = []
+for fid, (st, locus) in sorted(latest.items()):
+    if st != "OPEN":
+        continue
+    lf = locus.split(":", 1)[0].strip()
+    while lf.startswith("./"):
+        lf = lf[2:]
+    if lf in paths:
+        out.append("%s (%s)" % (fid, locus))
+print("; ".join(out))
+PY_R6C
+)
+  if [ -n "$R6C_OPEN" ]; then
+    echo "STATUS=RED"
+    echo "FAIL: manifest $REVIEW_ID claims remaining_blocking_count=0, but the findings"
+    echo "      ledger's LATEST state holds OPEN finding(s) on this manifest's own files:"
+    echo "      ${R6C_OPEN}"
+    echo "      The count is not self-certifying — fix and FIXED-file the finding(s), get"
+    echo "      them ACCEPTED via §7b, or report the honest nonzero count."
+    exit 1
+  fi
+fi
+unset R6C_LEDGER R6C_OPEN 2>/dev/null || true
 SUPERSEDES=$(jq -r '.supersedes_review_id // empty' "$MANIFEST")
 if [ -n "$SUPERSEDES" ]; then
   if ! ls "$PROJ"/code-review/reviewed-scripts-*.json 2>/dev/null | xargs grep -lF "\"review_id\": \"$SUPERSEDES\"" >/dev/null 2>&1 \
@@ -322,6 +443,36 @@ else
   echo "STATUS=RED"
   echo "FAIL: code-review-coverage-check.sh not found next to this gate — cannot verify reviewer coverage."
   exit 1
+fi
+
+# ── R6b: fix receipts are necessary, NOT sufficient (DC-03) ───────────────
+# A fix-round manifest lists fixed_finding_ids, but the fixer never verifies
+# itself: closure needs an independent VERIFIED line in the findings ledger.
+# When the ledger's LATEST state for a listed id is still FIXED, surface it as
+# YELLOW — the receipt is real and the bytes are bound (execution may proceed
+# under it), but phase-verify 5.5 is the only closure authority and it will
+# want the VERIFIED lines (real-project eval, ses 2026-08-22).
+LEDGER="$PROJ/logs/findings.ndjson"
+FIXED_IDS=$(jq -r '.fixed_finding_ids[]? // empty' "$MANIFEST" 2>/dev/null || true)
+if [ -n "$FIXED_IDS" ] && [ -f "$LEDGER" ]; then
+  UNVERIFIED=""
+  while IFS= read -r _fid; do
+    [ -n "$_fid" ] || continue
+    _st=$(jq -r --arg id "$_fid" 'select(.id == $id) | .status' "$LEDGER" 2>/dev/null | tail -1 || true)
+    [ "$_st" = "FIXED" ] && UNVERIFIED="${UNVERIFIED}${_fid} "
+  done <<EOF_FIDS
+$FIXED_IDS
+EOF_FIDS
+  if [ -n "$UNVERIFIED" ]; then
+    echo "STATUS=YELLOW"
+    echo "WARN: fix receipt $REVIEW_ID is hash-bound and clean, but the findings ledger's"
+    echo "      latest state for the following fixed_finding_ids is FIXED with no VERIFIED"
+    echo "      line: ${UNVERIFIED}"
+    echo "      DC-03: the fixer never verifies itself — dispatch the independent re-review"
+    echo "      to file VERIFIED lines. This receipt is necessary but not sufficient;"
+    echo "      phase-verify.sh 5.5 is the closure authority."
+    exit 2
+  fi
 fi
 
 echo "STATUS=GREEN"

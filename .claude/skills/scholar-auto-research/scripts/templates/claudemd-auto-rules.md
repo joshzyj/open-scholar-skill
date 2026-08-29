@@ -1,6 +1,6 @@
 # scholar-auto-research Workflow Contract — v1
 
-This block is **auto-managed** by `scholar-auto-research` Phase 0 via `scripts/setup-project-claudemd.sh`. Do not edit content between the BEGIN/END markers — your edits will be overwritten on the next pipeline run. Add your project-specific content OUTSIDE the markers.
+This block is **auto-managed** by `scholar-auto-research` Phase 0 via `__AUTO_RESEARCH_SKILL_DIR__/scripts/setup-project-claudemd.sh`. Do not edit content between the BEGIN/END markers — your edits will be overwritten on the next pipeline run. Add your project-specific content OUTSIDE the markers.
 
 ---
 
@@ -43,8 +43,8 @@ Phase 0 must complete, in order:
 
 1. **Safety scan.** Run `scholar-init` and resolve every `NEEDS_REVIEW` / `HALTED` status in `.claude/safety-status.json` before proceeding. If any file remains unresolved, stop and run `scholar-init review`.
 2. **Run-mode selection.** Set `autonomous` or `human-in-the-loop` mode in `.auto-research/state.json`. The mode persists across sessions.
-3. **Auto-managed CLAUDE.md refresh** (this block — invoked by `bash "${SCHOLAR_SKILL_DIR}/skills/scholar-auto-research/scripts/setup-project-claudemd.sh" "$PROJ"`).
-4. **Verification:** `auto-research-verify.sh 0 "$PROJ"` confirms safety, run mode, and CLAUDE.md marker block are all in place.
+3. **Auto-managed CLAUDE.md refresh** (this block — invoked by `bash "__AUTO_RESEARCH_SKILL_DIR__/scripts/setup-project-claudemd.sh" "$PROJ"`).
+4. **Verification:** `bash "__AUTO_RESEARCH_SKILL_DIR__/scripts/auto-research-verify.sh" 0 "$PROJ"` confirms safety, run mode, and CLAUDE.md marker block are all in place.
 
 Do not begin Phase 1 until Phase 0 verification passes.
 
@@ -65,7 +65,7 @@ Re-asking the operator to set the run mode at every phase is friction. If the mo
 
 scholar-auto-research is self-contained: every verifier gate is vendored under `scripts/gates/` (33+ gates as of v1). Do NOT introduce runtime dependencies on `scholar-skill/scripts/gates/` from inside this skill.
 
-Three citation gates (`verify-citation-metadata.sh`, `verify-rendered-references-against-bib.sh`, `verify-citation-local-library.sh`) are vendored from the plugin layer at `scholar-skill/scripts/gates/`. When those plugin sources update, re-sync the vendored copies — drift can be detected by SHA comparison. The fallback flag `AUTO_RESEARCH_ALLOW_ROOT_GATE_FALLBACK=1` is for legacy debugging only; do not enable it in production runs.
+Three citation gates (`verify-citation-metadata.sh`, `verify-rendered-references-against-bib.sh`, `verify-citation-local-library.sh`) are maintained as vendored copies. Missing local gates fail closed; there is no parent-plugin runtime fallback.
 
 ---
 
@@ -76,7 +76,7 @@ Phase 15 verify, after the `citation/citation-audit.json` JSON-shape validation,
 - **RED** from any gate fails the verify (closes the trust-based loophole where a fabricated `citation-audit.json` declares the right `fabrication_guard: true` flags without actually invoking scholar-citation).
 - **YELLOW** (gate cannot run — network down, no Zotero installed) does NOT contradict the JSON; an unavailable gate is informational, not a counterexample.
 
-The skip-flag `SCHOLAR_AUTO_RESEARCH_SKIP_GATE_RECHECK=1` exists only for fixture tests that exercise the JSON-shape contract in isolation. Do not set it for real verification runs — it disables the structural defense against citation fabrication.
+Phase 15 always reruns the vendored citation gates against the exact canonical `manuscript/manuscript-draft.md` and `citation/references.bib`; there is no production skip flag.
 
 ---
 
@@ -92,22 +92,24 @@ Phase artifacts (`citation-audit.json`, `manuscript-verification.json`, `ethics-
 
 ---
 
-## Codex trigger defaults
+## Portable reviewer evidence
 
-Phases 6 and 14 invoke a codex-trigger gate (cross-model review) that defaults to STRONG (RED if no codex review is dispatched). The fixture suite sets `SCHOLAR_CODEX_DEFAULT=false` to skip this gate; real runs must dispatch the codex agent. Setting the flag in production silently weakens Phase 6 + Phase 14 quality checks.
-
----
-
-## When auditing or editing the skill — read the live plugin path
-
-When auditing scholar-auto-research / open-scholar-skills, always read from the live plugin path:
-
-```
-~/.claude/plugins/marketplaces/scholar-marketplace/plugins/scholar-skill/skills/scholar-auto-research/
-```
-
-This is a symlink to the Drive dev tree (`open-scholar-skills/`). The `cache/` copy is stale. Verify version via the live `package.json`.
+Phases 6, 7, 9, 14, 18, and 20 require review sessions reserved through
+`auto-research-state.sh review-begin` before reviewer output exists. Persist the
+reserved report and RAO trace, then register driver-observed success with
+`review-complete`. Names and task IDs typed into phase JSON are not execution
+evidence. The normal profile is `process_recorded`, not host-authenticated;
+strict mode requires claim-scoped host verification. Claude, Codex, and generic
+hosts use the same evidence lifecycle. A Codex diversity lane is optional and
+only enabled explicitly with `SCHOLAR_CODEX_REVIEW=1`; ambient `PATH` never
+changes phase correctness.
 
 ---
 
-*Auto-generated by `scholar-auto-research` Phase 0 — v1 — 2026-05-25. To bump rule contents: edit `skills/scholar-auto-research/scripts/templates/claudemd-auto-rules.md` and re-run `bash scripts/setup-project-claudemd.sh "$PROJ"` — existing project CLAUDE.md files will be refreshed on next pipeline run, with user content outside the markers preserved verbatim.*
+## When auditing or editing the skill
+
+Read the active `scholar-auto-research` directory that supplied this generated memory block. Do not assume a user-specific marketplace, drive, cache, or home path. If the host exposes a live-plugin link, resolve it and verify `.claude-plugin/plugin.json` before treating it as authoritative.
+
+---
+
+*Auto-generated by `scholar-auto-research` Phase 0 — v1 — 2026-05-25. To bump rule contents: edit `__AUTO_RESEARCH_SKILL_DIR__/scripts/templates/claudemd-auto-rules.md` and re-run `bash "__AUTO_RESEARCH_SKILL_DIR__/scripts/setup-project-claudemd.sh" "$PROJ"` — existing project CLAUDE.md files will be refreshed on next pipeline run, with user content outside the markers preserved verbatim.*

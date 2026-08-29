@@ -1,0 +1,297 @@
+{
+  "_comment": "Restricted-use / DUA-required dataset fingerprints. Used by safety-scan.sh to detect a dataset even when its filename has been renamed. A match requires EITHER (a) a filename token, OR (b) ALL columns in any one column_signatures group present in the file's first (header) line — case-insensitive. Two-column signatures are required (single-column hits like a bare SEQN are too easy to collide). Filename tokens are POSIX-ERE fragments (use [0-9] not \\d for portability); the scanner wraps each token with non-alphanumeric boundaries to prevent substring collisions like 'anes_' matching inside 'nhanes_'.",
+  "_schema_version": "1.0",
+  "datasets": [
+    {
+      "name": "NHANES",
+      "full_name": "National Health and Nutrition Examination Survey",
+      "owner": "CDC / National Center for Health Statistics",
+      "region": "US",
+      "restriction": "Restricted-use File (RDC); public-use files OK but sub-state geo and exact age require DUA",
+      "filename_tokens": ["nhanes"],
+      "column_signatures": [
+        ["SEQN", "RIDAGEYR"],
+        ["SEQN", "RIAGENDR"],
+        ["SEQN", "RIDRETH1"]
+      ]
+    },
+    {
+      "name": "PSID",
+      "full_name": "Panel Study of Income Dynamics",
+      "owner": "University of Michigan ISR",
+      "region": "US",
+      "restriction": "Public-use main file; Geocode and Sensitive Data files require DUA",
+      "filename_tokens": ["psid"],
+      "column_signatures": [
+        ["ER30001", "ER30002"],
+        ["ER34501", "ER34502"],
+        ["ER33801", "ER33802"]
+      ]
+    },
+    {
+      "name": "NLSY79",
+      "full_name": "National Longitudinal Survey of Youth 1979",
+      "owner": "BLS / Ohio State CHRR",
+      "region": "US",
+      "restriction": "Public-use OK; geocoded and detailed health files DUA-restricted",
+      "filename_tokens": ["nlsy79", "nlsy_79", "nls79"],
+      "column_signatures": [
+        ["CASEID_1979", "SAMPLE_RACE_1979"],
+        ["CASEID_1979", "SAMPLE_SEX_1979"]
+      ]
+    },
+    {
+      "name": "NLSY97",
+      "full_name": "National Longitudinal Survey of Youth 1997",
+      "owner": "BLS / Ohio State CHRR",
+      "region": "US",
+      "restriction": "Public-use OK; geocoded files DUA-restricted",
+      "filename_tokens": ["nlsy97", "nlsy_97", "nls97"],
+      "column_signatures": [
+        ["PUBID_1997", "KEY_RACE_ETHNICITY_1997"],
+        ["PUBID_1997", "KEY_SEX_1997"]
+      ]
+    },
+    {
+      "name": "HRS",
+      "full_name": "Health and Retirement Study",
+      "owner": "University of Michigan ISR / NIA",
+      "region": "US",
+      "restriction": "Public-use OK; Restricted Data files (geo, genetic, linkage) DUA-required",
+      "filename_tokens": ["hrs", "rand_hrs", "randhrs"],
+      "column_signatures": [
+        ["HHID", "PN"],
+        ["HHIDPN", "RAHHIDPN"]
+      ]
+    },
+    {
+      "name": "ACS-PUMS",
+      "full_name": "American Community Survey — Public Use Microdata",
+      "owner": "US Census Bureau",
+      "region": "US",
+      "restriction": "PUMS public; Census RDC required for finer geo / linkage",
+      "filename_tokens": ["acs_pums", "acspums", "ss[0-9][0-9]pus"],
+      "column_signatures": [
+        ["SERIALNO", "PUMA"],
+        ["SERIALNO", "PWGTP"]
+      ]
+    },
+    {
+      "name": "Add Health",
+      "full_name": "National Longitudinal Study of Adolescent to Adult Health",
+      "owner": "UNC Carolina Population Center",
+      "region": "US",
+      "restriction": "Public-use is a sub-sample; full Add Health requires DUA + sensitive contracts for biomarker / geo / network data",
+      "filename_tokens": ["addhealth", "add_health", "ahealth"],
+      "column_signatures": [
+        ["AID", "IMONTH"],
+        ["AID", "BIO_SEX"]
+      ]
+    },
+    {
+      "name": "SIPP",
+      "full_name": "Survey of Income and Program Participation",
+      "owner": "US Census Bureau",
+      "region": "US",
+      "restriction": "Public-use OK; SIPP Synthetic Beta and linked admin require RDC / DUA",
+      "filename_tokens": ["sipp"],
+      "column_signatures": [
+        ["SSUID", "PNUM"],
+        ["SSUID", "EPPPNUM"]
+      ]
+    },
+    {
+      "name": "GSS",
+      "full_name": "General Social Survey",
+      "owner": "NORC at the University of Chicago",
+      "region": "US",
+      "restriction": "Public release OK for cross-section; geo-linked and sensitive variables require DUA",
+      "filename_tokens": ["gss", "gss[0-9]{2}", "gss-cumulative"],
+      "column_signatures": [
+        ["VPSU", "VSTRAT"],
+        ["YEAR", "VPSU", "VSTRAT"]
+      ]
+    },
+    {
+      "name": "ANES",
+      "full_name": "American National Election Studies",
+      "owner": "U Michigan / Stanford / NSF",
+      "region": "US",
+      "restriction": "Public release OK; geocoded contextual files DUA-restricted",
+      "filename_tokens": ["anes", "anes[0-9]{4}"],
+      "column_signatures": [
+        ["V200001", "V200002"],
+        ["V161001", "V161002"]
+      ]
+    },
+    {
+      "name": "CPS",
+      "full_name": "Current Population Survey (basic monthly)",
+      "owner": "BLS / Census",
+      "region": "US",
+      "restriction": "Public; CPS-ASEC linked files via RDC",
+      "filename_tokens": ["cps_basic", "cps-basic", "cpsmar", "cps_asec"],
+      "column_signatures": [
+        ["HRHHID", "PEMLR"],
+        ["HRHHID", "PEMARITL"]
+      ]
+    },
+    {
+      "name": "UK Biobank",
+      "full_name": "UK Biobank",
+      "owner": "UK Biobank Ltd",
+      "region": "UK",
+      "restriction": "All UK Biobank data DUA-restricted (Application + Material Transfer Agreement required)",
+      "filename_tokens": ["ukb", "uk_biobank", "ukbiobank", "ukb[0-9]+", "ukb_app"],
+      "column_signatures": [
+        ["eid", "21000-0.0"],
+        ["eid", "31-0.0"],
+        ["eid", "34-0.0"]
+      ]
+    },
+    {
+      "name": "Understanding Society",
+      "full_name": "Understanding Society / British Household Panel Survey",
+      "owner": "ISER, University of Essex",
+      "region": "UK",
+      "restriction": "Public; Special Licence and Secure Access tiers require DUA",
+      "filename_tokens": ["ukhls", "bhps", "understanding_society"],
+      "column_signatures": [
+        ["pidp", "hidp"],
+        ["pidp", "wave"]
+      ]
+    },
+    {
+      "name": "ALSPAC",
+      "full_name": "Avon Longitudinal Study of Parents and Children",
+      "owner": "University of Bristol",
+      "region": "UK",
+      "restriction": "All ALSPAC data DUA-restricted",
+      "filename_tokens": ["alspac"],
+      "column_signatures": [
+        ["cidB", "qlet"],
+        ["cidB2492", "qlet"]
+      ]
+    },
+    {
+      "name": "MCS",
+      "full_name": "Millennium Cohort Study",
+      "owner": "UCL Centre for Longitudinal Studies",
+      "region": "UK",
+      "restriction": "End-User Licence + Special Licence / Secure tiers",
+      "filename_tokens": ["mcs", "mcs[0-9]+"],
+      "column_signatures": [
+        ["MCSID", "ACNUM00"],
+        ["MCSID", "PNUM00"]
+      ]
+    },
+    {
+      "name": "GSOEP",
+      "full_name": "German Socio-Economic Panel",
+      "owner": "DIW Berlin / SOEP",
+      "region": "Europe",
+      "restriction": "All SOEP DUA-restricted (Data Distribution Contract)",
+      "filename_tokens": ["soep", "gsoep", "g_soep"],
+      "column_signatures": [
+        ["pid", "hid", "syear"],
+        ["pid", "syear"]
+      ]
+    },
+    {
+      "name": "SHARE",
+      "full_name": "Survey of Health, Ageing and Retirement in Europe",
+      "owner": "MEA / SHARE-ERIC",
+      "region": "Europe",
+      "restriction": "All SHARE DUA-restricted (Statement of Confidentiality required)",
+      "filename_tokens": ["share", "share-w[0-9]", "sharew[0-9]"],
+      "column_signatures": [
+        ["mergeid", "country"],
+        ["mergeid", "wave"]
+      ]
+    },
+    {
+      "name": "EU-SILC",
+      "full_name": "European Union Statistics on Income and Living Conditions",
+      "owner": "Eurostat",
+      "region": "Europe",
+      "restriction": "All EU-SILC microdata DUA-restricted (Eurostat research entity contract)",
+      "filename_tokens": ["eu_silc", "eusilc", "silc"],
+      "column_signatures": [
+        ["HB030", "RB030"],
+        ["DB030", "RB030"]
+      ]
+    },
+    {
+      "name": "ESS",
+      "full_name": "European Social Survey",
+      "owner": "ESS-ERIC",
+      "region": "Europe",
+      "restriction": "Public-use available after free registration; not strictly DUA but registration required",
+      "filename_tokens": ["ess[0-9]+", "ess_round", "ess_cumulative"],
+      "column_signatures": [
+        ["idno", "essround"],
+        ["idno", "cntry"]
+      ]
+    },
+    {
+      "name": "CFPS",
+      "full_name": "China Family Panel Studies",
+      "owner": "Peking University ISSS",
+      "region": "Asia",
+      "restriction": "Public registration; sensitive linked files DUA-restricted",
+      "filename_tokens": ["cfps"],
+      "column_signatures": [
+        ["pid", "fid12"],
+        ["pid", "cyear"]
+      ]
+    },
+    {
+      "name": "CHARLS",
+      "full_name": "China Health and Retirement Longitudinal Study",
+      "owner": "Peking University NSD",
+      "region": "Asia",
+      "restriction": "Public registration; biomarker / linkage DUA-restricted",
+      "filename_tokens": ["charls"],
+      "column_signatures": [
+        ["ID", "householdID"],
+        ["ID", "communityID"]
+      ]
+    },
+    {
+      "name": "IHDS",
+      "full_name": "India Human Development Survey",
+      "owner": "NCAER / University of Maryland",
+      "region": "Asia",
+      "restriction": "Public via ICPSR; linkage DUA-restricted",
+      "filename_tokens": ["ihds"],
+      "column_signatures": [
+        ["IDPSU", "IDHH"],
+        ["PERSONID", "IDHH"]
+      ]
+    },
+    {
+      "name": "KLOSA",
+      "full_name": "Korean Longitudinal Study of Aging",
+      "owner": "Korea Employment Information Service",
+      "region": "Asia",
+      "restriction": "Public registration; linkage DUA-restricted",
+      "filename_tokens": ["klosa"],
+      "column_signatures": [
+        ["hhid", "pid"],
+        ["hhidpn", "wave"]
+      ]
+    },
+    {
+      "name": "JGSS",
+      "full_name": "Japanese General Social Survey",
+      "owner": "Osaka University of Commerce",
+      "region": "Asia",
+      "restriction": "Public registration via SSJ Data Archive; linkage DUA-restricted",
+      "filename_tokens": ["jgss"],
+      "column_signatures": [
+        ["SSEX", "SAGE"],
+        ["XJSEX", "XJAGE"]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,315 @@
+{
+  "paragraph_purpose_map": [
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 1",
+      "purpose": "Advance the abstract argument",
+      "section": "abstract",
+      "source_roles": [
+        "theory",
+        "evidence"
+      ]
+    },
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 2",
+      "purpose": "Advance the introduction argument",
+      "section": "introduction",
+      "source_roles": [
+        "theory",
+        "evidence"
+      ]
+    },
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 3",
+      "purpose": "Advance the background argument",
+      "section": "background",
+      "source_roles": [
+        "theory",
+        "evidence"
+      ]
+    },
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 4",
+      "purpose": "Advance the data and methods argument",
+      "section": "data and methods",
+      "source_roles": [
+        "theory",
+        "evidence"
+      ]
+    },
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [
+        "tables/regression-main.html"
+      ],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 5",
+      "purpose": "Advance the results argument",
+      "section": "results",
+      "source_roles": [
+        "evidence"
+      ]
+    },
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [
+        "tables/regression-main.html"
+      ],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 6",
+      "purpose": "Advance the discussion argument",
+      "section": "discussion",
+      "source_roles": [
+        "theory",
+        "evidence"
+      ]
+    },
+    {
+      "claim": "Keep the empirical claim bounded and journal-facing",
+      "evidence_artifacts": [],
+      "mechanism_link": "perceived educational feasibility",
+      "paragraph_id": "paragraph 7",
+      "purpose": "Advance the conclusion argument",
+      "section": "conclusion",
+      "source_roles": [
+        "theory",
+        "evidence"
+      ]
+    }
+  ],
+  "results_interpretation_plan": [
+    {
+      "artifact_path": "tables/regression-main.html",
+      "interpretive_claim": "Model 1 is the headline empirical anchor for the negative association.",
+      "limitation_language": "The observational design does not rule out unobserved concurrent shocks.",
+      "mechanism_link": "The estimate is interpreted through perceived educational feasibility.",
+      "uncertainty_language": "Report the standard error, p-value, and uneven robustness without overstating certainty."
+    },
+    {
+      "artifact_path": "figures/event-study.png",
+      "interpretive_claim": "The figure provides diagnostic timing context rather than standalone proof.",
+      "limitation_language": "Sparse event timing limits strong causal interpretation.",
+      "mechanism_link": "The timing pattern is linked to household adjustment after job loss.",
+      "uncertainty_language": "Describe the diagnostic as supportive but not decisive evidence."
+    }
+  ],
+  "revision_workflow": {
+    "draft_after_plan": true,
+    "outline_completed": true,
+    "self_critique_required": true
+  },
+  "section_briefs": {
+    "abstract": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "tables/regression-main.html"
+      ],
+      "section_purpose": "Develop the abstract section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "evidence",
+        "context"
+      ]
+    },
+    "background": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "literature/references.bib"
+      ],
+      "section_purpose": "Develop the background section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "theory",
+        "mechanism",
+        "rival"
+      ]
+    },
+    "conclusion": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "tables/regression-main.html"
+      ],
+      "section_purpose": "Develop the conclusion section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "evidence",
+        "context"
+      ]
+    },
+    "data and methods": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "tables/regression-main.html"
+      ],
+      "section_purpose": "Develop the data and methods section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "evidence",
+        "context"
+      ]
+    },
+    "discussion": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "tables/regression-main.html"
+      ],
+      "section_purpose": "Develop the discussion section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "evidence",
+        "context"
+      ]
+    },
+    "introduction": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "literature/references.bib"
+      ],
+      "section_purpose": "Develop the introduction section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "evidence",
+        "context"
+      ]
+    },
+    "results": {
+      "forbidden_moves": [
+        "causal overclaim",
+        "workflow language",
+        "registry display"
+      ],
+      "key_claim": "Parental job loss is associated with educational expectations under bounded observational interpretation.",
+      "required_evidence": [
+        "tables/regression-main.html"
+      ],
+      "section_purpose": "Develop the results section around the approved blueprint and journal structure.",
+      "source_roles": [
+        "evidence",
+        "context"
+      ]
+    }
+  },
+  "source_phase": "13",
+  "source_use_plan": [
+    {
+      "argument_role": "theory",
+      "citation_key": "work01",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "introduction opening section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "mechanism",
+      "citation_key": "work02",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "background theory section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "rival",
+      "citation_key": "work03",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "background rival section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "alternative",
+      "citation_key": "work04",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "data and methods section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "method",
+      "citation_key": "work05",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "results evidence section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "context",
+      "citation_key": "work06",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "discussion limitations section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "theory",
+      "citation_key": "work07",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "introduction opening section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "mechanism",
+      "citation_key": "work08",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "background theory section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "rival",
+      "citation_key": "work09",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "background rival section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "alternative",
+      "citation_key": "work10",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "data and methods section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "method",
+      "citation_key": "work11",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "results evidence section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    },
+    {
+      "argument_role": "context",
+      "citation_key": "work12",
+      "claim_supported": "This source supports the family instability argument or an alternative interpretation.",
+      "target_section": "discussion limitations section",
+      "why_necessary": "It anchors a specific theoretical, empirical, or rival claim."
+    }
+  ],
+  "verdict": "PASS"
+}

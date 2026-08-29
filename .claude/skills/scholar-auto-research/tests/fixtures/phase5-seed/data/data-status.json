@@ -1,0 +1,35 @@
+{
+  "data_status": "existing-data",
+  "access_status": "available",
+  "irb_status": "exempt",
+  "source_type": "public",
+  "files": [
+    {
+      "path": "data/raw/panel.csv",
+      "source": "public household panel fixture",
+      "provenance": "copied into project raw data after Phase 0 safety scan",
+      "safety_status": "PASS"
+    }
+  ],
+  "dataset_fit": {
+    "verdict": "PASS",
+    "unit_of_analysis": "adolescent-wave",
+    "population": "low-income households with adolescent respondents",
+    "time_period": "repeated survey waves surrounding parental job loss",
+    "key_variables_available": true,
+    "sample_size_feasibility": "sufficient for primary fixed-effects model and attrition robustness in the fixture plan",
+    "access_timeline": "available immediately as public-use data"
+  },
+  "dataset_design_review": {
+    "reviewed": true,
+    "panel_structure_reviewed": true,
+    "weights_reviewed": true,
+    "clustering_reviewed": true,
+    "sampling_frame_reviewed": true,
+    "analytic_decision": "Use adolescent-wave panel structure with household fixed effects and report weights as a robustness design feature.",
+    "accepted_limitations": [
+      "The public-use fixture does not reproduce the full production survey design documentation."
+    ],
+    "limitation_rationale": "The fixture records the panel and weighting decision while limiting the example to reproducible public-use test data."
+  }
+}

@@ -1,0 +1,333 @@
+{
+  "claim_constraints": {
+    "allowed_claim_verbs": [
+      "is associated with",
+      "is linked to",
+      "is directionally consistent with"
+    ],
+    "forbidden_claim_verbs": [
+      "prove",
+      "causes",
+      "guarantees"
+    ],
+    "required_disclosures": [
+      "observational design",
+      "weaker robustness estimate"
+    ]
+  },
+  "critical_count": 0,
+  "decision": "PROCEED_TO_RUNTIME_SANITY",
+  "degraded": false,
+  "fix_status": {
+    "all_blocking_fixed": true,
+    "fix_log": "review/post-execution-fix-log.json",
+    "required": false
+  },
+  "phase7_constraint_carryforward": {
+    "checked_hypothesis_ids": [
+      "H1"
+    ],
+    "claim_constraints_reflect_phase7": true,
+    "evidence": "Phase 9 carried forward Phase 7 null-falsification and reporting-depth constraints into the reviewed spec classifications and claim constraints.",
+    "null_falsification_checked": true,
+    "reporting_depth_checked": true
+  },
+  "phase8_status": {
+    "errors_empty": true,
+    "ready_for_phase_9": true,
+    "verdict": "PASS"
+  },
+  "raw_output_verification": {
+    "checked_figures": [
+      "figures/event-study.png"
+    ],
+    "checked_raw_tables": [
+      "tables/results-registry.csv",
+      "tables/model-results.csv"
+    ],
+    "critical_count": 0,
+    "registry_consistency": true,
+    "report_path": "review/stage1-raw-output-verification.md",
+    "stage": "stage1_no_manuscript",
+    "verdict": "CLEAN",
+    "visual_figure_inspection": true
+  },
+  "ready_for_phase_10": true,
+  "result_interpretation": {
+    "claim_constraints": [
+      "Avoid proof language",
+      "Describe robustness imprecision"
+    ],
+    "direction_summary": "Primary and robustness estimates are negative.",
+    "strength_summary": "Primary estimate is statistically precise; robustness is weaker.",
+    "technically_valid": true,
+    "uncertainty_summary": "Confidence intervals show uncertainty in robustness specification."
+  },
+  "review_engine": {
+    "auto_research_contract": "phase_9",
+    "input_artifacts": [
+      "analysis/execution-report.json",
+      "tables/results-registry.csv",
+      "figures/figure-registry.csv",
+      "analysis/spec-registry.csv"
+    ],
+    "invoked_at_utc": "2026-04-29T11:00:00Z",
+    "mode": "stage1_no_manuscript",
+    "output_artifacts": [
+      "review/post-execution-review.json",
+      "review/post-execution-review.md"
+    ],
+    "read_live_outputs_pre_lock": true,
+    "skill": "scholar-verify",
+    "task_invocation_id": "phase9-verify-001"
+  },
+  "review_evidence": {
+    "attempt_epoch": 0,
+    "profile": "normal",
+    "rounds": {
+      "post_execution_panel": {
+        "achieved_assurance": "process_recorded",
+        "session_id": "s-fb178f9d009a9553694f53f9"
+      }
+    }
+  },
+  "reviewed_figures": [
+    {
+      "caption_or_registry_match": "Rendered event-study diagnostic matches the figure registry description.",
+      "figure_id": "F1",
+      "interpretation_constraint": "Use as diagnostic figure, not standalone proof.",
+      "review_verdict": "PASS",
+      "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460",
+      "source_path": "figures/event-study.png",
+      "visual_inspection": true
+    }
+  ],
+  "reviewed_specs": [
+    {
+      "allowed_claim_verbs": [
+        "is associated with",
+        "is linked to"
+      ],
+      "ci_high": -0.042,
+      "ci_low": -0.198,
+      "estimate": -0.12,
+      "interpretation_constraint": "Interpret as within-household association under the stated identification assumptions.",
+      "n": 1200,
+      "observed_direction": "negative",
+      "p_value": 0.003,
+      "planned_direction": "negative",
+      "result_status": "completed",
+      "review_verdict": "PASS",
+      "sample_id": "analytic-sample",
+      "spec_id": "S1",
+      "std_error": 0.04,
+      "substantive_classification": "expected_direction",
+      "technical_validity": true
+    },
+    {
+      "allowed_claim_verbs": [
+        "is directionally consistent with",
+        "is imprecisely estimated"
+      ],
+      "ci_high": 0.018,
+      "ci_low": -0.178,
+      "estimate": -0.08,
+      "interpretation_constraint": "Describe robustness as directionally similar but imprecise.",
+      "n": 1200,
+      "observed_direction": "negative",
+      "p_value": 0.11,
+      "planned_direction": "negative",
+      "result_status": "completed",
+      "review_verdict": "PASS_WITH_INTERPRETATION_CONSTRAINT",
+      "sample_id": "analytic-sample",
+      "spec_id": "S2",
+      "std_error": 0.05,
+      "substantive_classification": "weak",
+      "technical_validity": true
+    },
+    {
+      "allowed_claim_verbs": [
+        "is associated with",
+        "is robust to attrition weighting"
+      ],
+      "ci_high": -0.002,
+      "ci_low": -0.178,
+      "estimate": -0.09,
+      "interpretation_constraint": "Describe attrition-weighted robustness as supportive but secondary.",
+      "n": 1200,
+      "observed_direction": "negative",
+      "p_value": 0.046,
+      "planned_direction": "negative",
+      "result_status": "completed",
+      "review_verdict": "PASS",
+      "sample_id": "analytic-sample",
+      "spec_id": "S3",
+      "std_error": 0.045,
+      "substantive_classification": "expected_direction",
+      "technical_validity": true
+    }
+  ],
+  "reviewer_provenance": [
+    {
+      "agent_name": "verify-numerics",
+      "dispatched_at_utc": "2026-04-29T10:45:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/statistical_results.md",
+      "reviewer_id": "X1",
+      "role": "statistical_results",
+      "task_invocation_id": "d-5e8a54fe55961a62e796ea74"
+    },
+    {
+      "agent_name": "peer-reviewer-quant",
+      "dispatched_at_utc": "2026-04-29T10:45:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/robustness_consistency.md",
+      "reviewer_id": "X2",
+      "role": "robustness_consistency",
+      "task_invocation_id": "d-c24baad5cbc4fd7e3d757546"
+    },
+    {
+      "agent_name": "verify-completeness",
+      "dispatched_at_utc": "2026-04-29T10:45:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/sample_data_integrity.md",
+      "reviewer_id": "X3",
+      "role": "sample_data_integrity",
+      "task_invocation_id": "d-1ec64257ee9b52bb56ec2f5e"
+    },
+    {
+      "agent_name": "verify-logic",
+      "dispatched_at_utc": "2026-04-29T10:45:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/interpretation_claims.md",
+      "reviewer_id": "X4",
+      "role": "interpretation_claims",
+      "task_invocation_id": "d-e81f0a462ba4f07809ad3690"
+    }
+  ],
+  "reviewers": [
+    {
+      "agent_type": "independent_codex_agent",
+      "findings": [],
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/statistical_results.md",
+      "reviewed_figures": [
+        "F1"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewer_id": "X1",
+      "role": "statistical_results",
+      "task_invocation_id": "d-5e8a54fe55961a62e796ea74",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "independent_codex_agent",
+      "findings": [],
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/robustness_consistency.md",
+      "reviewed_figures": [
+        "F1"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewer_id": "X2",
+      "role": "robustness_consistency",
+      "task_invocation_id": "d-c24baad5cbc4fd7e3d757546",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "independent_codex_agent",
+      "findings": [],
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/sample_data_integrity.md",
+      "reviewed_figures": [
+        "F1"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewer_id": "X3",
+      "role": "sample_data_integrity",
+      "task_invocation_id": "d-1ec64257ee9b52bb56ec2f5e",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "independent_codex_agent",
+      "findings": [],
+      "report_path": "review-evidence/phase-09/s-fb178f9d009a9553694f53f9/reports/interpretation_claims.md",
+      "reviewed_figures": [
+        "F1"
+      ],
+      "reviewed_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "reviewer_id": "X4",
+      "role": "interpretation_claims",
+      "task_invocation_id": "d-e81f0a462ba4f07809ad3690",
+      "verdict": "PASS"
+    }
+  ],
+  "robustness_assessment": {
+    "conflicts": [
+      "S2 is weaker than S1"
+    ],
+    "interpretation_implications": [
+      "Report the primary estimate as stronger than robustness evidence"
+    ],
+    "verdict": "PASS_WITH_CONFLICTS_DISCLOSED"
+  },
+  "robustness_matrix": [
+    {
+      "adjudication": "WEAKENS",
+      "comparison_spec_id": "S2",
+      "conflict_type": "weaker_precision",
+      "manuscript_instruction": "State that the robustness estimate is directionally similar but less precise.",
+      "primary_spec_id": "S1",
+      "severity": "moderate"
+    },
+    {
+      "adjudication": "SUPPORTS",
+      "comparison_spec_id": "S3",
+      "conflict_type": "attrition_weighted_support",
+      "manuscript_instruction": "State that the attrition-weighted robustness estimate remains negative.",
+      "primary_spec_id": "S1",
+      "severity": "minor"
+    }
+  ],
+  "route_back_phase": null,
+  "sample_integrity": {
+    "analytic_n": 1200,
+    "cluster_or_group_count": 240,
+    "exclusion_count": 300,
+    "initial_n": 1500,
+    "minimum_cell_count": 60,
+    "missingness_checked": true,
+    "verdict": "PASS",
+    "weights_status": "not required for fixture"
+  },
+  "source_hashes": {
+    "analysis_premortem": "8acb532d3a0c685c3e2ca4f0f88f79df3fe3f2e9ef0e0c55101a65e846a71aaa",
+    "execution_report": "db3a565ee053b4e9b90cd7ccde7da09aa919df5aebe04e99aea504b705eda421",
+    "figure_registry": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+    "results_registry": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+    "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8"
+  },
+  "unexpected_results": [
+    {
+      "action": "carry_forward_with_constraints",
+      "classification": "weak",
+      "manuscript_instruction": "Do not claim uniformly strong robustness.",
+      "spec_id": "S2"
+    }
+  ],
+  "unresolved_blocking_count": 0,
+  "verdict": "PASS"
+}

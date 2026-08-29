@@ -1,0 +1,50 @@
+{
+  "verdict": "PASS",
+  "target_source": "inferred",
+  "selected_rq_id": "RQ1",
+  "primary_target": "Journal of Marriage and Family",
+  "journal_family": "family sociology",
+  "paper_type": "research note",
+  "journal_profile_resolution": {
+    "requested_journal": "Journal of Marriage and Family",
+    "resolved_profile_name": "Journal of Marriage and Family",
+    "profile_origin": "built_in",
+    "profile_source_engine": "scholar-journal",
+    "source_strategy": "built_in_catalog",
+    "web_lookup_attempted": false,
+    "fallback_used": false,
+    "fallback_reason": "",
+    "journal_structure": {
+      "profile_source": "scholar-journal:jmf",
+      "section_sequence": ["Abstract", "Introduction", "Background", "Data and Methods", "Results", "Discussion", "Conclusion", "References", "Tables", "Figures"],
+      "results_before_methods": false,
+      "theory_presentation": "background_section",
+      "methods_section_label": "Data and Methods",
+      "discussion_conclusion_policy": "split_required",
+      "supplement_policy": "journal_optional_appendix"
+    },
+    "display_architecture": {
+      "table_placement_policy": "end_matter_after_references",
+      "figure_placement_policy": "separate_files_after_tables",
+      "descriptive_table_requirement": "journal_optional",
+      "editable_text_tables": true,
+      "image_tables_forbidden": true,
+      "main_text_display_cap": null,
+      "main_text_table_cap": null,
+      "main_text_figure_cap": null,
+      "supplement_label_prefix": "Appendix",
+      "panel_label_style": "A_B_C",
+      "table_rendering_mode": "editable_text_end_matter",
+      "figure_rendering_mode": "separate_figure_files",
+      "table_title_position": "above_table",
+      "table_notes_policy": "below_table_notes",
+      "display_callout_style": "numbered_tables_and_figures"
+    }
+  },
+  "candidates": [
+    {"rq_id": "RQ1", "primary_target": "Journal of Marriage and Family", "fit_score": 8, "fit_dimensions": {"audience": "strong", "theory": "strong", "method": "adequate", "contribution": "strong"}, "desk_reject_risks": ["novelty must be stated precisely"], "recommended": true},
+    {"rq_id": "RQ2", "primary_target": "Journal of Marriage and Family", "fit_score": 7, "fit_dimensions": {"audience": "adequate", "theory": "adequate", "method": "adequate", "contribution": "adequate"}, "desk_reject_risks": ["measurement may be indirect"], "recommended": false},
+    {"rq_id": "RQ3", "primary_target": "Journal of Marriage and Family", "fit_score": 7, "fit_dimensions": {"audience": "adequate", "theory": "strong", "method": "adequate", "contribution": "adequate"}, "desk_reject_risks": ["mediation evidence may be weak"], "recommended": false}
+  ],
+  "ready_for_phase_2": true
+}

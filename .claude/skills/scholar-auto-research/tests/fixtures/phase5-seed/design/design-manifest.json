@@ -1,0 +1,99 @@
+{
+  "causal_engine": {
+    "input_artifacts": [
+      "design/identification-strategy.json",
+      "design/model-specs.json"
+    ],
+    "invoked": true,
+    "invoked_at_utc": "2026-04-28T10:15:00Z",
+    "mode": "fixed_effects_event_time_audit",
+    "output_artifacts": [
+      "design/identification-strategy.json",
+      "design/design-manifest.json"
+    ],
+    "required": true,
+    "skill": "scholar-causal",
+    "task_invocation_id": "phase3-causal-001"
+  },
+  "claim_continuity": {
+    "claim_strength": "associational",
+    "hypotheses_carried_forward": true,
+    "limitations_carried_forward": true,
+    "manuscript_claim_boundary": "The manuscript may report bounded observational associations but must not state that parental job loss causes expectation change.",
+    "mechanisms_carried_forward": true,
+    "robustness_carried_forward": true
+  },
+  "claim_strength": "associational",
+  "design_engine": {
+    "input_artifacts": [
+      "idea/research-question.json",
+      "idea/journal-fit.json",
+      "literature/lit-theory.md",
+      "literature/literature-coverage-matrix.json"
+    ],
+    "invoked_at_utc": "2026-04-28T10:00:00Z",
+    "mode": "design_blueprint",
+    "output_artifacts": [
+      "design/design-blueprint.md",
+      "design/identification-strategy.json",
+      "design/model-specs.json"
+    ],
+    "skill": "scholar-design",
+    "task_invocation_id": "phase3-design-001"
+  },
+  "limitation_scope_matrix": [
+    {
+      "affected_claim": "The headline result cannot be written as a causal effect of job loss.",
+      "limitation": "Unmeasured time-varying shocks may coincide with parental job loss and adolescent planning.",
+      "scope_language": "The manuscript should describe estimates as observational associations under fixed-effects assumptions."
+    },
+    {
+      "affected_claim": "The discussion should not claim that the feasibility mechanism is directly proven.",
+      "limitation": "Educational expectations may not capture every household conversation or support mechanism.",
+      "scope_language": "Mechanism language should be framed as theoretically motivated interpretation rather than direct measurement."
+    }
+  ],
+  "mechanism_result_matrix": [
+    {
+      "expected_pattern": "A negative coefficient for parental job loss is expected if the feasibility mechanism is supported.",
+      "manuscript_implication": "Results should connect negative estimates to feasibility beliefs without claiming causal proof.",
+      "mechanism": "Income shock reduces perceived educational feasibility for adolescents.",
+      "model_or_spec": "Primary household fixed effects model M1 with parental job loss as the focal predictor."
+    },
+    {
+      "expected_pattern": "A stable pre-period and negative post-shock pattern would support a cautious timing interpretation.",
+      "manuscript_implication": "Discussion should describe stress-process interpretation as plausible but not directly observed.",
+      "mechanism": "Family stress changes planning routines and perceived support after job loss.",
+      "model_or_spec": "Event-study pretrend robustness specification checks timing around the observed employment shock."
+    }
+  ],
+  "method_specialist_engines": [],
+  "output_hashes": {
+    "design_blueprint": "59c76dfe56b34f982ccaa0c2b29ba8c4f1956f676316f3c345cec559b7940898",
+    "identification_strategy": "201fa9c250f2758147e89c563d854704c4d83baa4eba5ba280a0956fe62b6046",
+    "model_specs": "cec2bb5ee6cef7a301859ea117ce0919492a51d8c58f916177eb2875cdb890d2"
+  },
+  "ready_for_phase_4": true,
+  "robustness_claim_matrix": [
+    {
+      "claim_implication": "Can strengthen timing credibility if pretrends are weak and post-shock estimates are negative.",
+      "robustness_check": "event-study pretrend check",
+      "weaken_or_bound_rule": "If pretrends are visible or estimates are imprecise, bound the claim to an observed association."
+    },
+    {
+      "claim_implication": "Can assess whether attrition after economic shocks changes the estimated association.",
+      "robustness_check": "inverse probability attrition weights",
+      "weaken_or_bound_rule": "If weighted estimates attenuate, report robustness as partial and narrow manuscript claims."
+    }
+  ],
+  "source_hashes": {
+    "journal_fit": "b4d7e0edb65b9f53e9db6e9bb294235d86adf9a4231d55fa6c09a3d9ce2b7228",
+    "lit_theory": "d2c64d598935ed0619639824fa24462834a3c983ff89d203a69d271cf665d763",
+    "lit_theory_manifest": "bab23a04357fb178b881df5c1176044e1dca3141262f5f66561384a2a0f9ce73",
+    "literature_coverage_matrix": "f27ba65465cf93cdd827e63148a38497b382bd7f286ccb0428b8d4dc010259a7",
+    "research_question": "312b76e06c768ab965b56d003d430fc41d42a5ba6f5504f5e33307e125a851e5"
+  },
+  "source_phase": "3",
+  "target_journal": "Journal of Marriage and Family",
+  "verdict": "PASS"
+}

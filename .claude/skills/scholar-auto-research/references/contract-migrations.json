@@ -1,0 +1,32 @@
+{
+  "schema_version": "scholar-auto-research-contract-migrations/v1",
+  "migrations": [
+    {
+      "id": "f09-portable-review-evidence-v1",
+      "from_contract_sha256": "c73cabcadc74bd09a29df2ccef4473349c02eded6d74e82fc8a756999f90db70",
+      "from_state_schema": "1.2.0",
+      "to_contract_sha256": "beb6125aa0b17e6505f99cc8950dc0a87a355f6ab5f886ef7b3f77b4702028f4",
+      "to_state_schema": "1.3.0",
+      "invalidate_from_phase": 13,
+      "invalidate_review_evidence": true
+    },
+    {
+      "id": "f09-review-evidence-closure-v2",
+      "from_contract_sha256": "7293db09192e8dae5eeda2f6fe49d3354f51c7e52dcf37d569e12d41a094d994",
+      "from_state_schema": "1.3.0",
+      "to_contract_sha256": "beb6125aa0b17e6505f99cc8950dc0a87a355f6ab5f886ef7b3f77b4702028f4",
+      "to_state_schema": "1.3.0",
+      "invalidate_from_phase": 13,
+      "invalidate_review_evidence": true
+    },
+    {
+      "id": "f20-phase13-locked-claims-v2",
+      "from_contract_sha256": "fc650fe7b9d5c675c24c99174927d0fb7aac16ed392f350a773c5c726f12cf72",
+      "from_state_schema": "1.3.0",
+      "to_contract_sha256": "beb6125aa0b17e6505f99cc8950dc0a87a355f6ab5f886ef7b3f77b4702028f4",
+      "to_state_schema": "1.3.0",
+      "invalidate_from_phase": 13,
+      "invalidate_review_evidence": false
+    }
+  ]
+}

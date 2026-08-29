@@ -1,0 +1,282 @@
+{
+  "verdict": "PASS",
+  "degraded": false,
+  "ready_for_phase_9": true,
+  "execution_engine": {
+    "skill": "scholar-analyze",
+    "mode": "execute_analysis",
+    "auto_research_contract": "phase_8",
+    "phase7_handoff_only": true,
+    "task_invocation_id": "phase8-execution-001",
+    "invoked_at_utc": "2026-04-29T10:00:00Z",
+    "input_artifacts": [
+      "analysis/analysis-plan.md",
+      "analysis/spec-registry.csv",
+      "analysis/scripts-inventory.json",
+      "review/analysis-premortem.json"
+    ],
+    "output_artifacts": [
+      "analysis/execution-report.json",
+      "tables/results-registry.csv",
+      "figures/figure-registry.csv"
+    ]
+  },
+  "run_context": {
+    "started_at_utc": "2026-04-29T10:00:00Z",
+    "completed_at_utc": "2026-04-29T10:00:09Z",
+    "working_directory": "/private/var/folders/ln/bll8l5f56fl8r6ynxf2_v_7w0000gn/T/scholar-auto-research-fixture.eb0e4bfb1b5b79d5/execution-project",
+    "seed": "not-used-fixture",
+    "environment": "fixture shell with Rscript-compatible command records",
+    "session_info": "fixture execution report for auto-research validation"
+  },
+  "source_hashes": {
+    "analysis_plan": "29cb8f79c7d84821e0f09a96cd4154e2c7ad79f59cb03232790b9d41ad0c86af",
+    "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8",
+    "scripts_inventory": "4d3b3543015b6a005b83b69c35b445d36ca448a1b08c36334d4200b147b59514",
+    "analysis_premortem": "8acb532d3a0c685c3e2ca4f0f88f79df3fe3f2e9ef0e0c55101a65e846a71aaa",
+    "analysis_premortem_fix_log": "e916f4e187f7be882be598abceedc74cb48bcc402c006213b2f9446204209745"
+  },
+  "phase7_source_hash_check": {
+    "checked": true,
+    "status": "PASS",
+    "checked_sources": ["analysis_plan", "spec_registry", "scripts_inventory", "pre_execution_review", "pre_execution_fix_log", "pre_execution_rereview"],
+    "mismatches": []
+  },
+  "phase7_go": {
+    "decision": "GO",
+    "ready_for_phase_8": true,
+    "route_back_phase": null
+  },
+  "command_trace": [
+    {
+      "path": "analysis/scripts/01_load_data.R",
+      "command": "Rscript analysis/scripts/01_load_data.R",
+      "cwd": ".",
+      "started_at": "2026-04-29T10:00:00Z",
+      "ended_at": "2026-04-29T10:00:02Z",
+      "exit_code": 0,
+      "stdout_log": "logs/01_load_data.stdout.log",
+      "stderr_log": "logs/01_load_data.stderr.log"
+    },
+    {
+      "path": "analysis/scripts/02_build_sample.R",
+      "command": "Rscript analysis/scripts/02_build_sample.R",
+      "cwd": ".",
+      "started_at": "2026-04-29T10:00:03Z",
+      "ended_at": "2026-04-29T10:00:04Z",
+      "exit_code": 0,
+      "stdout_log": "logs/02_build_sample.stdout.log",
+      "stderr_log": "logs/02_build_sample.stderr.log"
+    },
+    {
+      "path": "analysis/scripts/03_construct_variables.R",
+      "command": "Rscript analysis/scripts/03_construct_variables.R",
+      "cwd": ".",
+      "started_at": "2026-04-29T10:00:05Z",
+      "ended_at": "2026-04-29T10:00:06Z",
+      "exit_code": 0,
+      "stdout_log": "logs/03_construct_variables.stdout.log",
+      "stderr_log": "logs/03_construct_variables.stderr.log"
+    },
+    {
+      "path": "analysis/scripts/04_plan_models.R",
+      "command": "Rscript analysis/scripts/04_plan_models.R",
+      "cwd": ".",
+      "started_at": "2026-04-29T10:00:07Z",
+      "ended_at": "2026-04-29T10:00:09Z",
+      "exit_code": 0,
+      "stdout_log": "logs/04_plan_models.stdout.log",
+      "stderr_log": "logs/04_plan_models.stderr.log"
+    }
+  ],
+  "executed_scripts": [
+    {
+      "path": "analysis/scripts/01_load_data.R",
+      "command": "Rscript analysis/scripts/01_load_data.R",
+      "script_hash": "77b4514b1c609dc24ce8a56dbef79eb755cda4092ee36f6702cf108e35f8e4e5",
+      "exit_code": 0,
+      "status": "success",
+      "started_at": "2026-04-29T10:00:00Z",
+      "ended_at": "2026-04-29T10:00:02Z",
+      "outputs": ["data/interim/panel-loaded.rds"],
+      "output_hashes": {
+        "data/interim/panel-loaded.rds": "ee2fd4ecd68c220b005fa2ae69f9b6da94a0b0dbd95d1ce42e0c8e1ab895ac9e"
+      }
+    },
+    {
+      "path": "analysis/scripts/02_build_sample.R",
+      "command": "Rscript analysis/scripts/02_build_sample.R",
+      "script_hash": "4b71467c5e26224e7207895c4bc25bf72feef048b47796a2fc3bc2ef3b6f3176",
+      "exit_code": 0,
+      "status": "success",
+      "started_at": "2026-04-29T10:00:03Z",
+      "ended_at": "2026-04-29T10:00:04Z",
+      "outputs": ["data/processed/analytic-sample.rds"],
+      "output_hashes": {
+        "data/processed/analytic-sample.rds": "03b9dd4b03f7855e077788339ba0c79147402a6fcd55a0b90ad4de09eb5e0e8a"
+      }
+    },
+    {
+      "path": "analysis/scripts/03_construct_variables.R",
+      "command": "Rscript analysis/scripts/03_construct_variables.R",
+      "script_hash": "e9cc7188d772dbd71322521e9633f6fce23970e59f4cd2e92b44b7ae438c31a5",
+      "exit_code": 0,
+      "status": "success",
+      "started_at": "2026-04-29T10:00:05Z",
+      "ended_at": "2026-04-29T10:00:06Z",
+      "outputs": ["data/processed/analytic-variables.rds"],
+      "output_hashes": {
+        "data/processed/analytic-variables.rds": "4837ed925ef4776e4e3bf02dbbd4c873edeb614c49b5150201d6527098100807"
+      }
+    },
+    {
+      "path": "analysis/scripts/04_plan_models.R",
+      "command": "Rscript analysis/scripts/04_plan_models.R",
+      "script_hash": "beb53a6c87ba957c140978db0d1eedb725eda97d12e47e5f94d9de575e4c7180",
+      "exit_code": 0,
+      "status": "success",
+      "started_at": "2026-04-29T10:00:07Z",
+      "ended_at": "2026-04-29T10:00:09Z",
+      "outputs": ["analysis/planned-model-calls.json", "tables/results-registry.csv", "figures/figure-registry.csv", "tables/model-results.csv", "tables/regression-main.html", "figures/event-study.png"],
+      "output_hashes": {
+        "analysis/planned-model-calls.json": "bc4b20ffae85b91492407f287ef49975965d314ee6676a28cfe01d3a8ef2c022",
+        "tables/results-registry.csv": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+        "figures/figure-registry.csv": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+        "tables/model-results.csv": "85859949cad0dc38d596699174004f0b75944afc8fd7228caedbaa552fc7701d",
+        "tables/regression-main.html": "8a0d41f7cd3f855dc1db4706205dee7657dd6e052058931d5358cff3c6490cf5",
+        "figures/event-study.png": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+      }
+    }
+  ],
+  "exit_codes": {
+    "analysis/scripts/01_load_data.R": 0,
+    "analysis/scripts/02_build_sample.R": 0,
+    "analysis/scripts/03_construct_variables.R": 0,
+    "analysis/scripts/04_plan_models.R": 0
+  },
+  "tests_run": [
+    {
+      "id": "T1",
+      "status": "pass",
+      "evidence": "source file loads and required columns are present"
+    },
+    {
+      "id": "T2",
+      "status": "pass",
+      "evidence": "analytic sample has nonzero rows and correct unit of analysis"
+    },
+    {
+      "id": "T3",
+      "status": "pass",
+      "evidence": "constructed variables match the Phase 4 variable dictionary"
+    },
+    {
+      "id": "T4",
+      "status": "pass",
+      "evidence": "missing value handling matches the Phase 4 missing data plan"
+    },
+    {
+      "id": "T5",
+      "status": "pass",
+      "evidence": "every planned spec has valid variables"
+    },
+    {
+      "id": "T6",
+      "status": "pass",
+      "evidence": "planned output registry schemas are available"
+    }
+  ],
+  "halt_checks": [
+    {
+      "check": "missing result registry",
+      "status": "pass"
+    },
+    {
+      "check": "missing figure registry",
+      "status": "pass"
+    },
+    {
+      "check": "missing planned spec",
+      "status": "pass"
+    }
+  ],
+  "expected_outputs": [
+    {
+      "path": "data/interim/panel-loaded.rds",
+      "status": "present"
+    },
+    {
+      "path": "data/processed/analytic-sample.rds",
+      "status": "present"
+    },
+    {
+      "path": "data/processed/analytic-variables.rds",
+      "status": "present"
+    },
+    {
+      "path": "analysis/planned-model-calls.json",
+      "status": "present"
+    },
+    {
+      "path": "tables/results-registry.csv",
+      "status": "present"
+    },
+    {
+      "path": "tables/regression-main.html",
+      "status": "present"
+    },
+    {
+      "path": "figures/figure-registry.csv",
+      "status": "present"
+    }
+  ],
+  "results_registry": {
+    "path": "tables/results-registry.csv",
+    "row_count": 3,
+    "covered_spec_ids": ["S1", "S2", "S3"]
+  },
+  "figure_registry": {
+    "path": "figures/figure-registry.csv",
+    "row_count": 1,
+    "covered_figure_ids": ["F1"]
+  },
+  "analysis_stack": {
+    "primary_language": "R",
+    "table_engine": "modelsummary",
+    "figure_engine": "ggplot2",
+    "packages_used": ["modelsummary", "ggplot2"],
+    "nonlinear_probability_models": false,
+    "marginal_effects_engine": null,
+    "viz_style_source": "analysis/scripts/viz_setting.R",
+    "viz_style_reference": "references/viz_setting.R",
+    "viz_style_sha256": "43de20cd0ce84b23e99d84930026b78cff7e5022ae925ccf7551632f81fd8daf",
+    "ggplot2_style_consistency": true,
+    "reader_facing_label_source": "data/variable-dictionary.csv",
+    "table_label_translation_applied": true,
+    "figure_label_translation_applied": true,
+    "deviation_justification": ""
+  },
+  "publication_regression_tables": [
+    {
+      "path": "tables/regression-main.html",
+      "role": "main_regression_table",
+      "source_script": "analysis/scripts/04_plan_models.R",
+      "table_engine": "modelsummary",
+      "model_columns": ["Model 1", "Model 2", "Model 3"],
+      "statistic_rows": ["Parental job loss", "Controls", "N"],
+      "placement": "main_text"
+    }
+  ],
+  "artifact_manifest": [
+    {"path": "data/interim/panel-loaded.rds", "sha256": "ee2fd4ecd68c220b005fa2ae69f9b6da94a0b0dbd95d1ce42e0c8e1ab895ac9e", "artifact_role": "intermediate_data", "produced_by": "analysis/scripts/01_load_data.R", "registered": true},
+    {"path": "data/processed/analytic-sample.rds", "sha256": "03b9dd4b03f7855e077788339ba0c79147402a6fcd55a0b90ad4de09eb5e0e8a", "artifact_role": "intermediate_data", "produced_by": "analysis/scripts/02_build_sample.R", "registered": true},
+    {"path": "data/processed/analytic-variables.rds", "sha256": "4837ed925ef4776e4e3bf02dbbd4c873edeb614c49b5150201d6527098100807", "artifact_role": "intermediate_data", "produced_by": "analysis/scripts/03_construct_variables.R", "registered": true},
+    {"path": "analysis/planned-model-calls.json", "sha256": "bc4b20ffae85b91492407f287ef49975965d314ee6676a28cfe01d3a8ef2c022", "artifact_role": "planned_model_calls", "produced_by": "analysis/scripts/04_plan_models.R", "registered": true},
+    {"path": "tables/results-registry.csv", "sha256": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f", "artifact_role": "results_registry", "produced_by": "analysis/scripts/04_plan_models.R", "registered": true},
+    {"path": "tables/model-results.csv", "sha256": "85859949cad0dc38d596699174004f0b75944afc8fd7228caedbaa552fc7701d", "artifact_role": "diagnostic", "produced_by": "analysis/scripts/04_plan_models.R", "registered": true},
+    {"path": "tables/regression-main.html", "sha256": "8a0d41f7cd3f855dc1db4706205dee7657dd6e052058931d5358cff3c6490cf5", "artifact_role": "main_regression_table", "produced_by": "analysis/scripts/04_plan_models.R", "registered": true},
+    {"path": "figures/figure-registry.csv", "sha256": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57", "artifact_role": "figure_registry", "produced_by": "analysis/scripts/04_plan_models.R", "registered": true},
+    {"path": "figures/event-study.png", "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460", "artifact_role": "figure_file", "produced_by": "analysis/scripts/04_plan_models.R", "registered": true}
+  ],
+  "errors": []
+}

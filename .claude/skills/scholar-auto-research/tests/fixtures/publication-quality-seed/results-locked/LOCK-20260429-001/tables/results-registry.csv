@@ -1,0 +1,4 @@
+spec_id,model_id,outcome,predictor,estimate,std_error,p_value,n,status,output_file
+S1,M1,adolescent educational expectations,parental job loss,-0.120,0.040,0.003,1200,completed,tables/model-results.csv
+S2,M1,adolescent educational expectations,parental job loss,-0.080,0.050,0.110,1200,completed,tables/model-results.csv
+S3,M1,adolescent educational expectations,parental job loss,-0.090,0.045,0.046,1200,completed,tables/model-results.csv

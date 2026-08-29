@@ -253,7 +253,7 @@ When results include a `PDF_PATH` column (from unified search results), extract 
 ```bash
 # Generic PDF reading (works for any backend that returns PDF_PATH)
 if [ -n "$PDF_PATH" ] && [ -f "$PDF_PATH" ]; then
-  pdftotext "$PDF_PATH" - | head -300
+  pdftotext "$PDF_PATH" - | head -300 <!-- Under scholar-full-paper orchestration this read is executed by BRIEFED READER AGENTS, never the orchestrator — see scholar-full-paper/references/phase-lit-review.md §Delegated reading (RCA Round 2 #10b). -->
 fi
 ```
 
@@ -263,7 +263,7 @@ if [[ "$REF_SOURCES" == *zotero* ]]; then
   STORAGE="$ZOTERO_DIR/storage"
   PDF_KEY="2SEABU7Q"          # ← from search results
   PDF_FILE="filename.pdf"     # ← from search results
-  pdftotext "$STORAGE/$PDF_KEY/$PDF_FILE" - | head -300
+  pdftotext "$STORAGE/$PDF_KEY/$PDF_FILE" - | head -300 <!-- Under scholar-full-paper orchestration this read is executed by BRIEFED READER AGENTS, never the orchestrator — see scholar-full-paper/references/phase-lit-review.md §Delegated reading (RCA Round 2 #10b). -->
 fi
 ```
 
@@ -294,7 +294,7 @@ echo "| [LastName] | [Year] | [Title] | [Journal] | [RefLib] |" >> "$SEARCH_LOG"
 
 **Then proceed with interpretation:**
 - Flag the 5-10 most relevant papers; these must appear in the final review
-- Read PDFs of the top 3-5 using pdftotext (where PDF paths are available)
+- Read PDFs of the top 3-5 using pdftotext (under scholar-full-paper orchestration: executed by briefed reader agents per phase-lit-review.md §Delegated reading, never inline) (where PDF paths are available)
 - Identify gaps -- topics that should be covered but are absent from the library -- fill with web search in Step 2
 
 ---

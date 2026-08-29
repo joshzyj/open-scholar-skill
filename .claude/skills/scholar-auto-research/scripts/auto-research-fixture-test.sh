@@ -3,45 +3,224 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TMP="/tmp/scholar-auto-research-fixture-$$"
+HARNESS="$SKILL_DIR/tests/helpers/harness.sh"
+CASE_RESULT="$SKILL_DIR/tests/helpers/case_result.py"
+MANIFEST="$SKILL_DIR/tests/coverage-manifest.json"
+source "$HARNESS"
+
+# The heavy fixture is its own coordinator when no release coordinator has
+# already supplied bindings.  Every default is computed from this finalized
+# skill tree; caller-supplied bindings are verified rather than overwritten.
+SCHOLAR_KEEP_FIXTURE="${SCHOLAR_KEEP_FIXTURE:-${KEEP_FIXTURE_TMP:-0}}"
+export SCHOLAR_KEEP_FIXTURE
+harness_make_temp_root TMP "scholar-auto-research-fixture"
+SCHOLAR_HARNESS_SOURCE_ROOT="${SCHOLAR_HARNESS_SOURCE_ROOT:-$SKILL_DIR}"
+SCHOLAR_HARNESS_MANIFEST="${SCHOLAR_HARNESS_MANIFEST:-$MANIFEST}"
+SCHOLAR_HARNESS_RESULTS_DIR="${SCHOLAR_HARNESS_RESULTS_DIR:-$TMP/harness-results}"
+SCHOLAR_HARNESS_RUN_ID="${SCHOLAR_HARNESS_RUN_ID:-fixture-$$}"
+SCHOLAR_HARNESS_RUN_NONCE="${SCHOLAR_HARNESS_RUN_NONCE:-$(python3 -c 'import secrets; print(secrets.token_hex(32))')}"
+SCHOLAR_HARNESS_SUITE_MODE="${SCHOLAR_HARNESS_SUITE_MODE:-heavy-only}"
+SCHOLAR_HARNESS_SUITE_ORDER="${SCHOLAR_HARNESS_SUITE_ORDER:-normal}"
+SCHOLAR_HARNESS_MANIFEST_SHA256="${SCHOLAR_HARNESS_MANIFEST_SHA256:-$(python3 "$CASE_RESULT" digest-file "$SCHOLAR_HARNESS_MANIFEST")}"
+SCHOLAR_HARNESS_SOURCE_GENERATION_SHA256="${SCHOLAR_HARNESS_SOURCE_GENERATION_SHA256:-$(python3 "$CASE_RESULT" source-digest "$SCHOLAR_HARNESS_SOURCE_ROOT")}"
+export SCHOLAR_HARNESS_SOURCE_ROOT SCHOLAR_HARNESS_MANIFEST
+export SCHOLAR_HARNESS_RESULTS_DIR SCHOLAR_HARNESS_RUN_ID SCHOLAR_HARNESS_RUN_NONCE
+export SCHOLAR_HARNESS_SUITE_MODE SCHOLAR_HARNESS_SUITE_ORDER
+export SCHOLAR_HARNESS_MANIFEST_SHA256 SCHOLAR_HARNESS_SOURCE_GENERATION_SHA256
+harness_init "$SCRIPT_DIR/auto-research-fixture-test.sh" "fixture-test"
+
 PROJ="$TMP/project"
 START_TS="$(date +%s)"
 
-# The fixture test exercises schema/JSON contract integrity, not codex
-# cross-model review behavior. The Phase 6 + Phase 14 codex-trigger gate
-# (added 2026-05-10) defaults to STRONG (RED if not dispatched), so without
-# this opt-out every fixture's verify call would fail at the codex gate.
-# The dedicated codex smoke suite is at tests/smoke/test-codex-trigger-auto-research.sh.
-export SCHOLAR_CODEX_DEFAULT=false
+# Optional provider-diversity lanes are tested separately; the portable review
+# evidence requirement is exercised directly throughout this fixture.
 
 progress() {
   printf '[fixture] %s\n' "$1"
 }
 
-# F9 (audit 2026-08-25 port): the state-machine tests below complete phases without a
-# full verify pass, so they mint a minimal verify-stamp (correct contract hash,
-# empty artifact_hashes -> the complete-time freshness check trivially passes)
-# to satisfy the verify-stamp requirement. Real verify->complete flows get their
-# stamp from auto-research-verify.sh itself.
-CONTRACT_JSON="$SKILL_DIR/references/phase-contract.json"
-mint_stamp() {  # mint_stamp <proj_dir> <phase_id>
-  mkdir -p "$1/.auto-research/verify-stamps"
-  python3 - "$CONTRACT_JSON" "$1/.auto-research/verify-stamps/$2.json" "$2" <<'PYS'
-import hashlib, json, sys
-h = hashlib.sha256()
-with open(sys.argv[1], "rb") as f:
-    for chunk in iter(lambda: f.read(1 << 20), b""):
-        h.update(chunk)
-with open(sys.argv[2], "w") as out:
-    json.dump({"phase_id": sys.argv[3], "verdict": "PASS",
-               "contract_sha256": h.hexdigest(), "artifact_hashes": {},
-               "verified_at": "fixture"}, out, indent=2, sort_keys=True)
-PYS
+single_review_session_dir() {
+  # single_review_session_dir <fixture-project> <zero-padded-phase>
+  local project="$1" phase="$2"
+  local candidates=("$project/review-evidence/phase-$phase"/s-*)
+  if [ "${#candidates[@]}" -ne 1 ] || [ ! -d "${candidates[0]}" ]; then
+    fail "expected exactly one source review session for phase $phase in $project"
+    return 1
+  fi
+  printf '%s\n' "${candidates[0]}"
 }
-complete_sm() {  # complete_sm <proj_dir> <phase_id> [artifact...] — mint stamp then complete
+
+copy_review_role_evidence() {
+  # Bind reusable fixture prose to the destination production reservation.
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, destination = map(Path, sys.argv[1:3])
+role = sys.argv[3]
+source_session = json.loads((source / "session.json").read_text())
+destination_session = json.loads((destination / "session.json").read_text())
+
+def reservation(session):
+    matches = [item for item in session["reservations"] if item.get("role") == role]
+    if len(matches) != 1:
+        raise SystemExit(f"expected one {role} reservation, observed {len(matches)}")
+    return matches[0]
+
+old = reservation(source_session)
+new = reservation(destination_session)
+for subdir, suffix in (("reports", ".md"), ("traces", ".trace.ndjson")):
+    source_path = source / subdir / f"{role}{suffix}"
+    destination_path = destination / subdir / f"{role}{suffix}"
+    text = source_path.read_text(encoding="utf-8")
+    text = text.replace(source.name, destination.name)
+    text = text.replace(str(old["dispatch_id"]), str(new["dispatch_id"]))
+    destination_path.write_text(text, encoding="utf-8")
+PY
+}
+
+assert_import_fixture_source() {
+  local project="$1" expected_json="$2"
+  shift 2
+  python3 - "$project" "$expected_json" "$@" <<'PY'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+project = Path(sys.argv[1])
+expected = json.loads(sys.argv[2])
+declared_files = set(sys.argv[3:])
+sidecar = project / ".claude/safety-status.json"
+if sidecar.is_symlink() or not stat.S_ISREG(os.lstat(sidecar).st_mode):
+    raise SystemExit("fixture import sidecar must be a regular non-symlink file")
+observed = json.loads(sidecar.read_text(encoding="utf-8"))
+if observed != expected:
+    raise SystemExit("fixture import sidecar does not match its exact declared source")
+data_keys = {key for key in expected if not key.startswith("_")}
+if declared_files != data_keys:
+    raise SystemExit("fixture import source file declaration does not match sidecar data keys")
+for relative in sorted(declared_files):
+    source = project / relative
+    if source.is_symlink() or not stat.S_ISREG(os.lstat(source).st_mode):
+        raise SystemExit(f"fixture import source is not a regular non-symlink file: {relative}")
+PY
+}
+
+rebind_execution_fixture_root() {
+  python3 - "$1/analysis/execution-report.json" "$1" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+doc["run_context"]["working_directory"] = sys.argv[2]
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+}
+
+# Fixture-only dependency rebinding for Phase 10 mutations.  This updates the
+# hashes that honestly follow from current project bytes; it never changes a
+# verdict or computes whether Phase 10 should pass.  A named clean-room key may
+# be left stale when that attestation is the invariant under test.
+rebind_phase10_fixture_hashes() {
+  python3 - "$1" "${2:-}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+proj = pathlib.Path(sys.argv[1])
+stale_clean_room_key = sys.argv[2]
+
+def sha(path):
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def load(relative):
+    return json.loads((proj / relative).read_text(encoding="utf-8"))
+
+def write(relative, document):
+    (proj / relative).write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+execution = load("analysis/execution-report.json")
+for script in execution.get("executed_scripts", []):
+    if not isinstance(script, dict) or not isinstance(script.get("output_hashes"), dict):
+        continue
+    for relative in list(script["output_hashes"]):
+        path = proj / relative
+        if path.is_file():
+            script["output_hashes"][relative] = sha(path)
+for item in execution.get("artifact_manifest", []):
+    if not isinstance(item, dict):
+        continue
+    relative = str(item.get("path", "")).strip()
+    path = proj / relative
+    if relative and path.is_file():
+        item["sha256"] = sha(path)
+write("analysis/execution-report.json", execution)
+
+post_review = load("review/post-execution-review.json")
+post_sources = {
+    "spec_registry": "analysis/spec-registry.csv",
+    "execution_report": "analysis/execution-report.json",
+    "results_registry": "tables/results-registry.csv",
+    "figure_registry": "figures/figure-registry.csv",
+    "analysis_premortem": "review/analysis-premortem.json",
+}
+for key, relative in post_sources.items():
+    path = proj / relative
+    if path.is_file():
+        post_review["source_hashes"][key] = sha(path)
+write("review/post-execution-review.json", post_review)
+
+sanity = load("verify/runtime-sanity.json")
+phase10_sources = {
+    "spec_registry": "analysis/spec-registry.csv",
+    "execution_report": "analysis/execution-report.json",
+    "results_registry": "tables/results-registry.csv",
+    "figure_registry": "figures/figure-registry.csv",
+    "post_execution_review": "review/post-execution-review.json",
+    "post_execution_fix_log": "review/post-execution-fix-log.json",
+}
+current = {key: sha(proj / relative) for key, relative in phase10_sources.items()}
+sanity["source_hashes"].update(current)
+for key, digest in current.items():
+    if key != stale_clean_room_key:
+        sanity["clean_room"]["artifact_hashes"][key] = digest
+
+clean_run = sanity["clean_room"]["run"]
+if "spec_registry" in clean_run.get("input_hashes", {}):
+    clean_run["input_hashes"]["spec_registry"] = current["spec_registry"]
+if "post_execution_review" in clean_run.get("input_hashes", {}):
+    clean_run["input_hashes"]["post_execution_review"] = current["post_execution_review"]
+for relative in list(clean_run.get("output_hashes", {})):
+    path = proj / relative
+    if path.is_file():
+        clean_run["output_hashes"][relative] = sha(path)
+for item in sanity.get("artifact_inventory", []):
+    if not isinstance(item, dict):
+        continue
+    relative = str(item.get("path", "")).strip()
+    path = proj / relative
+    if relative and path.is_file():
+        item["sha256"] = sha(path)
+write("verify/runtime-sanity.json", sanity)
+PY
+}
+
+CONTRACT_JSON="$SKILL_DIR/references/phase-contract.json"
+SEED_PHASE="$SKILL_DIR/tests/helpers/seed-completed-phase.py"
+REGISTER_REVIEW="$SKILL_DIR/tests/helpers/register-review-evidence-fixture.py"
+complete_sm() {  # test-only state fixture; completion authority is tested separately
   local proj="$1" phase="$2"; shift 2
-  mint_stamp "$proj" "$phase"
-  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$proj" "$phase" "$@" >/dev/null
+  python3 "$SEED_PHASE" "$CONTRACT_JSON" "$proj" "$phase" "$@"
 }
 
 bash "$SCRIPT_DIR/auto-research-contract-lint.sh"
@@ -61,8 +240,12 @@ printf '{"safety_status":"PASS","files_scanned":0,"no_data_declared":true,"high_
 # block (workflow-contract: principles + operational rules). The setup
 # script writes it idempotently per the SKILL.md Phase 0 step 5.
 bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$PROJ" >/dev/null
-bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$PROJ" >/dev/null
-bash "$SCRIPT_DIR/auto-research-state.sh" complete "$PROJ" 0 "$PROJ/safety/safety-status.json" >/dev/null
+# CASE_ID: phase.0.positive
+expect_pass phase.0.positive "$PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$PROJ"
+# CASE_ID: l2.p0.state.complete
+expect_pass l2.p0.state.complete "$PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$PROJ" 0 "$PROJ/safety/safety-status.json"
 
 NEXT="$(bash "$SCRIPT_DIR/auto-research-state.sh" next "$PROJ")"
 case "$NEXT" in
@@ -70,18 +253,18 @@ case "$NEXT" in
   *) echo "FAIL: expected NEXT_PHASE=1 after completing 0, got $NEXT" >&2; exit 1 ;;
 esac
 
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$PROJ" >/dev/null 2>&1; then
-  echo "FAIL: phase 1 verify should fail without required outputs" >&2
-  exit 1
-fi
+# CASE_ID: l2.p1.reject.missing-outputs
+expect_reject l2.p1.reject.missing-outputs "$PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$PROJ"
 
 BAD_PHASE0_STATUS_PROJ="$TMP/bad-phase0-status-project"
-mkdir -p "$BAD_PHASE0_STATUS_PROJ/safety"
-printf '{"safety_status":"PASS","files_scanned":1,"no_data_declared":false,"high_risk_unresolved":0}\n' > "$BAD_PHASE0_STATUS_PROJ/safety/safety-status.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$BAD_PHASE0_STATUS_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 0 verify should fail when status_by_file is missing" >&2
-  exit 1
-fi
+mkdir -p "$BAD_PHASE0_STATUS_PROJ/safety" "$BAD_PHASE0_STATUS_PROJ/data/raw"
+printf 'id\n1\n' > "$BAD_PHASE0_STATUS_PROJ/data/raw/a.csv"
+printf '{"files_scanned":1,"no_data_declared":false,"high_risk_unresolved":0,"status_by_file":{"data/raw/a.csv":{"source_status":"CLEARED","category":"cleared"}}}\n' > "$BAD_PHASE0_STATUS_PROJ/safety/safety-status.json"
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$BAD_PHASE0_STATUS_PROJ" >/dev/null
+# CASE_ID: phase.0.negative
+expect_reject phase.0.negative "$BAD_PHASE0_STATUS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$BAD_PHASE0_STATUS_PROJ"
 
 progress "phase 1 question-formation fixtures"
 
@@ -271,7 +454,8 @@ Selected question: Among low-income United States households with adolescent chi
 
 The question uses parental job loss as the focal exposure and adolescent educational expectations as the outcome. It is framed for the Journal of Marriage and Family as an empirical article using cautious associational language, a family stress mechanism, and household panel data.
 MD
-bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$RQ_PROJ" >/dev/null
+# CASE_ID: phase.1.positive
+expect_pass phase.1.positive "$RQ_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$RQ_PROJ"
 
 CUSTOM_RQ_PROJ="$TMP/custom-rq-project"
 cp -R "$RQ_PROJ" "$CUSTOM_RQ_PROJ"
@@ -335,7 +519,8 @@ for item in jf["candidates"]:
 rq_path.write_text(json.dumps(rq, indent=2, sort_keys=True) + "\n")
 jf_path.write_text(json.dumps(jf, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$CUSTOM_RQ_PROJ" >/dev/null
+# CASE_ID: l2.p1.verify.custom-journal
+expect_pass l2.p1.verify.custom-journal "$CUSTOM_RQ_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$CUSTOM_RQ_PROJ"
 
 FALLBACK_RQ_PROJ="$TMP/fallback-rq-project"
 cp -R "$RQ_PROJ" "$FALLBACK_RQ_PROJ"
@@ -369,7 +554,8 @@ for item in jf["candidates"]:
 rq_path.write_text(json.dumps(rq, indent=2, sort_keys=True) + "\n")
 jf_path.write_text(json.dumps(jf, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$FALLBACK_RQ_PROJ" >/dev/null
+# CASE_ID: l2.p1.verify.fallback-journal
+expect_pass l2.p1.verify.fallback-journal "$FALLBACK_RQ_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$FALLBACK_RQ_PROJ"
 
 BAD_RQ_PROJ="$TMP/bad-rq-project"
 mkdir -p "$BAD_RQ_PROJ/idea"
@@ -398,10 +584,11 @@ cat > "$BAD_RQ_PROJ/idea/research-question.json" <<'JSON'
 }
 JSON
 printf 'Does X affect Y?\n' > "$BAD_RQ_PROJ/idea/research-question.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_RQ_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 1 verify should fail on placeholder research question" >&2
-  exit 1
+if [[ "${SCHOLAR_FIXTURE_PHASE0_4_WRONG_REASON:-0}" == "1" ]]; then
+  mv "$BAD_RQ_PROJ/idea/candidate-rqs.json" "$BAD_RQ_PROJ/idea/candidate-rqs.wrong-reason"
 fi
+# CASE_ID: phase.1.negative
+expect_reject phase.1.negative "$BAD_RQ_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_RQ_PROJ"
 
 BAD_CUSTOM_RQ_PROJ="$TMP/bad-custom-rq-project"
 cp -R "$CUSTOM_RQ_PROJ" "$BAD_CUSTOM_RQ_PROJ"
@@ -414,10 +601,8 @@ doc = json.loads(path.read_text())
 doc.pop("journal_profile_resolution", None)
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_CUSTOM_RQ_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 1 verify should fail when a custom journal has no journal_profile_resolution" >&2
-  exit 1
-fi
+# CASE_ID: l2.p1.reject.custom-profile-missing
+expect_reject l2.p1.reject.custom-profile-missing "$BAD_CUSTOM_RQ_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_CUSTOM_RQ_PROJ"
 
 BAD_IMPORTED_BUILTIN_RQ_PROJ="$TMP/bad-imported-builtin-rq-project"
 cp -R "$RQ_PROJ" "$BAD_IMPORTED_BUILTIN_RQ_PROJ"
@@ -435,10 +620,8 @@ doc["journal_profile_resolution"]["requested_journal"] = "Journal of Marriage an
 doc["journal_profile_resolution"]["resolved_profile_name"] = "Journal of Marriage and Family"
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_IMPORTED_BUILTIN_RQ_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 1 verify should fail when a built-in journal is mislabeled as imported_custom" >&2
-  exit 1
-fi
+# CASE_ID: l2.p1.reject.imported-builtin
+expect_reject l2.p1.reject.imported-builtin "$BAD_IMPORTED_BUILTIN_RQ_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_IMPORTED_BUILTIN_RQ_PROJ"
 
 BAD_RQ_FATAL_PROJ="$TMP/bad-rq-fatal-project"
 cp -R "$RQ_PROJ" "$BAD_RQ_FATAL_PROJ"
@@ -453,10 +636,8 @@ for candidate in doc["candidates"]:
         candidate["fatal_flaw"] = True
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_RQ_FATAL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 1 verify should fail when selected candidate has fatal flaw" >&2
-  exit 1
-fi
+# CASE_ID: l2.p1.reject.fatal-selected
+expect_reject l2.p1.reject.fatal-selected "$BAD_RQ_FATAL_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_RQ_FATAL_PROJ"
 
 BAD_RQ_JOURNAL_PROJ="$TMP/bad-rq-journal-project"
 cp -R "$RQ_PROJ" "$BAD_RQ_JOURNAL_PROJ"
@@ -469,10 +650,8 @@ panel = json.loads(path.read_text())
 panel["reviewers"] = [r for r in panel["reviewers"] if r["role"] != "journal_editor"]
 path.write_text(json.dumps(panel, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_RQ_JOURNAL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 1 verify should fail when journal editor review is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p1.reject.reviewer-count
+expect_reject l2.p1.reject.reviewer-count "$BAD_RQ_JOURNAL_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_RQ_JOURNAL_PROJ"
 
 BRAINSTORM_DATA_PROJ="$TMP/brainstorm-data-rq-project"
 mkdir -p "$BRAINSTORM_DATA_PROJ/idea" "$BRAINSTORM_DATA_PROJ/scripts"
@@ -743,7 +922,8 @@ cat > "$BRAINSTORM_DATA_PROJ/idea/brainstorm-summary.md" <<'MD'
 
 Scholar-brainstorm DATA mode selected BD1 from a fifteen-candidate pool. The selected question uses parental job loss as X and educational expectations as Y. It has a moderate bivariate signal, feasible variables, and target-journal fit for Journal of Marriage and Family. The signal is preliminary and should not be written as causal evidence. Null-signal candidates were retained for transparency but were not selected without user override.
 MD
-bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BRAINSTORM_DATA_PROJ" >/dev/null
+# CASE_ID: l2.p1.verify.brainstorm-data
+expect_pass l2.p1.verify.brainstorm-data "$BRAINSTORM_DATA_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BRAINSTORM_DATA_PROJ"
 
 BAD_BRAINSTORM_NULL_PROJ="$TMP/bad-brainstorm-null-project"
 cp -R "$BRAINSTORM_DATA_PROJ" "$BAD_BRAINSTORM_NULL_PROJ"
@@ -779,10 +959,8 @@ with table_path.open("w", newline="", encoding="utf-8") as f:
     writer.writeheader()
     writer.writerows(rows)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_BRAINSTORM_NULL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 1 verify should fail when DATA-mode selected RQ has NULL signal without user override" >&2
-  exit 1
-fi
+# CASE_ID: l2.p1.reject.null-signal
+expect_reject l2.p1.reject.null-signal "$BAD_BRAINSTORM_NULL_PROJ" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 1 "$BAD_BRAINSTORM_NULL_PROJ"
 
 LIT_PROJ="$TMP/lit-project"
 mkdir -p "$LIT_PROJ/literature" "$LIT_PROJ/idea"
@@ -957,7 +1135,9 @@ manifest = {
 }
 (proj / "literature/lit-theory-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$LIT_PROJ" >/dev/null
+# CASE_ID: phase.2.positive
+expect_pass phase.2.positive "$LIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$LIT_PROJ"
 
 # Negative fixture: evidence_ledger claiming more records than the file has → FAIL
 BAD_EVIDENCE_PROJ="$TMP/bad-evidence-project"
@@ -969,10 +1149,9 @@ m = json.load(open(p))
 m["evidence_ledger"]["records"] = 99
 open(p, "w").write(json.dumps(m, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_EVIDENCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: phase 2 verifier accepted an evidence_ledger claiming more records than the ledger holds"
-  exit 1
-fi
+# CASE_ID: phase.2.negative
+expect_reject phase.2.negative "$BAD_EVIDENCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_EVIDENCE_PROJ"
 
 BAD_LIT_ENGINE_PROJ="$TMP/bad-lit-engine-project"
 cp -R "$LIT_PROJ" "$BAD_LIT_ENGINE_PROJ"
@@ -989,10 +1168,9 @@ manifest = json.loads(manifest_path.read_text())
 manifest["engine_handoff"] = matrix["engine_handoff"]
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_LIT_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 2 verify should fail when lit-theory.md is not routed through scholar-write" >&2
-  exit 1
-fi
+# CASE_ID: l2.p2.reject.engine-handoff
+expect_reject l2.p2.reject.engine-handoff "$BAD_LIT_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_LIT_ENGINE_PROJ"
 
 BAD_LIT_PROTOCOL_PROJ="$TMP/bad-lit-protocol-project"
 cp -R "$LIT_PROJ" "$BAD_LIT_PROTOCOL_PROJ"
@@ -1009,10 +1187,9 @@ mat = json.loads(matrix.read_text())
 mat["engine_handoff"]["lit_review_engine"]["protocol_followed"] = False
 matrix.write_text(json.dumps(mat, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_LIT_PROTOCOL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 2 verify should fail when the literature protocol proof is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p2.reject.review-protocol
+expect_reject l2.p2.reject.review-protocol "$BAD_LIT_PROTOCOL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_LIT_PROTOCOL_PROJ"
 
 BAD_LIT_PROJ="$TMP/bad-lit-project"
 mkdir -p "$BAD_LIT_PROJ/literature"
@@ -1032,10 +1209,9 @@ cat > "$BAD_LIT_PROJ/literature/literature-coverage-matrix.json" <<'JSON'
 }
 JSON
 printf '@article{one, title={Title}}\n' > "$BAD_LIT_PROJ/literature/references.bib"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_LIT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 2 verify should fail on thin literature/theory artifacts" >&2
-  exit 1
-fi
+# CASE_ID: l2.p2.reject.missing-outputs
+expect_reject l2.p2.reject.missing-outputs "$BAD_LIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 2 "$BAD_LIT_PROJ"
 
 progress "phases 2 to 4 literature, design, and data fixtures"
 
@@ -1290,7 +1466,9 @@ cat > "$DESIGN_PROJ/design/design-revision-log.json" <<'JSON'
 }
 JSON
 printf 'Revision log: all critical design issues resolved.\n' > "$DESIGN_PROJ/design/design-revision-log.md"
-bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$DESIGN_PROJ" >/dev/null
+# CASE_ID: phase.3.positive
+expect_pass phase.3.positive "$DESIGN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$DESIGN_PROJ"
 
 BAD_DESIGN_CAUSAL_PROJ="$TMP/bad-design-causal-project"
 cp -R "$DESIGN_PROJ" "$BAD_DESIGN_CAUSAL_PROJ"
@@ -1304,10 +1482,9 @@ doc["causal_gate"]["invoked"] = False
 doc["causal_gate"].pop("skill", None)
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$BAD_DESIGN_CAUSAL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 3 verify should fail when a fixed-effects design skips scholar-causal" >&2
-  exit 1
-fi
+# CASE_ID: phase.3.negative
+expect_reject phase.3.negative "$BAD_DESIGN_CAUSAL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$BAD_DESIGN_CAUSAL_PROJ"
 
 BAD_DESIGN_HYP_PROJ="$TMP/bad-design-hypothesis-project"
 cp -R "$DESIGN_PROJ" "$BAD_DESIGN_HYP_PROJ"
@@ -1320,10 +1497,9 @@ doc = json.loads(path.read_text())
 doc["hypothesis_model_coverage"] = []
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$BAD_DESIGN_HYP_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 3 verify should fail when Phase 2 hypotheses are not covered by models" >&2
-  exit 1
-fi
+# CASE_ID: l2.p3.reject.hypothesis-model-coverage
+expect_reject l2.p3.reject.hypothesis-model-coverage "$BAD_DESIGN_HYP_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$BAD_DESIGN_HYP_PROJ"
 
 BAD_DESIGN_PROJ="$TMP/bad-design-project"
 cp -R "$LIT_PROJ" "$BAD_DESIGN_PROJ"
@@ -1350,10 +1526,9 @@ printf '{}\n' > "$BAD_DESIGN_PROJ/design/design-evaluation.json"
 printf 'Bad evaluation.\n' > "$BAD_DESIGN_PROJ/design/design-evaluation.md"
 printf '{}\n' > "$BAD_DESIGN_PROJ/design/design-revision-log.json"
 printf 'Bad revision log.\n' > "$BAD_DESIGN_PROJ/design/design-revision-log.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$BAD_DESIGN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 3 verify should fail on incomplete design artifacts" >&2
-  exit 1
-fi
+# CASE_ID: l2.p3.reject.missing-manifest
+expect_reject l2.p3.reject.missing-manifest "$BAD_DESIGN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$BAD_DESIGN_PROJ"
 
 UNRESOLVED_DESIGN_PROJ="$TMP/unresolved-design-project"
 cp -R "$LIT_PROJ" "$UNRESOLVED_DESIGN_PROJ"
@@ -1391,10 +1566,9 @@ cat > "$UNRESOLVED_DESIGN_PROJ/design/design-revision-log.json" <<'JSON'
   ]
 }
 JSON
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$UNRESOLVED_DESIGN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 3 verify should fail with unresolved design evaluation criticals" >&2
-  exit 1
-fi
+# CASE_ID: l2.p3.reject.evaluation-revise
+expect_reject l2.p3.reject.evaluation-revise "$UNRESOLVED_DESIGN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 3 "$UNRESOLVED_DESIGN_PROJ"
 
 DATA_PROJ="$TMP/data-project"
 cp -R "$DESIGN_PROJ" "$DATA_PROJ"
@@ -1574,7 +1748,9 @@ manifest = {
 }
 (proj / "data/data-measurement-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$DATA_PROJ" >/dev/null
+# CASE_ID: phase.4.positive
+expect_pass phase.4.positive "$DATA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$DATA_PROJ"
 
 BAD_DATA_MODEL_VAR_PROJ="$TMP/bad-data-model-variable-project"
 cp -R "$DATA_PROJ" "$BAD_DATA_MODEL_VAR_PROJ"
@@ -1591,10 +1767,9 @@ with path.open("w", newline="", encoding="utf-8") as f:
     writer.writeheader()
     writer.writerows(rows)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_MODEL_VAR_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 4 verify should fail when a model-spec variable is missing from the dictionary" >&2
-  exit 1
-fi
+# CASE_ID: phase.4.negative
+expect_reject phase.4.negative "$BAD_DATA_MODEL_VAR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_MODEL_VAR_PROJ"
 
 BAD_DATA_DISPLAY_PROJ="$TMP/bad-data-display-project"
 cp -R "$DATA_PROJ" "$BAD_DATA_DISPLAY_PROJ"
@@ -1623,10 +1798,9 @@ manifest["display_semantics"]["machine_like_variable_count"] = 2
 manifest["output_hashes"]["variable_dictionary"] = sha(csv_path)
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_DISPLAY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 4 verify should fail when reader-facing display labels are left as raw machine variable names" >&2
-  exit 1
-fi
+# CASE_ID: l2.p4.reject.display-semantics
+expect_reject l2.p4.reject.display-semantics "$BAD_DATA_DISPLAY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_DISPLAY_PROJ"
 
 BAD_DATA_SAFETY_PROJ="$TMP/bad-data-safety-project"
 cp -R "$DATA_PROJ" "$BAD_DATA_SAFETY_PROJ"
@@ -1655,10 +1829,9 @@ manifest["source_hashes"]["safety_status"] = sha(safety_path)
 manifest["safety_provenance"]["files_scanned"] = 0
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_SAFETY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 4 verify should fail when existing data have no safety scan" >&2
-  exit 1
-fi
+# CASE_ID: l2.p4.reject.safety-scan
+expect_reject l2.p4.reject.safety-scan "$BAD_DATA_SAFETY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_SAFETY_PROJ"
 
 BAD_DATA_PROJ="$TMP/bad-data-project"
 mkdir -p "$BAD_DATA_PROJ/data"
@@ -1676,9 +1849,39 @@ variable,role,construct
 job_loss,x,parental job loss
 CSV
 printf 'Too short.\n' > "$BAD_DATA_PROJ/data/measurement-plan.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 4 verify should fail on incomplete data/measurement artifacts" >&2
-  exit 1
+# CASE_ID: l2.p4.reject.missing-manifest
+expect_reject l2.p4.reject.missing-manifest "$BAD_DATA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 4 "$BAD_DATA_PROJ"
+
+# A rejection with the right exit status but a different production diagnostic
+# must not satisfy the authoritative negative-case assertion.
+if [[ "${SCHOLAR_FIXTURE_PHASE0_4_WRONG_REASON:-0}" != "1" ]]; then
+  WRONG_REASON_OUT="$TMP/phase0-4-wrong-reason.out"
+  if (
+    unset SCHOLAR_HARNESS_SOURCE_ROOT SCHOLAR_HARNESS_MANIFEST
+    unset SCHOLAR_HARNESS_RESULTS_DIR SCHOLAR_HARNESS_RUN_ID SCHOLAR_HARNESS_RUN_NONCE
+    unset SCHOLAR_HARNESS_SUITE_MODE SCHOLAR_HARNESS_SUITE_ORDER
+    unset SCHOLAR_HARNESS_MANIFEST_SHA256 SCHOLAR_HARNESS_SOURCE_GENERATION_SHA256
+    unset SCHOLAR_HARNESS_CAPABILITY
+    export SCHOLAR_FIXTURE_PHASE0_4_WRONG_REASON=1
+    export SCHOLAR_FIXTURE_STOP_AFTER_PHASE=4
+    bash "$SCRIPT_DIR/auto-research-fixture-test.sh"
+  ) >"$WRONG_REASON_OUT" 2>&1; then
+    echo "FAIL: phase 0-4 wrong-reason mutation unexpectedly passed" >&2
+    exit 1
+  fi
+  grep -F 'HARNESS_ASSERTION_FAILED: case=phase.1.negative exact diagnostic count expected=1 observed=0;' \
+    "$WRONG_REASON_OUT" >/dev/null \
+    || {
+      echo "FAIL: phase 0-4 wrong-reason mutation did not fail at the exact diagnostic gate" >&2
+      exit 1
+    }
+fi
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "4" ]]; then
+  harness_validate_results --phase-through 4 >/dev/null
+  progress "phases 0 to 4 authoritative harness assertions passed"
+  exit 0
 fi
 
 ANALYSIS_PLAN_PROJ="$TMP/analysis-plan-project"
@@ -1895,7 +2098,9 @@ manifest = {
 }
 (proj / "analysis/analysis-plan-manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$ANALYSIS_PLAN_PROJ" >/dev/null
+# CASE_ID: phase.5.positive
+expect_pass phase.5.positive "$ANALYSIS_PLAN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$ANALYSIS_PLAN_PROJ"
 
 BAD_ANALYSIS_HYP_PROJ="$TMP/bad-analysis-hypothesis-project"
 cp -R "$ANALYSIS_PLAN_PROJ" "$BAD_ANALYSIS_HYP_PROJ"
@@ -1913,10 +2118,13 @@ with path.open("w", newline="", encoding="utf-8") as f:
     writer.writeheader()
     writer.writerows(rows)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$BAD_ANALYSIS_HYP_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 5 verify should fail when planned specs do not cover hypotheses" >&2
-  exit 1
+if [[ "${SCHOLAR_FIXTURE_PHASE5_9_WRONG_REASON:-0}" == "1" ]]; then
+  mv "$BAD_ANALYSIS_HYP_PROJ/analysis/analysis-plan-manifest.json" \
+    "$BAD_ANALYSIS_HYP_PROJ/analysis/analysis-plan-manifest.wrong-reason"
 fi
+# CASE_ID: phase.5.negative
+expect_reject phase.5.negative "$BAD_ANALYSIS_HYP_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$BAD_ANALYSIS_HYP_PROJ"
 
 BAD_ANALYSIS_DAG_PROJ="$TMP/bad-analysis-dag-project"
 cp -R "$ANALYSIS_PLAN_PROJ" "$BAD_ANALYSIS_DAG_PROJ"
@@ -1929,10 +2137,9 @@ doc = json.loads(path.read_text())
 doc["dependency_graph"]["analysis/scripts/02_build_sample.R"] = ["analysis/scripts/04_plan_models.R"]
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$BAD_ANALYSIS_DAG_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 5 verify should fail on invalid script dependency order" >&2
-  exit 1
-fi
+# CASE_ID: l2.p5.reject.script-dag
+expect_reject l2.p5.reject.script-dag "$BAD_ANALYSIS_DAG_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$BAD_ANALYSIS_DAG_PROJ"
 
 BAD_ANALYSIS_PLAN_PROJ="$TMP/bad-analysis-plan-project"
 mkdir -p "$BAD_ANALYSIS_PLAN_PROJ/analysis" "$BAD_ANALYSIS_PLAN_PROJ/tables"
@@ -1956,10 +2163,9 @@ cat > "$BAD_ANALYSIS_PLAN_PROJ/analysis/scripts-inventory.json" <<'JSON'
 }
 JSON
 printf 'spec_id,result\nS1,0.1\n' > "$BAD_ANALYSIS_PLAN_PROJ/tables/results-registry.csv"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$BAD_ANALYSIS_PLAN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 5 verify should fail on executed or incomplete analysis plan artifacts" >&2
-  exit 1
-fi
+# CASE_ID: l2.p5.reject.missing-manifest
+expect_reject l2.p5.reject.missing-manifest "$BAD_ANALYSIS_PLAN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 5 "$BAD_ANALYSIS_PLAN_PROJ"
 
 PREEXEC_PROJ="$TMP/preexec-project"
 cp -R "$ANALYSIS_PLAN_PROJ" "$PREEXEC_PROJ"
@@ -2101,7 +2307,47 @@ cat > "$PREEXEC_PROJ/review/pre-execution-rereview.json" <<'JSON'
   "ready_for_phase_7": true
 }
 JSON
-bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$PREEXEC_PROJ" >/dev/null
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$PREEXEC_PROJ" 6 initial_panel >/dev/null
+# CASE_ID: phase.6.positive
+expect_pass phase.6.positive "$PREEXEC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$PREEXEC_PROJ"
+
+ACTIVE_REREVIEW_PROJ="$TMP/active-rereview-project"
+cp -pR "$PREEXEC_PROJ" "$ACTIVE_REREVIEW_PROJ"
+python3 - "$ACTIVE_REREVIEW_PROJ" <<'PY'
+import json, pathlib, sys
+project = pathlib.Path(sys.argv[1])
+review_path = project / "review/pre-execution-review.json"
+review = json.loads(review_path.read_text())
+review["fix_status"]["required"] = True
+review_path.write_text(json.dumps(review, indent=2, sort_keys=True) + "\n")
+fix_path = project / "review/pre-execution-fix-log.json"
+fix_log = json.loads(fix_path.read_text())
+fix_log["fixed_findings"] = [{
+    "finding_id": "F09-REREVIEW-1", "status": "fixed",
+    "action_taken": "corrected the planned robustness test inventory",
+    "affected_files": ["analysis/analysis-plan.md"],
+}]
+fix_path.write_text(json.dumps(fix_log, indent=2, sort_keys=True) + "\n")
+rereview_path = project / "review/pre-execution-rereview.json"
+rereview = json.loads(rereview_path.read_text())
+rereview.update({
+    "evidence_role": "fix_verifier",
+    "task_invocation_id": "legacy-rereview-placeholder",
+    "report_path": "review/agents/fix_verifier.md",
+    "rereviewed_findings": [{
+        "finding_id": "F09-REREVIEW-1", "resolution_verdict": "RESOLVED",
+    }],
+})
+rereview_path.write_text(json.dumps(rereview, indent=2, sort_keys=True) + "\n")
+(project / "review/agents/fix_verifier.md").write_text(
+    "Independent fix verification confirms the named planned-analysis repair and its evidence.\n"
+)
+PY
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$ACTIVE_REREVIEW_PROJ" 6 fix_rereview >/dev/null
+# CASE_ID: l2.p6.verify.active-rereview
+expect_pass l2.p6.verify.active-rereview "$ACTIVE_REREVIEW_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$ACTIVE_REREVIEW_PROJ"
 
 BAD_PREEXEC_ENGINE_PROJ="$TMP/bad-preexec-engine-project"
 cp -R "$PREEXEC_PROJ" "$BAD_PREEXEC_ENGINE_PROJ"
@@ -2115,10 +2361,9 @@ data["review_engine"] = {"skill": "manual-review", "mode": "pre_execution_planne
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 6 verify should fail without scholar-code-review provenance" >&2
-  exit 1
-fi
+# CASE_ID: phase.6.negative
+expect_reject phase.6.negative "$BAD_PREEXEC_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_ENGINE_PROJ"
 
 BAD_PREEXEC_DAG_PROJ="$TMP/bad-preexec-dag-project"
 cp -R "$PREEXEC_PROJ" "$BAD_PREEXEC_DAG_PROJ"
@@ -2132,10 +2377,9 @@ data["reviewed_script_dag"]["reviewed"] = False
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_DAG_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 6 verify should fail when script DAG review is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p6.reject.review-dag
+expect_reject l2.p6.reject.review-dag "$BAD_PREEXEC_DAG_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_DAG_PROJ"
 
 BAD_PREEXEC_ROLE_PROJ="$TMP/bad-preexec-role-project"
 cp -R "$PREEXEC_PROJ" "$BAD_PREEXEC_ROLE_PROJ"
@@ -2149,10 +2393,9 @@ data["reviewers"] = [r for r in data["reviewers"] if r["role"] != "data_handling
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_ROLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 6 verify should fail when a required independent role is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p6.reject.reviewer-role
+expect_reject l2.p6.reject.reviewer-role "$BAD_PREEXEC_ROLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_ROLE_PROJ"
 
 BAD_PREEXEC_HASH_PROJ="$TMP/bad-preexec-hash-project"
 cp -R "$PREEXEC_PROJ" "$BAD_PREEXEC_HASH_PROJ"
@@ -2171,10 +2414,9 @@ data["scripts"].append({
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 6 verify should fail on stale scripts inventory hash" >&2
-  exit 1
-fi
+# CASE_ID: l2.p6.reject.stale-input-hash
+expect_reject l2.p6.reject.stale-input-hash "$BAD_PREEXEC_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_HASH_PROJ"
 
 BAD_PREEXEC_SCRIPT_PROJ="$TMP/bad-preexec-script-project"
 cp -R "$PREEXEC_PROJ" "$BAD_PREEXEC_SCRIPT_PROJ"
@@ -2188,10 +2430,9 @@ data["reviewed_scripts"] = data["reviewed_scripts"][:1]
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_SCRIPT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 6 verify should fail when a planned script is not reviewed" >&2
-  exit 1
-fi
+# CASE_ID: l2.p6.reject.script-coverage
+expect_reject l2.p6.reject.script-coverage "$BAD_PREEXEC_SCRIPT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_SCRIPT_PROJ"
 
 BAD_PREEXEC_REREVIEW_PROJ="$TMP/bad-preexec-rereview-project"
 cp -R "$PREEXEC_PROJ" "$BAD_PREEXEC_REREVIEW_PROJ"
@@ -2225,10 +2466,9 @@ rereview["rereviewed_findings"] = [
 with open(rereview_path, "w", encoding="utf-8") as f:
     json.dump(rereview, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_REREVIEW_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 6 verify should fail when fixed blockers do not pass re-review" >&2
-  exit 1
-fi
+# CASE_ID: l2.p6.reject.rereview-session
+expect_reject l2.p6.reject.rereview-session "$BAD_PREEXEC_REREVIEW_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 6 "$BAD_PREEXEC_REREVIEW_PROJ"
 
 PREMORTEM_PROJ="$TMP/premortem-project"
 cp -R "$PREEXEC_PROJ" "$PREMORTEM_PROJ"
@@ -2561,7 +2801,13 @@ cat > "$PREMORTEM_PROJ/review/analysis-premortem-fix-log.json" <<'JSON'
   ]
 }
 JSON
-bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$PREMORTEM_PROJ" >/dev/null
+# CASE_ID: l2.p7.reject.missing-review-evidence
+expect_reject l2.p7.reject.missing-review-evidence "$PREMORTEM_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$PREMORTEM_PROJ"
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$PREMORTEM_PROJ" 7 premortem_panel >/dev/null
+# CASE_ID: phase.7.positive
+expect_pass phase.7.positive "$PREMORTEM_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$PREMORTEM_PROJ"
 
 BAD_PREMORTEM_ENGINE_PROJ="$TMP/bad-premortem-engine-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_ENGINE_PROJ"
@@ -2575,10 +2821,9 @@ data["premortem_engine"]["skill"] = "scholar-auto-research"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail when scholar-analyze premortem provenance is missing" >&2
-  exit 1
-fi
+# CASE_ID: phase.7.negative
+expect_reject phase.7.negative "$BAD_PREMORTEM_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_ENGINE_PROJ"
 
 BAD_PREMORTEM_ROLE_PROJ="$TMP/bad-premortem-role-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_ROLE_PROJ"
@@ -2592,10 +2837,9 @@ data["reviewers"] = [r for r in data["reviewers"] if r["role"] != "interpretatio
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_ROLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail when a premortem reviewer role is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.reviewer-role
+expect_reject l2.p7.reject.reviewer-role "$BAD_PREMORTEM_ROLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_ROLE_PROJ"
 
 BAD_PREMORTEM_PROVENANCE_PROJ="$TMP/bad-premortem-provenance-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_PROVENANCE_PROJ"
@@ -2609,18 +2853,32 @@ data["reviewer_provenance"][0]["agent_name"] = "inline-roleplay"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_PROVENANCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail on inline reviewer provenance" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.verify.portable-agent-label
+expect_pass l2.p7.verify.portable-agent-label "$BAD_PREMORTEM_PROVENANCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_PROVENANCE_PROJ"
+
+BAD_PREMORTEM_PROVENANCE_BINDING_PROJ="$TMP/bad-premortem-provenance-binding-project"
+cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_PROVENANCE_BINDING_PROJ"
+python3 - "$BAD_PREMORTEM_PROVENANCE_BINDING_PROJ/review/analysis-premortem.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+data["reviewer_provenance"][0]["task_invocation_id"] = "contradictory-unregistered-task"
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+# CASE_ID: l2.p7.reject.provenance-binding
+expect_reject l2.p7.reject.provenance-binding "$BAD_PREMORTEM_PROVENANCE_BINDING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_PROVENANCE_BINDING_PROJ"
 
 BAD_PREMORTEM_HASH_PROJ="$TMP/bad-premortem-hash-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_HASH_PROJ"
 printf '\nLate unreviewed analysis-plan change.\n' >> "$BAD_PREMORTEM_HASH_PROJ/analysis/analysis-plan.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail on stale source hashes" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.stale-input-hash
+expect_reject l2.p7.reject.stale-input-hash "$BAD_PREMORTEM_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_HASH_PROJ"
 
 BAD_PREMORTEM_RISK_PROJ="$TMP/bad-premortem-risk-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_RISK_PROJ"
@@ -2635,10 +2893,9 @@ data["unresolved_blocking_count"] = 1
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_RISK_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail on unresolved blocking premortem risk" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.risk-register
+expect_reject l2.p7.reject.risk-register "$BAD_PREMORTEM_RISK_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_RISK_PROJ"
 
 BAD_PREMORTEM_LIMIT_PROJ="$TMP/bad-premortem-limit-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_LIMIT_PROJ"
@@ -2652,10 +2909,9 @@ data["accepted_limitations"][0]["severity"] = "major"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_LIMIT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail when a major risk is accepted as a limitation" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.accepted-limitation
+expect_reject l2.p7.reject.accepted-limitation "$BAD_PREMORTEM_LIMIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_LIMIT_PROJ"
 
 BAD_PREMORTEM_NULL_PROJ="$TMP/bad-premortem-null-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_NULL_PROJ"
@@ -2669,10 +2925,9 @@ data["null_falsification_table"][0]["precommitted"] = False
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_NULL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail when null-falsification rules are not precommitted" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.null-falsification
+expect_reject l2.p7.reject.null-falsification "$BAD_PREMORTEM_NULL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_NULL_PROJ"
 
 BAD_PREMORTEM_REPORTING_PROJ="$TMP/bad-premortem-reporting-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_REPORTING_PROJ"
@@ -2686,19 +2941,17 @@ data["reporting_depth_checklist"] = [row for row in data["reporting_depth_checkl
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_REPORTING_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail when reporting-depth checklist misses a reporting mitigation" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.reporting-depth
+expect_reject l2.p7.reject.reporting-depth "$BAD_PREMORTEM_REPORTING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_REPORTING_PROJ"
 
 BAD_PREMORTEM_EXEC_PROJ="$TMP/bad-premortem-exec-project"
 cp -R "$PREMORTEM_PROJ" "$BAD_PREMORTEM_EXEC_PROJ"
 mkdir -p "$BAD_PREMORTEM_EXEC_PROJ/analysis"
 printf '{"status":"already executed"}\n' > "$BAD_PREMORTEM_EXEC_PROJ/analysis/execution-report.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_EXEC_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 7 verify should fail if execution artifacts exist before Phase 8" >&2
-  exit 1
-fi
+# CASE_ID: l2.p7.reject.preexecution-artifact
+expect_reject l2.p7.reject.preexecution-artifact "$BAD_PREMORTEM_EXEC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 7 "$BAD_PREMORTEM_EXEC_PROJ"
 
 EXEC_PROJ="$TMP/execution-project"
 cp -R "$PREMORTEM_PROJ" "$EXEC_PROJ"
@@ -2745,7 +2998,7 @@ cat > "$EXEC_PROJ/tables/regression-main.html" <<'HTML'
   </tbody>
 </table>
 HTML
-printf 'figure fixture\n' > "$EXEC_PROJ/figures/event-study.png"
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' | base64 -d > "$EXEC_PROJ/figures/event-study.png"
 cat > "$EXEC_PROJ/tables/results-registry.csv" <<'CSV'
 spec_id,model_id,outcome,predictor,estimate,std_error,p_value,n,status,output_file
 S1,M1,adolescent educational expectations,parental job loss,-0.120,0.040,0.003,1200,completed,tables/model-results.csv
@@ -3062,10 +3315,13 @@ cat > "$EXEC_PROJ/analysis/execution-report.json" <<JSON
   "errors": []
 }
 JSON
-bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$EXEC_PROJ" >/dev/null
+# CASE_ID: phase.8.positive
+expect_pass phase.8.positive "$EXEC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$EXEC_PROJ"
 
 BAD_EXEC_ENGINE_PROJ="$TMP/bad-execution-engine-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_ENGINE_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_ENGINE_PROJ"
 python3 - "$BAD_EXEC_ENGINE_PROJ/analysis/execution-report.json" <<'PY'
 import json
 import sys
@@ -3076,13 +3332,13 @@ data["execution_engine"]["skill"] = "scholar-auto-research"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when scholar-analyze execution provenance is missing" >&2
-  exit 1
-fi
+# CASE_ID: phase.8.negative
+expect_reject phase.8.negative "$BAD_EXEC_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_ENGINE_PROJ"
 
 BAD_EXEC_STACK_PROJ="$TMP/bad-execution-stack-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_STACK_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_STACK_PROJ"
 python3 - "$BAD_EXEC_STACK_PROJ/analysis/execution-report.json" <<'PY'
 import json
 import sys
@@ -3095,13 +3351,13 @@ data["analysis_stack"]["deviation_justification"] = ""
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_STACK_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when quantitative analysis stack drops modelsummary without justification" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.analysis-stack
+expect_reject l2.p8.reject.analysis-stack "$BAD_EXEC_STACK_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_STACK_PROJ"
 
 BAD_EXEC_VIZ_PROJ="$TMP/bad-execution-viz-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_VIZ_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_VIZ_PROJ"
 python3 - "$BAD_EXEC_VIZ_PROJ/analysis/execution-report.json" <<'PY'
 import json
 import sys
@@ -3136,13 +3392,13 @@ for item in data["executed_scripts"]:
         item["script_hash"] = script_hash
 report_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_VIZ_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when ggplot2 execution skips viz_setting.R and theme_Publication" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.viz-style
+expect_reject l2.p8.reject.viz-style "$BAD_EXEC_VIZ_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_VIZ_PROJ"
 
 BAD_EXEC_PHASE7_DRIFT_PROJ="$TMP/bad-execution-phase7-drift-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_PHASE7_DRIFT_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_PHASE7_DRIFT_PROJ"
 printf '\nLate unreviewed Phase 7 source drift.\n' >> "$BAD_EXEC_PHASE7_DRIFT_PROJ/analysis/analysis-plan.md"
 python3 - "$BAD_EXEC_PHASE7_DRIFT_PROJ/analysis/execution-report.json" "$BAD_EXEC_PHASE7_DRIFT_PROJ/analysis/analysis-plan.md" <<'PY'
 import hashlib
@@ -3155,13 +3411,13 @@ data["source_hashes"]["analysis_plan"] = hashlib.sha256(open(plan_path, "rb").re
 with open(report_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_PHASE7_DRIFT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when Phase 7 source hashes are stale even if execution hashes are recomputed" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.phase7-source-drift
+expect_reject l2.p8.reject.phase7-source-drift "$BAD_EXEC_PHASE7_DRIFT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_PHASE7_DRIFT_PROJ"
 
 BAD_EXEC_TRACE_PROJ="$TMP/bad-execution-trace-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_TRACE_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_TRACE_PROJ"
 python3 - "$BAD_EXEC_TRACE_PROJ/analysis/execution-report.json" <<'PY'
 import json
 import sys
@@ -3172,29 +3428,29 @@ data["command_trace"][0]["stdout_log"] = "logs/missing.stdout.log"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_TRACE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when command trace logs are missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.command-trace
+expect_reject l2.p8.reject.command-trace "$BAD_EXEC_TRACE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_TRACE_PROJ"
 
 BAD_EXEC_ARTIFACT_PROJ="$TMP/bad-execution-artifact-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_ARTIFACT_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_ARTIFACT_PROJ"
 printf 'unregistered table artifact\n' > "$BAD_EXEC_ARTIFACT_PROJ/tables/unregistered-diagnostic.csv"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_ARTIFACT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail on unregistered table artifacts" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.unregistered-artifact
+expect_reject l2.p8.reject.unregistered-artifact "$BAD_EXEC_ARTIFACT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_ARTIFACT_PROJ"
 
 BAD_EXEC_HASH_PROJ="$TMP/bad-execution-hash-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_HASH_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_HASH_PROJ"
 printf '\nLate unreviewed inventory change.\n' >> "$BAD_EXEC_HASH_PROJ/analysis/scripts-inventory.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail on stale execution source hashes" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.malformed-source-json
+expect_reject l2.p8.reject.malformed-source-json "$BAD_EXEC_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_HASH_PROJ"
 
 BAD_EXEC_EXIT_PROJ="$TMP/bad-execution-exit-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_EXIT_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_EXIT_PROJ"
 python3 - "$BAD_EXEC_EXIT_PROJ/analysis/execution-report.json" <<'PY'
 import json
 import sys
@@ -3206,13 +3462,13 @@ data["executed_scripts"][1]["status"] = "failed"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_EXIT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail on nonzero exit code" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.script-exit
+expect_reject l2.p8.reject.script-exit "$BAD_EXEC_EXIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_EXIT_PROJ"
 
 BAD_EXEC_SPEC_PROJ="$TMP/bad-execution-spec-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_SPEC_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_SPEC_PROJ"
 python3 - "$BAD_EXEC_SPEC_PROJ/tables/results-registry.csv" <<'PY'
 import csv
 import sys
@@ -3225,22 +3481,21 @@ with open(path, "w", newline="", encoding="utf-8") as f:
     writer.writeheader()
     writer.writerows(rows)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_SPEC_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when a planned spec is missing from results registry" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.results-hash
+expect_reject l2.p8.reject.results-hash "$BAD_EXEC_SPEC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_SPEC_PROJ"
 
 BAD_EXEC_OUTPUT_PROJ="$TMP/bad-execution-output-project"
 cp -R "$EXEC_PROJ" "$BAD_EXEC_OUTPUT_PROJ"
+rebind_execution_fixture_root "$BAD_EXEC_OUTPUT_PROJ"
 python3 - "$BAD_EXEC_OUTPUT_PROJ/data/processed/analytic-sample.rds" <<'PY'
 import os
 import sys
 os.remove(sys.argv[1])
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_OUTPUT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 8 verify should fail when an expected output is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p8.reject.missing-output
+expect_reject l2.p8.reject.missing-output "$BAD_EXEC_OUTPUT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 8 "$BAD_EXEC_OUTPUT_PROJ"
 
 POSTEXEC_PROJ="$TMP/postexec-project"
 progress "phases 9 to 12 post-execution, sanity, lock, and blueprint fixtures"
@@ -3544,7 +3799,13 @@ cat > "$POSTEXEC_PROJ/review/post-execution-fix-log.json" <<'JSON'
   "fixed_findings": []
 }
 JSON
-bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$POSTEXEC_PROJ" >/dev/null
+# CASE_ID: l2.p9.reject.missing-review-evidence
+expect_reject l2.p9.reject.missing-review-evidence "$POSTEXEC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$POSTEXEC_PROJ"
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$POSTEXEC_PROJ" 9 post_execution_panel >/dev/null
+# CASE_ID: phase.9.positive
+expect_pass phase.9.positive "$POSTEXEC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$POSTEXEC_PROJ"
 
 BAD_POSTEXEC_ENGINE_PROJ="$TMP/bad-postexec-engine-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_ENGINE_PROJ"
@@ -3558,18 +3819,16 @@ data["review_engine"]["skill"] = "scholar-auto-research"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when scholar-verify stage1 provenance is missing" >&2
-  exit 1
-fi
+# CASE_ID: phase.9.negative
+expect_reject phase.9.negative "$BAD_POSTEXEC_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_ENGINE_PROJ"
 
 BAD_POSTEXEC_JSON_PROJ="$TMP/bad-postexec-json-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_JSON_PROJ"
 printf '{}\n' > "$BAD_POSTEXEC_JSON_PROJ/review/post-execution-review.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_JSON_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail on placeholder post-execution review JSON" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.placeholder-review
+expect_reject l2.p9.reject.placeholder-review "$BAD_POSTEXEC_JSON_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_JSON_PROJ"
 
 BAD_POSTEXEC_ROLE_PROJ="$TMP/bad-postexec-role-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_ROLE_PROJ"
@@ -3583,10 +3842,25 @@ data["reviewers"] = [r for r in data["reviewers"] if r["role"] != "interpretatio
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_ROLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when a post-execution reviewer role is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.reviewer-role
+expect_reject l2.p9.reject.reviewer-role "$BAD_POSTEXEC_ROLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_ROLE_PROJ"
+
+BAD_POSTEXEC_PROVENANCE_BINDING_PROJ="$TMP/bad-postexec-provenance-binding-project"
+cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_PROVENANCE_BINDING_PROJ"
+python3 - "$BAD_POSTEXEC_PROVENANCE_BINDING_PROJ/review/post-execution-review.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+data["reviewer_provenance"][0]["report_path"] = data["reviewer_provenance"][1]["report_path"]
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+# CASE_ID: l2.p9.reject.provenance-binding
+expect_reject l2.p9.reject.provenance-binding "$BAD_POSTEXEC_PROVENANCE_BINDING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_PROVENANCE_BINDING_PROJ"
 
 BAD_POSTEXEC_VALUE_PROJ="$TMP/bad-postexec-value-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_VALUE_PROJ"
@@ -3600,10 +3874,9 @@ data["reviewed_specs"][0]["estimate"] = -9.999
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_VALUE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when reviewed spec values differ from results registry" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.reviewed-spec-value
+expect_reject l2.p9.reject.reviewed-spec-value "$BAD_POSTEXEC_VALUE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_VALUE_PROJ"
 
 BAD_POSTEXEC_FIGURE_PROJ="$TMP/bad-postexec-figure-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_FIGURE_PROJ"
@@ -3617,10 +3890,9 @@ data["reviewed_figures"][0]["visual_inspection"] = False
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_FIGURE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when completed figures lack visual inspection" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.figure-inspection
+expect_reject l2.p9.reject.figure-inspection "$BAD_POSTEXEC_FIGURE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_FIGURE_PROJ"
 
 BAD_POSTEXEC_RAW_VERIFY_PROJ="$TMP/bad-postexec-raw-verify-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_RAW_VERIFY_PROJ"
@@ -3634,10 +3906,9 @@ data["raw_output_verification"]["checked_raw_tables"] = ["tables/results-registr
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_RAW_VERIFY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when raw output verification misses model output tables" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.raw-output-coverage
+expect_reject l2.p9.reject.raw-output-coverage "$BAD_POSTEXEC_RAW_VERIFY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_RAW_VERIFY_PROJ"
 
 BAD_POSTEXEC_CARRY_PROJ="$TMP/bad-postexec-carryforward-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_CARRY_PROJ"
@@ -3651,18 +3922,16 @@ data["phase7_constraint_carryforward"]["claim_constraints_reflect_phase7"] = Fal
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_CARRY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when Phase 7 constraints are not carried forward" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.phase7-carryforward
+expect_reject l2.p9.reject.phase7-carryforward "$BAD_POSTEXEC_CARRY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_CARRY_PROJ"
 
 BAD_POSTEXEC_HASH_PROJ="$TMP/bad-postexec-hash-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_HASH_PROJ"
 printf 'S3,M1,Y,X,0.1,0.1,0.5,100,completed,tables/model-results.csv\n' >> "$BAD_POSTEXEC_HASH_PROJ/tables/results-registry.csv"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail on stale post-execution source hashes" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.stale-input-hash
+expect_reject l2.p9.reject.stale-input-hash "$BAD_POSTEXEC_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_HASH_PROJ"
 
 BAD_POSTEXEC_ROUTE_PROJ="$TMP/bad-postexec-route-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_ROUTE_PROJ"
@@ -3677,10 +3946,9 @@ data["decision"] = "ROUTE_BACK"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_ROUTE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when route_back_phase is set" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.route-back
+expect_reject l2.p9.reject.route-back "$BAD_POSTEXEC_ROUTE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_ROUTE_PROJ"
 
 BAD_POSTEXEC_UNEXPECTED_PROJ="$TMP/bad-postexec-unexpected-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_UNEXPECTED_PROJ"
@@ -3694,17 +3962,44 @@ data["unexpected_results"] = []
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_UNEXPECTED_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail when weak/unexpected specs are not classified" >&2
-  exit 1
-fi
+# CASE_ID: l2.p9.reject.unexpected-results
+expect_reject l2.p9.reject.unexpected-results "$BAD_POSTEXEC_UNEXPECTED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_UNEXPECTED_PROJ"
 
 BAD_POSTEXEC_MARKDOWN_PROJ="$TMP/bad-postexec-markdown-project"
 cp -R "$POSTEXEC_PROJ" "$BAD_POSTEXEC_MARKDOWN_PROJ"
 printf 'A blocking invalid result remains unresolved even though JSON says pass.\n' > "$BAD_POSTEXEC_MARKDOWN_PROJ/review/post-execution-review.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_MARKDOWN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 9 verify should fail on markdown/JSON contradiction" >&2
-  exit 1
+# CASE_ID: l2.p9.reject.markdown-contradiction
+expect_reject l2.p9.reject.markdown-contradiction "$BAD_POSTEXEC_MARKDOWN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 9 "$BAD_POSTEXEC_MARKDOWN_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_PHASE5_9_WRONG_REASON:-0}" != "1" ]]; then
+  WRONG_REASON_5_9_OUT="$TMP/phase5-9-wrong-reason.out"
+  if (
+    unset SCHOLAR_HARNESS_SOURCE_ROOT SCHOLAR_HARNESS_MANIFEST
+    unset SCHOLAR_HARNESS_RESULTS_DIR SCHOLAR_HARNESS_RUN_ID SCHOLAR_HARNESS_RUN_NONCE
+    unset SCHOLAR_HARNESS_SUITE_MODE SCHOLAR_HARNESS_SUITE_ORDER
+    unset SCHOLAR_HARNESS_MANIFEST_SHA256 SCHOLAR_HARNESS_SOURCE_GENERATION_SHA256
+    unset SCHOLAR_HARNESS_CAPABILITY
+    export SCHOLAR_FIXTURE_PHASE5_9_WRONG_REASON=1
+    export SCHOLAR_FIXTURE_STOP_AFTER_PHASE=9
+    bash "$SCRIPT_DIR/auto-research-fixture-test.sh"
+  ) >"$WRONG_REASON_5_9_OUT" 2>&1; then
+    echo "FAIL: phase 5-9 wrong-reason mutation unexpectedly passed" >&2
+    exit 1
+  fi
+  grep -F 'HARNESS_ASSERTION_FAILED: case=phase.5.negative exact diagnostic count expected=1 observed=0;' \
+    "$WRONG_REASON_5_9_OUT" >/dev/null \
+    || {
+      echo "FAIL: phase 5-9 wrong-reason mutation did not fail at the exact diagnostic gate" >&2
+      exit 1
+    }
+fi
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "9" ]]; then
+  harness_validate_results --phase-through 9 >/dev/null
+  progress "phases 0 to 9 authoritative harness assertions passed"
+  exit 0
 fi
 
 SANITY_PROJ="$TMP/runtime-sanity-project"
@@ -3900,7 +4195,25 @@ sentence = "The runtime sanity check confirms that execution artifacts, result r
 with open(path, "w", encoding="utf-8") as f:
     f.write(sentence * 5)
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$SANITY_PROJ" >/dev/null
+# CASE_ID: phase.10.positive
+expect_pass phase.10.positive "$SANITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$SANITY_PROJ"
+
+BAD_SANITY_VERDICT_PROJ="$TMP/bad-sanity-verdict-project"
+cp -R "$SANITY_PROJ" "$BAD_SANITY_VERDICT_PROJ"
+python3 - "$BAD_SANITY_VERDICT_PROJ/verify/runtime-sanity.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+data["verdict"] = "FAIL"
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+# CASE_ID: phase.10.negative
+expect_reject phase.10.negative "$BAD_SANITY_VERDICT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_VERDICT_PROJ"
 
 BAD_SANITY_ENGINE_PROJ="$TMP/bad-sanity-engine-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_ENGINE_PROJ"
@@ -3914,10 +4227,9 @@ data["runtime_engine"]["skill"] = "inline-runtime-check"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail when runtime engine provenance is invalid" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.runtime-engine
+expect_reject l2.p10.reject.runtime-engine "$BAD_SANITY_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_ENGINE_PROJ"
 
 BAD_SANITY_CONSTRAINT_PROJ="$TMP/bad-sanity-constraint-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_CONSTRAINT_PROJ"
@@ -3931,10 +4243,9 @@ data["phase9_constraint_carryforward"]["unexpected_result_spec_ids"] = []
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_CONSTRAINT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail when Phase 9 constraints are not carried forward" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.constraint-carryforward
+expect_reject l2.p10.reject.constraint-carryforward "$BAD_SANITY_CONSTRAINT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_CONSTRAINT_PROJ"
 
 BAD_SANITY_PHASE8_MANIFEST_PROJ="$TMP/bad-sanity-phase8-manifest-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_PHASE8_MANIFEST_PROJ"
@@ -3944,14 +4255,14 @@ import sys
 path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
     data = json.load(f)
-data["artifact_manifest"][0]["sha256"] = "0" * 64
+data["artifact_manifest"][0]["fixture_rebind_marker"] = "clean-room-negative"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_PHASE8_MANIFEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on stale Phase 8 artifact manifest" >&2
-  exit 1
-fi
+rebind_phase10_fixture_hashes "$BAD_SANITY_PHASE8_MANIFEST_PROJ" execution_report
+# CASE_ID: l2.p10.reject.clean-room-artifact-hash
+expect_reject l2.p10.reject.clean-room-artifact-hash "$BAD_SANITY_PHASE8_MANIFEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_PHASE8_MANIFEST_PROJ"
 
 BAD_SANITY_RECON_PROJ="$TMP/bad-sanity-reconciliation-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_RECON_PROJ"
@@ -3969,18 +4280,25 @@ data["lock_candidate_reconciliation"]["required_paths"] = [
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_RECON_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on inconsistent lock-candidate reconciliation" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.lock-reconciliation
+expect_reject l2.p10.reject.lock-reconciliation "$BAD_SANITY_RECON_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_RECON_PROJ"
 
 BAD_SANITY_HASH_PROJ="$TMP/bad-sanity-hash-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_HASH_PROJ"
-printf 'S3,M1,Y,X,0.1,0.1,0.5,100,completed,tables/model-results.csv\n' >> "$BAD_SANITY_HASH_PROJ/tables/results-registry.csv"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on stale runtime sanity hashes" >&2
-  exit 1
-fi
+python3 - "$BAD_SANITY_HASH_PROJ/verify/runtime-sanity.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+data["source_hashes"]["results_registry"] = "0" * 64
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, sort_keys=True)
+PY
+# CASE_ID: l2.p10.reject.source-hash
+expect_reject l2.p10.reject.source-hash "$BAD_SANITY_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_HASH_PROJ"
 
 BAD_SANITY_PLAUS_PROJ="$TMP/bad-sanity-plausibility-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_PLAUS_PROJ"
@@ -3994,10 +4312,9 @@ data["plausibility"]["checks"][0]["status"] = "FAIL"
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_PLAUS_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on failed plausibility check" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.plausibility
+expect_reject l2.p10.reject.plausibility "$BAD_SANITY_PLAUS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_PLAUS_PROJ"
 
 BAD_SANITY_DRIFT_PROJ="$TMP/bad-sanity-drift-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_DRIFT_PROJ"
@@ -4012,10 +4329,9 @@ data["pap_drift"]["drift_items"] = [{"drift_id": "D1", "status": "open", "descri
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_DRIFT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on unresolved PAP drift" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.pap-drift
+expect_reject l2.p10.reject.pap-drift "$BAD_SANITY_DRIFT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_DRIFT_PROJ"
 
 BAD_SANITY_INV_PROJ="$TMP/bad-sanity-inventory-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_INV_PROJ"
@@ -4029,18 +4345,16 @@ data["artifact_inventory"] = data["artifact_inventory"][:2]
 with open(path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, sort_keys=True)
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_INV_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on incomplete artifact inventory" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.artifact-inventory
+expect_reject l2.p10.reject.artifact-inventory "$BAD_SANITY_INV_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_INV_PROJ"
 
 BAD_SANITY_MARKDOWN_PROJ="$TMP/bad-sanity-markdown-project"
 cp -R "$SANITY_PROJ" "$BAD_SANITY_MARKDOWN_PROJ"
 printf 'A critical drift remains unresolved even though JSON says pass.\n' > "$BAD_SANITY_MARKDOWN_PROJ/verify/runtime-sanity.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_MARKDOWN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 10 verify should fail on markdown/JSON contradiction" >&2
-  exit 1
-fi
+# CASE_ID: l2.p10.reject.markdown-contradiction
+expect_reject l2.p10.reject.markdown-contradiction "$BAD_SANITY_MARKDOWN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 10 "$BAD_SANITY_MARKDOWN_PROJ"
 
 LOCK_PROJ="$TMP/results-lock-project"
 cp -R "$SANITY_PROJ" "$LOCK_PROJ"
@@ -4155,7 +4469,23 @@ stage1 = {
 }
 (proj / "verify/stage1-verify.json").write_text(json.dumps(stage1, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$LOCK_PROJ" >/dev/null
+# CASE_ID: phase.11.positive
+expect_pass phase.11.positive "$LOCK_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$LOCK_PROJ"
+
+BAD_LOCK_VERDICT_PROJ="$TMP/bad-lock-verdict-project"
+cp -R "$LOCK_PROJ" "$BAD_LOCK_VERDICT_PROJ"
+python3 - "$BAD_LOCK_VERDICT_PROJ/results-locked/manifest.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+data = json.loads(open(path, encoding="utf-8").read())
+data["verdict"] = "FAIL"
+open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: phase.11.negative
+expect_reject phase.11.negative "$BAD_LOCK_VERDICT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_VERDICT_PROJ"
 
 BAD_LOCK_ENGINE_PROJ="$TMP/bad-lock-engine-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_ENGINE_PROJ"
@@ -4167,10 +4497,9 @@ data = json.loads(open(path, encoding="utf-8").read())
 data["lock_engine"]["skill"] = "manual-copy"
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when lock engine provenance is invalid" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.lock-engine
+expect_reject l2.p11.reject.lock-engine "$BAD_LOCK_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_ENGINE_PROJ"
 
 BAD_LOCK_LATEST_FLAG_PROJ="$TMP/bad-lock-latest-flag-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_LATEST_FLAG_PROJ"
@@ -4182,10 +4511,9 @@ data = json.loads(open(path, encoding="utf-8").read())
 data["latest_matches"] = False
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_LATEST_FLAG_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when manifest latest_matches is false" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.latest-flag
+expect_reject l2.p11.reject.latest-flag "$BAD_LOCK_LATEST_FLAG_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_LATEST_FLAG_PROJ"
 
 BAD_LOCK_STAGE1_PROVENANCE_PROJ="$TMP/bad-lock-stage1-provenance-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_STAGE1_PROVENANCE_PROJ"
@@ -4197,10 +4525,9 @@ data = json.loads(open(path, encoding="utf-8").read())
 data["scanner_provenance"]["scanner"] = "manual-stage1-check"
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_STAGE1_PROVENANCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when Stage 1 scanner provenance is invalid" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.stage1-provenance
+expect_reject l2.p11.reject.stage1-provenance "$BAD_LOCK_STAGE1_PROVENANCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_STAGE1_PROVENANCE_PROJ"
 
 BAD_LOCK_STAGE1_VERDICT_PROJ="$TMP/bad-lock-stage1-verdict-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_STAGE1_VERDICT_PROJ"
@@ -4222,36 +4549,41 @@ stage1["input_manifest_sha256"] = manifest["manifest_sha256"]
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 stage1_path.write_text(json.dumps(stage1, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_STAGE1_VERDICT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when manifest Stage 1 verdict disagrees with Stage 1 report" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.stage1-verdict
+expect_reject l2.p11.reject.stage1-verdict "$BAD_LOCK_STAGE1_VERDICT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_STAGE1_VERDICT_PROJ"
 
 BAD_LOCK_LATEST_PROJ="$TMP/bad-lock-latest-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_LATEST_PROJ"
 printf 'OTHER-LOCK\n' > "$BAD_LOCK_LATEST_PROJ/results-locked/LATEST.txt"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_LATEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when LATEST.txt does not match lock_id" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.latest-pointer
+expect_reject l2.p11.reject.latest-pointer "$BAD_LOCK_LATEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_LATEST_PROJ"
 
 BAD_LOCK_MISSING_PROJ="$TMP/bad-lock-missing-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_MISSING_PROJ"
 python3 - "$BAD_LOCK_MISSING_PROJ/results-locked/manifest.json" "$BAD_LOCK_MISSING_PROJ/verify/stage1-verify.json" <<'PY'
 import json
+import hashlib
 import sys
 manifest_path, stage1_path = sys.argv[1:3]
 manifest = json.loads(open(manifest_path, encoding="utf-8").read())
 stage1 = json.loads(open(stage1_path, encoding="utf-8").read())
 manifest["locked_artifacts"] = manifest["locked_artifacts"][:-1]
 stage1["checked_artifacts"] = stage1["checked_artifacts"][:-1]
+clone = dict(manifest)
+clone.pop("manifest_sha256", None)
+manifest["manifest_sha256"] = hashlib.sha256(
+    json.dumps(clone, sort_keys=True, separators=(",", ":")).encode()
+).hexdigest()
+stage1["manifest_sha256"] = manifest["manifest_sha256"]
+stage1["input_manifest_sha256"] = manifest["manifest_sha256"]
 open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 open(stage1_path, "w", encoding="utf-8").write(json.dumps(stage1, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_MISSING_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when manifest omits a Phase 10 lock candidate" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.lock-candidate-coverage
+expect_reject l2.p11.reject.lock-candidate-coverage "$BAD_LOCK_MISSING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_MISSING_PROJ"
 
 BAD_LOCK_HASH_PROJ="$TMP/bad-lock-hash-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_HASH_PROJ"
@@ -4263,10 +4595,9 @@ data = json.loads(open(path, encoding="utf-8").read())
 data["created_at"] = "2026-04-29T13:00:00Z"
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when manifest content changes without manifest_sha256 update" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.manifest-self-hash
+expect_reject l2.p11.reject.manifest-self-hash "$BAD_LOCK_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_HASH_PROJ"
 
 BAD_LOCK_STAGE1_PROJ="$TMP/bad-lock-stage1-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_STAGE1_PROJ"
@@ -4278,26 +4609,24 @@ data = json.loads(open(path, encoding="utf-8").read())
 data["checked_artifacts"][0]["verdict"] = "FAIL"
 open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_STAGE1_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when Stage 1 artifact check fails" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.stage1-artifact-check
+expect_reject l2.p11.reject.stage1-artifact-check "$BAD_LOCK_STAGE1_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_STAGE1_PROJ"
 
 BAD_LOCK_EXTRA_PROJ="$TMP/bad-lock-extra-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_EXTRA_PROJ"
 printf 'unmanifested\n' > "$BAD_LOCK_EXTRA_PROJ/results-locked/LOCK-20260429-001/unmanifested-extra.csv"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_EXTRA_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when active lock directory has an unmanifested file" >&2
-  exit 1
-fi
+# CASE_ID: l2.p11.reject.unmanifested-file
+expect_reject l2.p11.reject.unmanifested-file "$BAD_LOCK_EXTRA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_EXTRA_PROJ"
 
 BAD_LOCK_SOURCE_DRIFT_PROJ="$TMP/bad-lock-source-drift-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_SOURCE_DRIFT_PROJ"
-printf 'spec_id,model_id,outcome,predictor,estimate,std_error,p_value,n,status,output_file\nS1,M1,Y,X,9,9,0.9,999,completed,tables/model-results.csv\n' > "$BAD_LOCK_SOURCE_DRIFT_PROJ/tables/results-registry.csv"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_SOURCE_DRIFT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when source artifacts drift after lock" >&2
-  exit 1
-fi
+printf '\n' >> "$BAD_LOCK_SOURCE_DRIFT_PROJ/tables/results-registry.csv"
+rebind_phase10_fixture_hashes "$BAD_LOCK_SOURCE_DRIFT_PROJ"
+# CASE_ID: l2.p11.reject.source-drift
+expect_reject l2.p11.reject.source-drift "$BAD_LOCK_SOURCE_DRIFT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_SOURCE_DRIFT_PROJ"
 
 BAD_LOCK_OUTSIDE_PROJ="$TMP/bad-lock-outside-project"
 cp -R "$LOCK_PROJ" "$BAD_LOCK_OUTSIDE_PROJ"
@@ -4311,7 +4640,6 @@ stage1_path = pathlib.Path(sys.argv[2])
 manifest = json.loads(manifest_path.read_text())
 stage1 = json.loads(stage1_path.read_text())
 manifest["locked_artifacts"][0]["locked_path"] = manifest["locked_artifacts"][0]["source_path"]
-manifest["locked_artifacts"][0]["lock_status"] = "source_locked"
 clone = dict(manifest)
 clone.pop("manifest_sha256", None)
 manifest["manifest_sha256"] = hashlib.sha256(json.dumps(clone, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -4321,9 +4649,14 @@ stage1["checked_artifacts"][0]["locked_path"] = manifest["locked_artifacts"][0][
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 stage1_path.write_text(json.dumps(stage1, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_OUTSIDE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 11 verify should fail when locked_path is outside active lock directory" >&2
-  exit 1
+# CASE_ID: l2.p11.reject.outside-lock-path
+expect_reject l2.p11.reject.outside-lock-path "$BAD_LOCK_OUTSIDE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 11 "$BAD_LOCK_OUTSIDE_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "11" ]]; then
+  harness_validate_results --phase-through 11 >/dev/null
+  progress "phases 0 to 11 authoritative harness assertions passed"
+  exit 0
 fi
 
 DRAFT_PROJ="$TMP/draft-project"
@@ -4415,6 +4748,7 @@ def section_prose_counts(text):
     return {k: wc(prose_only_text(v)) for k, v in sections.items()}
 
 lock_manifest = json.loads((proj / "results-locked/manifest.json").read_text())
+registry_lock = next(item for item in lock_manifest["locked_artifacts"] if item["artifact_role"] == "results_registry")
 journal_fit = json.loads((proj / "idea/journal-fit.json").read_text())
 journal_profile_resolution = journal_fit["journal_profile_resolution"]
 core_citations = " ".join(f"[@work{i:02d}]" for i in range(1, 13))
@@ -4442,7 +4776,17 @@ for item in lock_manifest["locked_artifacts"]:
             "display_type": "regression_table_html",
             "caption_text": "Table 2. Regression estimates for parental job loss and adolescent educational expectations.",
             "display_label": "Table 2",
-            "results_callout": "Table 2 shows that the primary specification is negative and that weaker robustness evidence remains subordinate to the headline estimate."
+            "results_callout": "Table 2 shows that the primary specification is negative and that weaker robustness evidence remains subordinate to the headline estimate.",
+            "claim_source": {
+                "schema_version": 2,
+                "binding_type": "mapped_structured_source",
+                "source_path": registry_lock["source_path"],
+                "locked_path": registry_lock["locked_path"],
+                "sha256": registry_lock["sha256"],
+                "row_selector_field": "spec_id",
+                "rendered_table": {"grammar": "markdown_pipe_v1", "orientation": "models_as_columns", "term_column": "Predictor", "field_rows": {"estimate_std_error": "Parental job loss", "p_value": "p-value", "n": "N"}},
+                "selected_rows": [{"selector": "S1", "display_column": "Model 1"}, {"selector": "S2", "display_column": "Model 2"}, {"selector": "S3", "display_column": "Model 3"}]
+            }
         })
     elif item["artifact_role"] == "figure_file":
         coverage_item.update({
@@ -4497,7 +4841,7 @@ The primary model is a household fixed-effects linear regression because the res
 results_paragraphs = [
     "Table 1 reports descriptive statistics for all modeled variables in the analytic sample, including adolescent educational expectations, parental job loss, child age, survey wave, and household income. These descriptives establish the scale, coding, and denominator before the regression evidence is interpreted.",
     "Table 2 shows the headline regression estimates for the primary and robustness specifications. In Model 1, the primary specification, parental job loss is associated with lower adolescent educational expectations, with an estimate of -0.120, a standard error of 0.040, a p-value of 0.003, and n = 1200 [@work01]. This is the clearest result in the reviewed evidence, so the manuscript treats it as the main empirical anchor rather than spreading equal weight across every specification. Its direction matches the feasibility mechanism developed in the theory section, but the interpretation remains associational because the design cannot rule out all time-varying unobserved shocks.",
-    "Table 2 also shows why the manuscript frames robustness evidence cautiously. Model 2, the timing-oriented specification, remains negative at -0.080 with a standard error of 0.050 and a p-value of 0.110 [@work02], so it is directionally consistent without being uniformly strong. By contrast, Model 3, the attrition-weighted specification, is -0.090 with a standard error of 0.045 and a p-value of 0.046 [@work03], which keeps the bounded association in view while preserving uncertainty. These side-by-side rows are why the Results section reports a negative pattern with uneven robustness instead of a claim of uniform confirmation. The weaker robustness estimate is treated as a boundary on the claim rather than as a finding to smooth over. Primary claims must stay aligned with reviewed evidence. All numerical claims must stay aligned with reviewed evidence.",
+    "Table 2 also shows why the manuscript frames robustness evidence cautiously. For Model 2, the timing-oriented specification has a negative estimate of -0.080, a standard error of 0.050, a p-value of 0.110, and n = 1200 [@work02]. For Model 3, the attrition-weighted specification has a negative estimate of -0.090, a standard error of 0.045, a p-value of 0.046, and n = 1200 [@work03]. These side-by-side results support a negative pattern with uneven robustness instead of uniform confirmation. The weaker robustness estimate is treated as a boundary on the claim rather than as a finding to smooth over. Primary claims must stay aligned with reviewed evidence. All numerical claims must stay aligned with reviewed evidence.",
     "Figure 1 presents the event-study diagnostic and visually supports the same bounded reading. The figure is not treated as standalone proof; instead, it helps readers inspect timing and visual consistency while the tabled estimates carry the inferential claims. Read together, the descriptive statistics, regression table, and diagnostic figure indicate that the pattern is negative in the primary specification, weaker in one robustness check, and therefore best interpreted as evidence for a cautious observational claim rather than a decisive causal story."
 ]
 discussion_paragraphs = [
@@ -4536,11 +4880,6 @@ display_figure_block = "\n".join([
     "",
     "![Figure 1. Event-study diagnostic figure](figures/event-study.png)",
 ])
-claim_anchor_comments = "\n".join([
-    "<!-- CLAIM_ANCHOR: The primary specification S1 shows a negative association between parental job loss and adolescent educational expectations, with estimate -0.120, standard error 0.040, p-value 0.003, and n 1200 [@work01]. -->",
-    "<!-- CLAIM_ANCHOR: The robustness specification S2 points in the same direction with estimate -0.080, standard error 0.050, p-value 0.110, and n 1200 [@work02] -->",
-    "<!-- CLAIM_ANCHOR: The attrition-weighted robustness specification S3 remains negative with estimate -0.090, standard error 0.045, p-value 0.046, and n 1200 [@work03] -->",
-])
 manuscript = "\n\n".join([
     "# Parental Job Loss and Adolescent Educational Expectations",
     "Keywords: parental job loss; educational expectations; family inequality; panel data",
@@ -4548,9 +4887,10 @@ manuscript = "\n\n".join([
     "## Introduction\n" + "\n\n".join(intro_paragraphs),
     "## Background\n" + "\n\n".join(lit_paragraphs),
     "## Data and Methods\n" + "\n\n".join(methods_paragraphs),
-    "## Results\n" + "\n".join(anchors) + "\n\n" + claim_anchor_comments + "\n\n" + display_descriptive_block + "\n\n" + display_table_block + "\n\n" + display_figure_block + "\n\n" + "\n\n".join(results_paragraphs),
+    "## Results\n" + "\n".join(anchors) + "\n\n" + display_descriptive_block + "\n\n" + display_table_block + "\n\n" + display_figure_block + "\n\n" + "\n\n".join(results_paragraphs),
     "## Discussion\n" + "\n\n".join(discussion_paragraphs),
     "## Conclusion\n" + "\n\n".join(conclusion_paragraphs),
+    "## References\nAuthor, F. (2020). Verified citation fixture.",
 ])
 (proj / "manuscript/manuscript-draft.md").write_text(manuscript + "\n")
 counts = section_counts(manuscript)
@@ -4970,7 +5310,15 @@ polish_report = {
     "ready_for_verification": True
 }
 (proj / "manuscript/polish-report.json").write_text(json.dumps(polish_report, indent=2, sort_keys=True) + "\n")
-locked_result_claims = []
+registry_rows = list(csv.DictReader((proj / registry_lock["locked_path"]).open(newline="", encoding="utf-8")))
+selected = [("S1", "Model 1", "In Model 1, the primary specification"), ("S2", "Model 2", "For Model 2, the timing-oriented specification"), ("S3", "Model 3", "For Model 3, the attrition-weighted specification")]
+claim_rows = []
+for selector, display_column, anchor in selected:
+    row_index = next(i for i, row in enumerate(registry_rows) if row.get("spec_id") == selector)
+    row = registry_rows[row_index]
+    identity = ["locked_result_claim_v2", "mapped_structured_source", "tables/regression-main.html", registry_lock["source_path"], row_index, selector, "column", display_column]
+    claim_rows.append({"claim_id": "lrc2:" + hashlib.sha256(json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(), "row_index": row_index, "spec_id": selector, "display_coordinate_kind": "column", "display_coordinate": display_column, "display_column": display_column, "estimate": row["estimate"], "std_error": row["std_error"], "p_value": row["p_value"], "n": row["n"], "manuscript_anchor": anchor})
+locked_result_claims = [{"schema_version": 2, "binding_type": "mapped_structured_source", "source_path": registry_lock["source_path"], "locked_path": registry_lock["locked_path"], "display_source_path": "tables/regression-main.html", "display_locked_path": next(item["locked_path"] for item in lock_manifest["locked_artifacts"] if item["source_path"] == "tables/regression-main.html"), "row_count": len(claim_rows), "rows": claim_rows}]
 draft_manifest = {
     "verdict": "PASS",
     "degraded": False,
@@ -5058,7 +5406,7 @@ draft_manifest = {
         "main_text_word_count": main_text_word_count,
         "total_word_range": {"min": 1300, "max": 12000},
         "abstract_within_cap": True,
-        "sections": {section: {"words": count, "min_words": section_budget[section]["min_words"], "status": "PASS"} for section, count in counts.items()}
+        "sections": {section: {"words": counts.get(section, 0), "min_words": limits["min_words"], "status": "PASS"} for section, limits in section_budget.items()}
     },
     "draft_quality_gate": {
         "status": "PASS",
@@ -5095,6 +5443,7 @@ draft_manifest = {
         "results_prose_paragraph_count": 4
     },
     "locked_result_coverage": coverage,
+    "locked_result_claims_schema_version": 2,
     "display_evidence": {
         "status": "PASS",
         "displayed_sources": ["tables/regression-main.html", "figures/event-study.png"],
@@ -5136,8 +5485,12 @@ draft_manifest = {
 }
 (proj / "manuscript/draft-manifest.json").write_text(json.dumps(draft_manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 12 "$DRAFT_PROJ" >/dev/null
-bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$DRAFT_PROJ" >/dev/null
+# CASE_ID: phase.12.positive
+expect_pass phase.12.positive "$DRAFT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 12 "$DRAFT_PROJ"
+# CASE_ID: phase.13.positive
+expect_pass phase.13.positive "$DRAFT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$DRAFT_PROJ"
 
 sync_draft_fixture_hashes() {
   local project="$1"
@@ -5225,6 +5578,844 @@ manifest["draft_quality_gate"]["max_repeated_sentence_count"] = max_repeat(text)
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
 }
+
+PHASE13_MISSING_BRIDGE_PROJ="$TMP/phase13-missing-bridge-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_MISSING_BRIDGE_PROJ"
+python3 - "$PHASE13_MISSING_BRIDGE_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+item = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+item.pop("claim_source")
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.missing-bridge
+expect_reject f20.p13.reject.missing-bridge "$PHASE13_MISSING_BRIDGE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_MISSING_BRIDGE_PROJ"
+
+PHASE13_DIRECT_BINDING_PROJ="$TMP/phase13-direct-binding-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_DIRECT_BINDING_PROJ"
+python3 - "$PHASE13_DIRECT_BINDING_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+item = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+item["claim_source"]["binding_type"] = "direct_reader_csv"
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.direct-binding
+expect_reject f20.p13.reject.direct-binding "$PHASE13_DIRECT_BINDING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_DIRECT_BINDING_PROJ"
+
+PHASE13_MALFORMED_NESTED_PROJ="$TMP/phase13-malformed-nested-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_MALFORMED_NESTED_PROJ"
+python3 - "$PHASE13_MALFORMED_NESTED_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+item = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+item["claim_source"]["rendered_table"] = []
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.malformed-nested-bridge
+expect_reject f20.p13.reject.malformed-nested-bridge "$PHASE13_MALFORMED_NESTED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_MALFORMED_NESTED_PROJ"
+
+PHASE13_UNHASHABLE_ROW_INDEX_PROJ="$TMP/phase13-unhashable-row-index-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_UNHASHABLE_ROW_INDEX_PROJ"
+python3 - "$PHASE13_UNHASHABLE_ROW_INDEX_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+doc["locked_result_claims"][0]["rows"][0]["row_index"] = []
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.unhashable-row-index
+expect_reject f20.p13.reject.unhashable-row-index "$PHASE13_UNHASHABLE_ROW_INDEX_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_UNHASHABLE_ROW_INDEX_PROJ"
+
+PHASE13_NONOBJECT_GROUP_PROJ="$TMP/phase13-nonobject-group-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_NONOBJECT_GROUP_PROJ"
+python3 - "$PHASE13_NONOBJECT_GROUP_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+doc["locked_result_claims"].append([])
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.nonobject-extra-group
+expect_reject f20.p13.reject.nonobject-extra-group "$PHASE13_NONOBJECT_GROUP_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_NONOBJECT_GROUP_PROJ"
+
+PHASE13_DUPLICATE_SELECTED_PROJ="$TMP/phase13-duplicate-selected-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_DUPLICATE_SELECTED_PROJ"
+python3 - "$PHASE13_DUPLICATE_SELECTED_PROJ/manuscript/draft-manifest.json" <<'PY'
+import copy, json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+item = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+item["claim_source"]["selected_rows"].append(copy.deepcopy(item["claim_source"]["selected_rows"][0]))
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.duplicate-selected-row
+expect_reject f20.p13.reject.duplicate-selected-row "$PHASE13_DUPLICATE_SELECTED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_DUPLICATE_SELECTED_PROJ"
+
+PHASE13_DUPLICATE_FIELD_ROWS_PROJ="$TMP/phase13-duplicate-field-rows-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_DUPLICATE_FIELD_ROWS_PROJ"
+python3 - "$PHASE13_DUPLICATE_FIELD_ROWS_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+item = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+item["claim_source"]["rendered_table"]["field_rows"]["p_value"] = "N"
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.duplicate-field-rows
+expect_reject f20.p13.reject.duplicate-field-rows "$PHASE13_DUPLICATE_FIELD_ROWS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_DUPLICATE_FIELD_ROWS_PROJ"
+
+PHASE13_FORBIDDEN_SELECTED_FIELD_PROJ="$TMP/phase13-forbidden-selected-field-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_FORBIDDEN_SELECTED_FIELD_PROJ"
+python3 - "$PHASE13_FORBIDDEN_SELECTED_FIELD_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+item = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+item["claim_source"]["selected_rows"][0]["model_column"] = "Model 1"
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.forbidden-selected-field
+expect_reject f20.p13.reject.forbidden-selected-field "$PHASE13_FORBIDDEN_SELECTED_FIELD_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_FORBIDDEN_SELECTED_FIELD_PROJ"
+
+PHASE13_HIDDEN_ANCHOR_PROJ="$TMP/phase13-hidden-anchor-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_HIDDEN_ANCHOR_PROJ"
+python3 - "$PHASE13_HIDDEN_ANCHOR_PROJ" <<'PY'
+import json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+manifest_path = proj / "manuscript/draft-manifest.json"
+draft_path = proj / "manuscript/manuscript-draft.md"
+doc = json.loads(manifest_path.read_text())
+doc["locked_result_claims"][0]["rows"][0]["manuscript_anchor"] = "Hidden primary claim anchor"
+manifest_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+draft_path.write_text(draft_path.read_text() + "\n<!-- Hidden primary claim anchor -->\n")
+PY
+sync_draft_fixture_hashes "$PHASE13_HIDDEN_ANCHOR_PROJ"
+# CASE_ID: f20.p13.reject.hidden-comment-anchor
+expect_reject f20.p13.reject.hidden-comment-anchor "$PHASE13_HIDDEN_ANCHOR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_HIDDEN_ANCHOR_PROJ"
+
+PHASE13_AMBIGUOUS_ANCHOR_PROJ="$TMP/phase13-ambiguous-anchor-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_AMBIGUOUS_ANCHOR_PROJ"
+python3 - "$PHASE13_AMBIGUOUS_ANCHOR_PROJ" <<'PY'
+import json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+manifest_path = proj / "manuscript/draft-manifest.json"
+draft_path = proj / "manuscript/manuscript-draft.md"
+doc = json.loads(manifest_path.read_text())
+doc["locked_result_claims"][0]["rows"][0]["manuscript_anchor"] = "the manuscript treats it as the main empirical anchor"
+manifest_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+text = draft_path.read_text().replace(
+    "Table 2 also shows why the manuscript frames robustness evidence cautiously.",
+    "For clarity, the manuscript treats it as the main empirical anchor. Table 2 also shows why the manuscript frames robustness evidence cautiously.",
+)
+draft_path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_AMBIGUOUS_ANCHOR_PROJ"
+# CASE_ID: f20.p13.reject.ambiguous-anchor
+expect_reject f20.p13.reject.ambiguous-anchor "$PHASE13_AMBIGUOUS_ANCHOR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_AMBIGUOUS_ANCHOR_PROJ"
+
+PHASE13_TABLE_DRIFT_PROJ="$TMP/phase13-table-drift-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_TABLE_DRIFT_PROJ"
+python3 - "$PHASE13_TABLE_DRIFT_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "| Parental job loss | -0.120 (0.040) |"
+assert text.count(old) == 1
+path.write_text(text.replace(old, "| Parental job loss | -0.121 (0.040) |", 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_TABLE_DRIFT_PROJ"
+# CASE_ID: f20.p13.reject.table-only-drift
+expect_reject f20.p13.reject.table-only-drift "$PHASE13_TABLE_DRIFT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_TABLE_DRIFT_PROJ"
+
+PHASE13_PROSE_SIGN_PROJ="$TMP/phase13-prose-sign-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_PROSE_SIGN_PROJ"
+python3 - "$PHASE13_PROSE_SIGN_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "negative estimate of -0.080"
+assert text.count(old) == 1
+path.write_text(text.replace(old, "positive estimate of -0.080", 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_PROSE_SIGN_PROJ"
+# CASE_ID: f20.p13.reject.prose-sign-drift
+expect_reject f20.p13.reject.prose-sign-drift "$PHASE13_PROSE_SIGN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_PROSE_SIGN_PROJ"
+
+PHASE13_NEIGHBOR_FIELD_PROJ="$TMP/phase13-neighbor-field-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_NEIGHBOR_FIELD_PROJ"
+python3 - "$PHASE13_NEIGHBOR_FIELD_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "a p-value of 0.110, and n = 1200 [@work02]."
+assert text.count(old) == 1
+new = "a p-value of 0.111, and n = 1200 [@work02]. The neighboring audit sentence reports a p-value of 0.110."
+path.write_text(text.replace(old, new, 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_NEIGHBOR_FIELD_PROJ"
+# CASE_ID: f20.p13.reject.neighboring-sentence-field
+expect_reject f20.p13.reject.neighboring-sentence-field "$PHASE13_NEIGHBOR_FIELD_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_NEIGHBOR_FIELD_PROJ"
+
+PHASE13_INELIGIBLE_BRIDGE_OWNER_PROJ="$TMP/phase13-ineligible-bridge-owner-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_INELIGIBLE_BRIDGE_OWNER_PROJ"
+python3 - "$PHASE13_INELIGIBLE_BRIDGE_OWNER_PROJ/manuscript/draft-manifest.json" <<'PY'
+import copy, json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+main = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+nonregression = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "diagnostic")
+nonregression["claim_source"] = copy.deepcopy(main["claim_source"])
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p13.reject.ineligible-bridge-owner
+expect_reject f20.p13.reject.ineligible-bridge-owner "$PHASE13_INELIGIBLE_BRIDGE_OWNER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_INELIGIBLE_BRIDGE_OWNER_PROJ"
+
+PHASE13_FORGED_MASK_PROJ="$TMP/phase13-forged-mask-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_FORGED_MASK_PROJ"
+python3 - "$PHASE13_FORGED_MASK_PROJ" <<'PY'
+import copy, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+manifest_path = proj / "manuscript/draft-manifest.json"
+draft_path = proj / "manuscript/manuscript-draft.md"
+doc = json.loads(manifest_path.read_text())
+main = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "main_regression_table")
+nonregression = next(row for row in doc["locked_result_coverage"] if row.get("artifact_role") == "diagnostic")
+nonregression["claim_source"] = copy.deepcopy(main["claim_source"])
+manifest_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+registry_table = """\n| Estimate | Standard Error | p-value | N |
+|---:|---:|---:|---:|
+| -0.120 | 0.040 | 0.003 | 1200 |
+"""
+text = draft_path.read_text().replace("\n## Discussion", registry_table + "\n## Discussion", 1)
+draft_path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_FORGED_MASK_PROJ"
+# CASE_ID: f20.p13.reject.forged-global-mask
+expect_reject f20.p13.reject.forged-global-mask "$PHASE13_FORGED_MASK_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_FORGED_MASK_PROJ"
+
+PHASE13_UNPIPED_REGISTRY_PROJ="$TMP/phase13-unpiped-registry-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_UNPIPED_REGISTRY_PROJ"
+python3 - "$PHASE13_UNPIPED_REGISTRY_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+table = """\n[Estimate](#estimate) | [Standard Error](#se) | [p-value](#p) | [N](#n)
+---:|---:|---:|---:
+-0.120 | 0.040 | 0.003 | 1200
+"""
+path.write_text(path.read_text().replace("\n## Discussion", table + "\n## Discussion", 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_UNPIPED_REGISTRY_PROJ"
+# CASE_ID: f20.p13.reject.unpiped-registry-table
+expect_reject f20.p13.reject.unpiped-registry-table "$PHASE13_UNPIPED_REGISTRY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_UNPIPED_REGISTRY_PROJ"
+
+PHASE13_LINK_ONLY_ANCHOR_PROJ="$TMP/phase13-link-only-anchor-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_LINK_ONLY_ANCHOR_PROJ"
+python3 - "$PHASE13_LINK_ONLY_ANCHOR_PROJ" <<'PY'
+import json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+manifest_path = proj / "manuscript/draft-manifest.json"
+draft_path = proj / "manuscript/manuscript-draft.md"
+doc = json.loads(manifest_path.read_text())
+doc["locked_result_claims"][0]["rows"][0]["manuscript_anchor"] = "Primary result evidence link"
+manifest_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+text = draft_path.read_text().replace("\n## Discussion", "\n[Primary result evidence link](tables/regression-main.html)\n\n## Discussion", 1)
+draft_path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_LINK_ONLY_ANCHOR_PROJ"
+# CASE_ID: f20.p13.reject.link-only-anchor
+expect_reject f20.p13.reject.link-only-anchor "$PHASE13_LINK_ONLY_ANCHOR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_LINK_ONLY_ANCHOR_PROJ"
+
+PHASE13_FIELD_BOUNDARY_PROJ="$TMP/phase13-field-boundary-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_FIELD_BOUNDARY_PROJ"
+python3 - "$PHASE13_FIELD_BOUNDARY_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "a p-value of 0.110, and n = 1200 [@work02]"
+assert text.count(old) == 1
+path.write_text(text.replace(old, "a map value of 0.110, and mean = 1200 [@work02]", 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_FIELD_BOUNDARY_PROJ"
+# CASE_ID: f20.p13.reject.field-token-boundaries
+expect_reject f20.p13.reject.field-token-boundaries "$PHASE13_FIELD_BOUNDARY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_FIELD_BOUNDARY_PROJ"
+
+PHASE13_SWAPPED_BUNDLES_PROJ="$TMP/phase13-swapped-bundles-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_SWAPPED_BUNDLES_PROJ"
+python3 - "$PHASE13_SWAPPED_BUNDLES_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+s2 = "negative estimate of -0.080, a standard error of 0.050, a p-value of 0.110"
+s3 = "negative estimate of -0.090, a standard error of 0.045, a p-value of 0.046"
+assert text.count(s2) == 1 and text.count(s3) == 1
+text = text.replace(s2, "__S2_BUNDLE__", 1).replace(s3, s2, 1).replace("__S2_BUNDLE__", s3, 1)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_SWAPPED_BUNDLES_PROJ"
+# CASE_ID: f20.p13.reject.swapped-sentence-bundles
+expect_reject f20.p13.reject.swapped-sentence-bundles "$PHASE13_SWAPPED_BUNDLES_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_SWAPPED_BUNDLES_PROJ"
+
+PHASE13_MULTIPLE_EDGE_PIPES_PROJ="$TMP/phase13-multiple-edge-pipes-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_MULTIPLE_EDGE_PIPES_PROJ"
+python3 - "$PHASE13_MULTIPLE_EDGE_PIPES_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "| Predictor | Model 1 | Model 2 | Model 3 |"
+assert text.count(old) == 1
+path.write_text(text.replace(old, "|| Predictor | Model 1 | Model 2 | Model 3 |", 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_MULTIPLE_EDGE_PIPES_PROJ"
+# CASE_ID: f20.p13.reject.multiple-edge-pipes
+expect_reject f20.p13.reject.multiple-edge-pipes "$PHASE13_MULTIPLE_EDGE_PIPES_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_MULTIPLE_EDGE_PIPES_PROJ"
+
+PHASE13_CONTIGUOUS_TABLE_PROJ="$TMP/phase13-contiguous-table-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_CONTIGUOUS_TABLE_PROJ"
+python3 - "$PHASE13_CONTIGUOUS_TABLE_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+old = "| N | 1200 | 1200 | 1200 |"
+extra = old + "\n| Statistic | Model 1 | Model 2 | Model 3 |\n|---|---:|---:|---:|\n| Estimate | -0.120 | -0.080 | -0.090 |"
+assert text.count(old) == 1
+path.write_text(text.replace(old, extra, 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_CONTIGUOUS_TABLE_PROJ"
+# CASE_ID: f20.p13.reject.contiguous-second-table
+expect_reject f20.p13.reject.contiguous-second-table "$PHASE13_CONTIGUOUS_TABLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_CONTIGUOUS_TABLE_PROJ"
+
+PHASE13_HTML_REGISTRY_PROJ="$TMP/phase13-html-registry-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_HTML_REGISTRY_PROJ"
+python3 - "$PHASE13_HTML_REGISTRY_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+table = """\n<table><tbody><tr><td>Model&nbsp;ID</td><td>Estimate</td><td>Standard Error</td><td>p-value</td><td>N</td></tr><tr><td>primary</td><td>-0.120</td><td>0.040</td><td>0.003</td><td>1200</td></tr></tbody></table>\n"""
+path.write_text(path.read_text().replace("\n## Discussion", table + "\n## Discussion", 1))
+PY
+sync_draft_fixture_hashes "$PHASE13_HTML_REGISTRY_PROJ"
+# CASE_ID: f20.p13.reject.html-registry-table
+expect_reject f20.p13.reject.html-registry-table "$PHASE13_HTML_REGISTRY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_HTML_REGISTRY_PROJ"
+
+PHASE13_UNPIPED_PROJ="$TMP/phase13-unpiped-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_UNPIPED_PROJ"
+python3 - "$PHASE13_UNPIPED_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+anchor = "<!-- DISPLAY_TABLE: tables/regression-main.html -->"
+before, after = text.split(anchor, 1)
+lines = after.splitlines()
+inside = False
+for idx, line in enumerate(lines):
+    if line.startswith("|"):
+        inside = True
+        lines[idx] = line[1:-1].strip() if line.endswith("|") else line[1:].strip()
+    elif inside:
+        break
+path.write_text(before + anchor + "\n".join(lines))
+PY
+sync_draft_fixture_hashes "$PHASE13_UNPIPED_PROJ"
+# CASE_ID: f20.p13.unpiped-table-positive
+expect_pass f20.p13.unpiped-table-positive "$PHASE13_UNPIPED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_UNPIPED_PROJ"
+
+PHASE13_SCIENTIFIC_PROJ="$TMP/phase13-scientific-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_SCIENTIFIC_PROJ"
+python3 - "$PHASE13_SCIENTIFIC_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+draft_path = proj / "manuscript/manuscript-draft.md"
+spec_path = proj / "manuscript/journal-spec.json"
+manifest_path = proj / "manuscript/draft-manifest.json"
+spec = json.loads(spec_path.read_text())
+spec["numeric_reporting_policy"]["allow_scientific_notation"] = True
+spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+text = draft_path.read_text().replace("-0.120 (0.040)", "-1.20e-1 (4.0e-2)", 1)
+text = text.replace("| p-value | 0.003 |", "| p-value | 3e-3 |", 1)
+text = text.replace("estimate of -0.120, a standard error of 0.040, a p-value of 0.003", "estimate of -1.20e-1, a standard error of 4.0e-2, a p-value of 3e-3", 1)
+draft_path.write_text(text)
+doc = json.loads(manifest_path.read_text())
+doc["numeric_reporting_policy"] = spec["numeric_reporting_policy"]
+doc["journal_spec"]["sha256"] = hashlib.sha256(spec_path.read_bytes()).hexdigest()
+manifest_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+sync_draft_fixture_hashes "$PHASE13_SCIENTIFIC_PROJ"
+# CASE_ID: f20.p13.scientific-policy-positive
+expect_pass f20.p13.scientific-policy-positive "$PHASE13_SCIENTIFIC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_SCIENTIFIC_PROJ"
+
+PHASE13_FORBIDDEN_SCIENTIFIC_PROJ="$TMP/phase13-forbidden-scientific-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_FORBIDDEN_SCIENTIFIC_PROJ"
+python3 - "$PHASE13_FORBIDDEN_SCIENTIFIC_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("estimate of -0.120", "estimate of -1.20e-1", 1)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_FORBIDDEN_SCIENTIFIC_PROJ"
+# CASE_ID: f20.p13.reject.scientific-policy-forbidden
+expect_reject f20.p13.reject.scientific-policy-forbidden "$PHASE13_FORBIDDEN_SCIENTIFIC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_FORBIDDEN_SCIENTIFIC_PROJ"
+
+PHASE13_ROUNDING_PROJ="$TMP/phase13-rounding-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_ROUNDING_PROJ"
+python3 - "$PHASE13_ROUNDING_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+draft_path = proj / "manuscript/manuscript-draft.md"
+spec_path = proj / "manuscript/journal-spec.json"
+manifest_path = proj / "manuscript/draft-manifest.json"
+spec = json.loads(spec_path.read_text())
+policy = spec["numeric_reporting_policy"]
+policy["inferential_digits"] = 2
+policy["p_value_rule"] = "Report exact p-values to 2 decimals, but use p < .01 below that floor."
+spec_path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+text = draft_path.read_text()
+for old, new in (
+    ("-0.120 (0.040)", "-0.12 (0.04)"), ("-0.080 (0.050)", "-0.08 (0.05)"),
+    ("-0.090 (0.045)", "-0.09 (0.04)"), ("| p-value | 0.003 | 0.110 | 0.046 |", "| p-value | p < .01 | 0.11 | 0.05 |"),
+    ("estimate of -0.120, a standard error of 0.040, a p-value of 0.003", "estimate of -0.12, a standard error of 0.04, p < .01"),
+    ("estimate of -0.080, a standard error of 0.050, a p-value of 0.110", "estimate of -0.08, a standard error of 0.05, a p-value of 0.11"),
+    ("estimate of -0.090, a standard error of 0.045, a p-value of 0.046", "estimate of -0.09, a standard error of 0.04, a p-value of 0.05"),
+):
+    assert text.count(old) == 1, old
+    text = text.replace(old, new, 1)
+draft_path.write_text(text)
+doc = json.loads(manifest_path.read_text())
+doc["numeric_reporting_policy"] = policy
+doc["journal_spec"]["sha256"] = hashlib.sha256(spec_path.read_bytes()).hexdigest()
+manifest_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+sync_draft_fixture_hashes "$PHASE13_ROUNDING_PROJ"
+# CASE_ID: f20.p13.p-floor-below-half-even-positive
+expect_pass f20.p13.p-floor-below-half-even-positive "$PHASE13_ROUNDING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_ROUNDING_PROJ"
+
+PHASE13_P_FLOOR_EQUAL_PROJ="$TMP/phase13-p-floor-equal-project"
+cp -R "$PHASE13_ROUNDING_PROJ" "$PHASE13_P_FLOOR_EQUAL_PROJ"
+python3 - "$PHASE13_P_FLOOR_EQUAL_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("p < .01", "p < .003", 2)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_P_FLOOR_EQUAL_PROJ"
+# CASE_ID: f20.p13.reject.p-floor-equal
+expect_reject f20.p13.reject.p-floor-equal "$PHASE13_P_FLOOR_EQUAL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_P_FLOOR_EQUAL_PROJ"
+
+PHASE13_P_FLOOR_ABOVE_PROJ="$TMP/phase13-p-floor-above-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_P_FLOOR_ABOVE_PROJ"
+python3 - "$PHASE13_P_FLOOR_ABOVE_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("| p-value | 0.003 |", "| p-value | p < .001 |", 1)
+text = text.replace("a p-value of 0.003", "p < .001", 1)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_P_FLOOR_ABOVE_PROJ"
+# CASE_ID: f20.p13.reject.p-floor-above
+expect_reject f20.p13.reject.p-floor-above "$PHASE13_P_FLOOR_ABOVE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_P_FLOOR_ABOVE_PROJ"
+
+PHASE13_WRONG_HALF_EVEN_PROJ="$TMP/phase13-wrong-half-even-project"
+cp -R "$PHASE13_ROUNDING_PROJ" "$PHASE13_WRONG_HALF_EVEN_PROJ"
+python3 - "$PHASE13_WRONG_HALF_EVEN_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("-0.09 (0.04)", "-0.09 (0.05)", 1)
+text = text.replace("standard error of 0.04, a p-value of 0.05", "standard error of 0.05, a p-value of 0.05", 1)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_WRONG_HALF_EVEN_PROJ"
+# CASE_ID: f20.p13.reject.wrong-half-even-rounding
+expect_reject f20.p13.reject.wrong-half-even-rounding "$PHASE13_WRONG_HALF_EVEN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_WRONG_HALF_EVEN_PROJ"
+
+PHASE13_LEADING_ZERO_PROJ="$TMP/phase13-leading-zero-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_LEADING_ZERO_PROJ"
+python3 - "$PHASE13_LEADING_ZERO_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("-0.120 (0.040)", "-.120 (.040)", 1)
+text = text.replace("estimate of -0.120, a standard error of 0.040, a p-value of 0.003", "estimate of -.120, a standard error of .040, a p-value of .003", 1)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_LEADING_ZERO_PROJ"
+# CASE_ID: f20.p13.leading-zero-equivalence-positive
+expect_pass f20.p13.leading-zero-equivalence-positive "$PHASE13_LEADING_ZERO_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_LEADING_ZERO_PROJ"
+
+PHASE13_INVALID_N_PROJ="$TMP/phase13-invalid-n-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_INVALID_N_PROJ"
+python3 - "$PHASE13_INVALID_N_PROJ/manuscript/manuscript-draft.md" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text().replace("| N | 1200 |", "| N | 12,00 |", 1)
+text = text.replace("and n = 1200 [@work01]", "and n = 12,00 [@work01]", 1)
+path.write_text(text)
+PY
+sync_draft_fixture_hashes "$PHASE13_INVALID_N_PROJ"
+# CASE_ID: f20.p13.reject.invalid-n-grouping
+expect_reject f20.p13.reject.invalid-n-grouping "$PHASE13_INVALID_N_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_INVALID_N_PROJ"
+
+PHASE13_FULL_CSV_PROJ="$TMP/phase13-full-regression-csv-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_FULL_CSV_PROJ"
+python3 - "$PHASE13_FULL_CSV_PROJ" <<'PY'
+import copy, hashlib, json, pathlib, sys
+
+proj = pathlib.Path(sys.argv[1])
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def manifest_hash(doc):
+    payload = dict(doc)
+    payload.pop("manifest_sha256", None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def replace_exact(value, replacements):
+    if isinstance(value, dict):
+        return {key: replace_exact(item, replacements) for key, item in value.items()}
+    if isinstance(value, list):
+        return [replace_exact(item, replacements) for item in value]
+    return replacements.get(value, value) if isinstance(value, str) else value
+
+execution_path = proj / "analysis/execution-report.json"
+premortem_path = proj / "review/analysis-premortem.json"
+post_path = proj / "review/post-execution-review.json"
+sanity_path = proj / "verify/runtime-sanity.json"
+lock_path = proj / "results-locked/manifest.json"
+stage1_path = proj / "verify/stage1-verify.json"
+blueprint_path = proj / "manuscript/manuscript-blueprint.json"
+plan_path = proj / "manuscript/drafting-plan.json"
+draft_path = proj / "manuscript/draft-manifest.json"
+manuscript_path = proj / "manuscript/manuscript-draft.md"
+old_source = "tables/regression-main.html"
+display_source = "tables/model-results.csv"
+source_path = proj / display_source
+old_display_hash = sha(source_path)
+old_execution_hash = sha(execution_path)
+old_post_hash = sha(post_path)
+old_sanity_hash = sha(sanity_path)
+old_lock_file_hash = sha(lock_path)
+old_stage1_hash = sha(stage1_path)
+
+source_path.write_text("\n".join([
+    "Predictor,Model 1,Model 2,Model 3",
+    "Parental job loss,-0.120 (0.040),-0.080 (0.050),-0.090 (0.045)",
+    "Child age,0.030 (0.010),0.029 (0.010),0.031 (0.011)",
+    "Household income,0.015 (0.006),0.014 (0.006),0.015 (0.006)",
+    "Survey wave controls,Yes,Yes,Yes",
+    "Household fixed effects,Yes,Yes,Yes",
+    "p-value,0.003,0.110,0.046",
+    "N,1200,1200,1200",
+    "R-squared,0.210,0.205,0.208",
+]) + "\n")
+display_hash = sha(source_path)
+
+premortem = json.loads(premortem_path.read_text())
+for key, relative in {
+    "identification_strategy": "design/identification-strategy.json",
+    "model_specs": "design/model-specs.json",
+    "measurement_plan": "data/measurement-plan.md",
+    "variable_dictionary": "data/variable-dictionary.csv",
+    "analysis_plan": "analysis/analysis-plan.md",
+    "spec_registry": "analysis/spec-registry.csv",
+    "scripts_inventory": "analysis/scripts-inventory.json",
+    "pre_execution_review": "review/pre-execution-review.json",
+    "pre_execution_fix_log": "review/pre-execution-fix-log.json",
+    "pre_execution_rereview": "review/pre-execution-rereview.json",
+}.items():
+    premortem["source_hashes"][key] = sha(proj / relative)
+premortem_path.write_text(json.dumps(premortem, indent=2, sort_keys=True) + "\n")
+
+execution = replace_exact(json.loads(execution_path.read_text()), {old_display_hash: display_hash})
+execution["run_context"]["working_directory"] = str(proj)
+for key, relative in {
+    "analysis_plan": "analysis/analysis-plan.md",
+    "spec_registry": "analysis/spec-registry.csv",
+    "scripts_inventory": "analysis/scripts-inventory.json",
+    "analysis_premortem": "review/analysis-premortem.json",
+    "analysis_premortem_fix_log": "review/analysis-premortem-fix-log.json",
+}.items():
+    execution["source_hashes"][key] = sha(proj / relative)
+execution_path.write_text(json.dumps(execution, indent=2, sort_keys=True) + "\n")
+execution_hash = sha(execution_path)
+
+post = replace_exact(json.loads(post_path.read_text()), {old_execution_hash: execution_hash})
+post["source_hashes"]["analysis_premortem"] = sha(premortem_path)
+post_path.write_text(json.dumps(post, indent=2, sort_keys=True) + "\n")
+post_hash = sha(post_path)
+
+sanity = replace_exact(json.loads(sanity_path.read_text()), {
+    old_display_hash: display_hash,
+    old_execution_hash: execution_hash,
+    old_post_hash: post_hash,
+})
+sanity_path.write_text(json.dumps(sanity, indent=2, sort_keys=True) + "\n")
+sanity_hash = sha(sanity_path)
+
+lock = replace_exact(json.loads(lock_path.read_text()), {
+    old_display_hash: display_hash,
+    old_execution_hash: execution_hash,
+    old_post_hash: post_hash,
+    old_sanity_hash: sanity_hash,
+})
+display_lock = next(item for item in lock["locked_artifacts"] if item.get("source_path") == display_source)
+old_lock = next(item for item in lock["locked_artifacts"] if item.get("source_path") == old_source)
+display_lock["artifact_role"] = "main_regression_table"
+old_lock["artifact_role"] = "diagnostic"
+for artifact in (display_source, "analysis/execution-report.json", "review/post-execution-review.json"):
+    artifact_lock = next(item for item in lock["locked_artifacts"] if item.get("source_path") == artifact)
+    (proj / artifact_lock["locked_path"]).write_bytes((proj / artifact).read_bytes())
+lock["manifest_sha256"] = manifest_hash(lock)
+lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
+lock_file_hash = sha(lock_path)
+
+stage1 = replace_exact(json.loads(stage1_path.read_text()), {
+    old_display_hash: display_hash,
+    old_execution_hash: execution_hash,
+    old_post_hash: post_hash,
+})
+stage1["manifest_sha256"] = lock["manifest_sha256"]
+stage1["input_manifest_sha256"] = lock["manifest_sha256"]
+stage1_path.write_text(json.dumps(stage1, indent=2, sort_keys=True) + "\n")
+stage1_hash = sha(stage1_path)
+
+blueprint = replace_exact(json.loads(blueprint_path.read_text()), {
+    old_source: display_source,
+    old_lock_file_hash: lock_file_hash,
+    old_stage1_hash: stage1_hash,
+    old_post_hash: post_hash,
+})
+blueprint["lock_manifest_sha256"] = lock["manifest_sha256"]
+blueprint_path.write_text(json.dumps(blueprint, indent=2, sort_keys=True) + "\n")
+blueprint_hash = sha(blueprint_path)
+
+plan = replace_exact(json.loads(plan_path.read_text()), {old_source: display_source})
+plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
+plan_hash = sha(plan_path)
+
+old_locked = old_lock["locked_path"]
+display_locked = display_lock["locked_path"]
+old_trace = f"<!-- LOCKED_ARTIFACT: {old_source} | LOCKED_PATH: {old_locked} -->"
+display_trace = f"<!-- LOCKED_ARTIFACT: {display_source} | LOCKED_PATH: {display_locked} -->"
+old_anchor = f"<!-- DISPLAY_TABLE: {old_source} -->"
+display_anchor = f"<!-- DISPLAY_TABLE: {display_source} -->"
+old_table = "\n".join([
+    "| Predictor | Model 1 | Model 2 | Model 3 |",
+    "| --- | ---: | ---: | ---: |",
+    "| Parental job loss | -0.120 (0.040) | -0.080 (0.050) | -0.090 (0.045) |",
+    "| p-value | 0.003 | 0.110 | 0.046 |",
+    "| N | 1200 | 1200 | 1200 |",
+])
+full_table = "\n".join([
+    "| Predictor | Model 1 | Model 2 | Model 3 |",
+    "| --- | ---: | ---: | ---: |",
+    "| Parental job loss | -0.120 (0.040) | -0.080 (0.050) | -0.090 (0.045) |",
+    "| Child age | 0.030 (0.010) | 0.029 (0.010) | 0.031 (0.011) |",
+    "| Household income | 0.015 (0.006) | 0.014 (0.006) | 0.015 (0.006) |",
+    "| Survey wave controls | Yes | Yes | Yes |",
+    "| Household fixed effects | Yes | Yes | Yes |",
+    "| p-value | 0.003 | 0.110 | 0.046 |",
+    "| N | 1200 | 1200 | 1200 |",
+    "| R-squared | 0.210 | 0.205 | 0.208 |",
+])
+text = manuscript_path.read_text()
+assert text.count(old_trace) == 1 and text.count(old_anchor) == 1 and text.count(old_table) == 1
+manuscript_path.write_text(text.replace(old_trace, display_trace, 1).replace(old_anchor, display_anchor, 1).replace(old_table, full_table, 1))
+
+draft = json.loads(draft_path.read_text())
+old_coverage = next(item for item in draft["locked_result_coverage"] if item.get("source_path") == old_source)
+display_coverage = next(item for item in draft["locked_result_coverage"] if item.get("source_path") == display_source)
+mapped_coverage = copy.deepcopy(old_coverage)
+display_coverage.clear()
+display_coverage.update(mapped_coverage)
+display_coverage.update({"source_path": display_source, "locked_path": display_locked, "manuscript_anchor": display_trace, "display_anchor": display_anchor, "display_type": "regression_table_markdown"})
+old_coverage.clear()
+old_coverage.update({"source_path": old_source, "locked_path": old_locked, "artifact_role": "diagnostic", "manuscript_anchor": "", "used_in_manuscript": False})
+draft["display_evidence"]["displayed_sources"] = [display_source if value == old_source else value for value in draft["display_evidence"]["displayed_sources"]]
+claim_group = next(item for item in draft["locked_result_claims"] if item.get("display_source_path") == old_source)
+claim_group["display_source_path"] = display_source
+claim_group["display_locked_path"] = display_locked
+for row in claim_group["rows"]:
+    identity = ["locked_result_claim_v2", claim_group["binding_type"], display_source, claim_group["source_path"], row["row_index"], row["spec_id"], row["display_coordinate_kind"], row["display_coordinate"]]
+    row["claim_id"] = "lrc2:" + hashlib.sha256(json.dumps(identity, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+draft["lock_manifest_sha256"] = lock["manifest_sha256"]
+draft["blueprint"]["sha256"] = blueprint_hash
+draft["drafting_plan"]["sha256"] = plan_hash
+draft["source_hashes"]["lock_manifest"] = lock_file_hash
+draft["source_hashes"]["stage1_verify"] = stage1_hash
+draft["source_hashes"]["manuscript_blueprint"] = blueprint_hash
+draft["source_hashes"]["post_execution_review"] = post_hash
+draft_path.write_text(json.dumps(draft, indent=2, sort_keys=True) + "\n")
+PY
+sync_draft_fixture_hashes "$PHASE13_FULL_CSV_PROJ"
+# CASE_ID: f20.p13.full-regression-csv-positive
+expect_pass f20.p13.full-regression-csv-positive "$PHASE13_FULL_CSV_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_FULL_CSV_PROJ"
+
+PHASE13_SIGNED_ZERO_PROJ="$TMP/phase13-signed-zero-project"
+cp -R "$DRAFT_PROJ" "$PHASE13_SIGNED_ZERO_PROJ"
+python3 - "$PHASE13_SIGNED_ZERO_PROJ" <<'PY'
+import csv, hashlib, io, json, pathlib, sys
+
+proj = pathlib.Path(sys.argv[1])
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def manifest_hash(doc):
+    payload = dict(doc)
+    payload.pop("manifest_sha256", None)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+def replace_exact(value, replacements):
+    if isinstance(value, dict):
+        return {key: replace_exact(item, replacements) for key, item in value.items()}
+    if isinstance(value, list):
+        return [replace_exact(item, replacements) for item in value]
+    return replacements.get(value, value) if isinstance(value, str) else value
+
+def set_s1_signed_zero(path):
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fields = reader.fieldnames
+        rows = list(reader)
+    assert fields and sum(row.get("spec_id") == "S1" for row in rows) == 1
+    next(row for row in rows if row.get("spec_id") == "S1")["std_error"] = "-0.000"
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=fields, lineterminator="\n")
+    writer.writeheader(); writer.writerows(rows)
+    path.write_text(buffer.getvalue())
+
+execution_path = proj / "analysis/execution-report.json"
+post_path = proj / "review/post-execution-review.json"
+sanity_path = proj / "verify/runtime-sanity.json"
+lock_path = proj / "results-locked/manifest.json"
+stage1_path = proj / "verify/stage1-verify.json"
+blueprint_path = proj / "manuscript/manuscript-blueprint.json"
+draft_path = proj / "manuscript/draft-manifest.json"
+manuscript_path = proj / "manuscript/manuscript-draft.md"
+old_execution_hash = sha(execution_path)
+old_post_hash = sha(post_path)
+old_sanity_hash = sha(sanity_path)
+old_lock_file_hash = sha(lock_path)
+old_stage1_hash = sha(stage1_path)
+lock = json.loads(lock_path.read_text())
+registry = next(item for item in lock["locked_artifacts"] if item.get("artifact_role") == "results_registry")
+source_registry = proj / registry["source_path"]
+locked_registry = proj / registry["locked_path"]
+old_registry_hash = sha(source_registry)
+set_s1_signed_zero(source_registry)
+registry_hash = sha(source_registry)
+
+execution = replace_exact(json.loads(execution_path.read_text()), {old_registry_hash: registry_hash})
+execution_path.write_text(json.dumps(execution, indent=2, sort_keys=True) + "\n")
+execution_hash = sha(execution_path)
+
+post = replace_exact(json.loads(post_path.read_text()), {
+    old_registry_hash: registry_hash,
+    old_execution_hash: execution_hash,
+})
+s1_review = next(item for item in post["reviewed_specs"] if item.get("spec_id") == "S1")
+s1_review["std_error"] = "-0.000"
+post_path.write_text(json.dumps(post, indent=2, sort_keys=True) + "\n")
+post_hash = sha(post_path)
+
+sanity = replace_exact(json.loads(sanity_path.read_text()), {
+    old_registry_hash: registry_hash,
+    old_execution_hash: execution_hash,
+    old_post_hash: post_hash,
+})
+sanity_path.write_text(json.dumps(sanity, indent=2, sort_keys=True) + "\n")
+sanity_hash = sha(sanity_path)
+
+lock = replace_exact(lock, {
+    old_registry_hash: registry_hash,
+    old_execution_hash: execution_hash,
+    old_post_hash: post_hash,
+    old_sanity_hash: sanity_hash,
+})
+for artifact in (registry["source_path"], "analysis/execution-report.json", "review/post-execution-review.json"):
+    artifact_lock = next(item for item in lock["locked_artifacts"] if item.get("source_path") == artifact)
+    (proj / artifact_lock["locked_path"]).write_bytes((proj / artifact).read_bytes())
+lock["manifest_sha256"] = manifest_hash(lock)
+lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
+lock_file_hash = sha(lock_path)
+
+stage1 = replace_exact(json.loads(stage1_path.read_text()), {
+    old_registry_hash: registry_hash,
+    old_execution_hash: execution_hash,
+    old_post_hash: post_hash,
+})
+stage1["manifest_sha256"] = lock["manifest_sha256"]
+stage1["input_manifest_sha256"] = lock["manifest_sha256"]
+stage1_path.write_text(json.dumps(stage1, indent=2, sort_keys=True) + "\n")
+stage1_hash = sha(stage1_path)
+
+blueprint = replace_exact(json.loads(blueprint_path.read_text()), {
+    old_registry_hash: registry_hash,
+    old_lock_file_hash: lock_file_hash,
+    old_stage1_hash: stage1_hash,
+    old_post_hash: post_hash,
+})
+blueprint["lock_manifest_sha256"] = lock["manifest_sha256"]
+blueprint_path.write_text(json.dumps(blueprint, indent=2, sort_keys=True) + "\n")
+blueprint_hash = sha(blueprint_path)
+
+text = manuscript_path.read_text()
+old_prose = "an estimate of -0.120, a standard error of 0.040, a p-value of 0.003"
+new_prose = "an estimate of -0.120, a standard error of 0.000, a p-value of 0.003"
+assert text.count("-0.120 (0.040)") == 1 and text.count(old_prose) == 1
+text = text.replace("-0.120 (0.040)", "-0.120 (0.000)", 1).replace(old_prose, new_prose, 1)
+manuscript_path.write_text(text)
+
+draft = json.loads(draft_path.read_text())
+coverage = next(item for item in draft["locked_result_coverage"] if item.get("artifact_role") == "main_regression_table")
+coverage["claim_source"]["sha256"] = registry_hash
+claim_group = next(item for item in draft["locked_result_claims"] if item.get("source_path") == registry["source_path"])
+next(row for row in claim_group["rows"] if row.get("spec_id") == "S1")["std_error"] = "-0.000"
+draft["lock_manifest_sha256"] = lock["manifest_sha256"]
+draft["blueprint"]["sha256"] = blueprint_hash
+draft["source_hashes"]["lock_manifest"] = lock_file_hash
+draft["source_hashes"]["stage1_verify"] = stage1_hash
+draft["source_hashes"]["manuscript_blueprint"] = blueprint_hash
+draft["source_hashes"]["post_execution_review"] = post_hash
+draft_path.write_text(json.dumps(draft, indent=2, sort_keys=True) + "\n")
+PY
+sync_draft_fixture_hashes "$PHASE13_SIGNED_ZERO_PROJ"
+# CASE_ID: f20.p13.reject.signed-zero-mismatch
+expect_reject f20.p13.reject.signed-zero-mismatch "$PHASE13_SIGNED_ZERO_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$PHASE13_SIGNED_ZERO_PROJ"
 
 BAD_DRAFT_HYPOTHESIS_BULLETS_PROJ="$TMP/bad-draft-hypothesis-bullets-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_HYPOTHESIS_BULLETS_PROJ"
@@ -5485,6 +6676,36 @@ PY
 bash "$SCRIPT_DIR/auto-research-verify.sh" 12 "$CUSTOM_DRAFT_PROJ" >/dev/null
 bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$CUSTOM_DRAFT_PROJ" >/dev/null
 
+BAD_BLUEPRINT_SCHEMA_PROJ="$TMP/bad-blueprint-schema-project"
+cp -R "$DRAFT_PROJ" "$BAD_BLUEPRINT_SCHEMA_PROJ"
+python3 - "$BAD_BLUEPRINT_SCHEMA_PROJ/manuscript/manuscript-blueprint.json" <<'PY'
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+doc.pop("verdict", None)
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: phase.12.negative
+expect_reject phase.12.negative "$BAD_BLUEPRINT_SCHEMA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 12 "$BAD_BLUEPRINT_SCHEMA_PROJ"
+
+BAD_DRAFT_DEGRADED_PROJ="$TMP/bad-draft-degraded-project"
+cp -R "$DRAFT_PROJ" "$BAD_DRAFT_DEGRADED_PROJ"
+python3 - "$BAD_DRAFT_DEGRADED_PROJ/manuscript/draft-manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+doc["degraded"] = True
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: phase.13.negative
+expect_reject phase.13.negative "$BAD_DRAFT_DEGRADED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_DEGRADED_PROJ"
+
 BAD_BLUEPRINT_JOURNAL_PROJ="$TMP/bad-blueprint-journal-project"
 cp -R "$DRAFT_PROJ" "$BAD_BLUEPRINT_JOURNAL_PROJ"
 python3 - "$BAD_BLUEPRINT_JOURNAL_PROJ/manuscript/manuscript-blueprint.json" <<'PY'
@@ -5497,10 +6718,9 @@ doc["journal_structure"]["discussion_conclusion_policy"] = "combined_only"
 doc["discussion_mode"] = "combined"
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 12 "$BAD_BLUEPRINT_JOURNAL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when blueprint journal structure collapses a split-close journal into a combined close" >&2
-  exit 1
-fi
+# CASE_ID: l2.p12.reject.journal-structure
+expect_reject l2.p12.reject.journal-structure "$BAD_BLUEPRINT_JOURNAL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 12 "$BAD_BLUEPRINT_JOURNAL_PROJ"
 
 BAD_DRAFT_QUALITY_PROJ="$TMP/bad-draft-quality-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_QUALITY_PROJ"
@@ -5513,10 +6733,9 @@ manifest = json.loads(path.read_text())
 manifest["draft_quality_gate"]["status"] = "FAIL"
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_QUALITY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when draft quality gate is not PASS" >&2
-  exit 1
-fi
+# CASE_ID: l2.p13.reject.draft-quality
+expect_reject l2.p13.reject.draft-quality "$BAD_DRAFT_QUALITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_QUALITY_PROJ"
 
 BAD_DRAFT_REPETITION_PROJ="$TMP/bad-draft-repetition-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_REPETITION_PROJ"
@@ -5620,10 +6839,10 @@ for section, count in manifest["section_word_counts"].items():
 manifest["draft_quality_gate"]["max_repeated_sentence_count"] = max_repeat(text)
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_REPETITION_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when manuscript repeats substantive sentences too often" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_REPETITION_PROJ"
+# CASE_ID: l2.p13.reject.repetition
+expect_reject l2.p13.reject.repetition "$BAD_DRAFT_REPETITION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_REPETITION_PROJ"
 
 BAD_DRAFT_ANCHOR_PROJ="$TMP/bad-draft-anchor-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_ANCHOR_PROJ"
@@ -5639,26 +6858,26 @@ for idx, line in enumerate(lines):
         break
 path.write_text("\n".join(lines) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_ANCHOR_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when a locked artifact anchor is missing" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_ANCHOR_PROJ"
+# CASE_ID: l2.p13.reject.locked-anchor
+expect_reject l2.p13.reject.locked-anchor "$BAD_DRAFT_ANCHOR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_ANCHOR_PROJ"
 
 BAD_DRAFT_BIB_PROJ="$TMP/bad-draft-bib-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_BIB_PROJ"
 printf '\nUnresolved citation [@missingkey].\n' >> "$BAD_DRAFT_BIB_PROJ/manuscript/manuscript-draft.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_BIB_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when draft cites a missing BibTeX key" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_BIB_PROJ"
+# CASE_ID: l2.p13.reject.missing-bib-key
+expect_reject l2.p13.reject.missing-bib-key "$BAD_DRAFT_BIB_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_BIB_PROJ"
 
 BAD_DRAFT_PLACEHOLDER_PROJ="$TMP/bad-draft-placeholder-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_PLACEHOLDER_PROJ"
 printf '\nTBD\n' >> "$BAD_DRAFT_PLACEHOLDER_PROJ/manuscript/manuscript-draft.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_PLACEHOLDER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when draft contains placeholder text" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_PLACEHOLDER_PROJ"
+# CASE_ID: l2.p13.reject.placeholder
+expect_reject l2.p13.reject.placeholder "$BAD_DRAFT_PLACEHOLDER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_PLACEHOLDER_PROJ"
 
 BAD_DRAFT_CALLOUT_PROJ="$TMP/bad-draft-callout-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_CALLOUT_PROJ"
@@ -5679,10 +6898,10 @@ manifest = json.loads(manifest_path.read_text())
 manifest["selected_manuscript_hash"] = hashlib.sha256(draft.read_bytes()).hexdigest()
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_CALLOUT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when Results drops the numbered table callout" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_CALLOUT_PROJ"
+# CASE_ID: l2.p13.reject.table-callout
+expect_reject l2.p13.reject.table-callout "$BAD_DRAFT_CALLOUT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_CALLOUT_PROJ"
 
 BAD_DRAFT_PRECISION_PROJ="$TMP/bad-draft-precision-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_PRECISION_PROJ"
@@ -5700,10 +6919,10 @@ manifest = json.loads(manifest_path.read_text())
 manifest["selected_manuscript_hash"] = hashlib.sha256(draft.read_bytes()).hexdigest()
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_PRECISION_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when Results exposes raw scientific-notation precision" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_PRECISION_PROJ"
+# CASE_ID: l2.p13.reject.numeric-policy
+expect_reject l2.p13.reject.numeric-policy "$BAD_DRAFT_PRECISION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_PRECISION_PROJ"
 
 BAD_DRAFT_POLISH_PROJ="$TMP/bad-draft-polish-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_POLISH_PROJ"
@@ -5716,10 +6935,21 @@ report = json.loads(path.read_text())
 report["generic_markers_remaining"]["high"] = 1
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_POLISH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when scholar-polish leaves high-severity markers" >&2
-  exit 1
-fi
+python3 - "$BAD_DRAFT_POLISH_PROJ" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+proj = pathlib.Path(sys.argv[1])
+manifest_path = proj / "manuscript/draft-manifest.json"
+polish_path = proj / "manuscript/polish-report.json"
+manifest = json.loads(manifest_path.read_text())
+manifest["polish_report"]["sha256"] = hashlib.sha256(polish_path.read_bytes()).hexdigest()
+manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p13.reject.polish-marker
+expect_reject l2.p13.reject.polish-marker "$BAD_DRAFT_POLISH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_POLISH_PROJ"
 
 BAD_DRAFT_BUDGET_PROJ="$TMP/bad-draft-budget-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_BUDGET_PROJ"
@@ -5738,10 +6968,9 @@ manifest["section_word_budget"] = spec["section_word_budget"]
 manifest["journal_spec"]["sha256"] = __import__("hashlib").sha256(spec_path.read_bytes()).hexdigest()
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_BUDGET_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when manuscript misses journal section budget" >&2
-  exit 1
-fi
+# CASE_ID: l2.p13.reject.section-budget
+expect_reject l2.p13.reject.section-budget "$BAD_DRAFT_BUDGET_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_BUDGET_PROJ"
 
 BAD_DRAFT_NUMERIC_PROJ="$TMP/bad-draft-numeric-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_NUMERIC_PROJ"
@@ -5759,10 +6988,10 @@ manifest = json.loads(manifest_path.read_text())
 manifest["selected_manuscript_hash"] = hashlib.sha256(draft.read_bytes()).hexdigest()
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_NUMERIC_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when a locked numeric value is drifted in the draft" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_NUMERIC_PROJ"
+# CASE_ID: l2.p13.reject.fully-rebound-numeric
+expect_reject l2.p13.reject.fully-rebound-numeric "$BAD_DRAFT_NUMERIC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_NUMERIC_PROJ"
 
 BAD_DRAFT_CLAIM_PROJ="$TMP/bad-draft-claim-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_CLAIM_PROJ"
@@ -5780,10 +7009,10 @@ manifest = json.loads(manifest_path.read_text())
 manifest["selected_manuscript_hash"] = hashlib.sha256(draft.read_bytes()).hexdigest()
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_CLAIM_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when draft violates Phase 9 claim constraints" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_DRAFT_CLAIM_PROJ"
+# CASE_ID: l2.p13.reject.fully-rebound-overclaim
+expect_reject l2.p13.reject.fully-rebound-overclaim "$BAD_DRAFT_CLAIM_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_CLAIM_PROJ"
 
 BAD_DRAFT_ENGINE_PROJ="$TMP/bad-draft-engine-project"
 cp -R "$DRAFT_PROJ" "$BAD_DRAFT_ENGINE_PROJ"
@@ -5796,9 +7025,14 @@ manifest = json.loads(path.read_text())
 manifest["drafting_engine"]["skill"] = "generic-llm"
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 12 verify should fail when scholar-write drafting engine metadata is absent or wrong" >&2
-  exit 1
+# CASE_ID: l2.p13.reject.drafting-engine
+expect_reject l2.p13.reject.drafting-engine "$BAD_DRAFT_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 13 "$BAD_DRAFT_ENGINE_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "13" ]]; then
+  harness_validate_results --phase-through 13 >/dev/null
+  progress "phases 0 to 13 authoritative harness assertions passed"
+  exit 0
 fi
 
 VERIFY_MANUSCRIPT_PROJ="$TMP/verify-manuscript-project"
@@ -5883,11 +7117,16 @@ stage2_checked = []
 for source_claim in draft["locked_result_claims"]:
     for row in source_claim["rows"]:
         stage2_checked.append({
+            "binding_type": source_claim["binding_type"],
+            "display_source_path": source_claim["display_source_path"],
+            "display_locked_path": source_claim["display_locked_path"],
             "source_artifact": source_claim["source_path"],
             "locked_path": source_claim["locked_path"],
             "claim_id": row["claim_id"],
             "row_index": row["row_index"],
             "spec_id": row["spec_id"],
+            "display_coordinate_kind": row["display_coordinate_kind"],
+            "display_coordinate": row["display_coordinate"],
             "estimate": row["estimate"],
             "std_error": row["std_error"],
             "p_value": row["p_value"],
@@ -5995,7 +7234,79 @@ summary = (
 )
 (proj / "verify/manuscript-verification.md").write_text(summary * 2)
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_MANUSCRIPT_PROJ" >/dev/null
+set +e
+bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_MANUSCRIPT_PROJ" >"$TMP/phase14-no-evidence.out" 2>&1
+NO_EVIDENCE_RC=$?
+set -e
+[ "$NO_EVIDENCE_RC" -ne 0 ] || fail "Phase 14 accepted review metadata without process-recorded evidence"
+grep -F "missing registered review session" "$TMP/phase14-no-evidence.out" >/dev/null \
+  || fail "Phase 14 no-evidence rejection emitted the wrong diagnostic"
+
+BAD_VERIFY_SCHEMA_PROJ="$TMP/bad-verify-schema-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_SCHEMA_PROJ"
+python3 - "$BAD_VERIFY_SCHEMA_PROJ/verify/manuscript-verification.json" <<'PY'
+import json
+import pathlib
+import sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report.pop("blueprint_hashes", None)
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$BAD_VERIFY_SCHEMA_PROJ" 14 verification_panel >/dev/null
+# CASE_ID: phase.14.negative
+expect_reject phase.14.negative "$BAD_VERIFY_SCHEMA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_SCHEMA_PROJ"
+
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$VERIFY_MANUSCRIPT_PROJ" 14 verification_panel >/dev/null
+# CASE_ID: phase.14.positive
+expect_pass phase.14.positive "$VERIFY_MANUSCRIPT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_MANUSCRIPT_PROJ"
+# CASE_ID: l2.p14.stage2-v2-positive
+expect_pass l2.p14.stage2-v2-positive "$VERIFY_MANUSCRIPT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_MANUSCRIPT_PROJ"
+
+VERIFY_STAGE2_REORDERED_PROJ="$TMP/verify-stage2-reordered-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$VERIFY_STAGE2_REORDERED_PROJ"
+python3 - "$VERIFY_STAGE2_REORDERED_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["stage_2_manuscript_to_prose"]["checked"].reverse()
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.stage2-reordered-positive
+expect_pass f20.p14.stage2-reordered-positive "$VERIFY_STAGE2_REORDERED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_STAGE2_REORDERED_PROJ"
+
+VERIFY_STAGE2_DUPLICATE_PROJ="$TMP/verify-stage2-duplicate-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$VERIFY_STAGE2_DUPLICATE_PROJ"
+python3 - "$VERIFY_STAGE2_DUPLICATE_PROJ/verify/manuscript-verification.json" <<'PY'
+import copy, json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+checked = report["stage_2_manuscript_to_prose"]["checked"]
+checked.append(copy.deepcopy(checked[0]))
+report["stage_2_manuscript_to_prose"]["claims_scanned"] = len(checked)
+report["scanned"] = report["stage_1_outputs_to_manuscript"]["items_scanned"] + len(checked)
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.reject.stage2-duplicate
+expect_reject f20.p14.reject.stage2-duplicate "$VERIFY_STAGE2_DUPLICATE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_STAGE2_DUPLICATE_PROJ"
+
+VERIFY_STAGE2_PAYLOAD_PROJ="$TMP/verify-stage2-payload-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$VERIFY_STAGE2_PAYLOAD_PROJ"
+python3 - "$VERIFY_STAGE2_PAYLOAD_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["stage_2_manuscript_to_prose"]["checked"][0]["estimate"] = "999.000"
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.reject.stage2-payload
+expect_reject f20.p14.reject.stage2-payload "$VERIFY_STAGE2_PAYLOAD_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$VERIFY_STAGE2_PAYLOAD_PROJ"
 
 FAIL_VERIFY_PROJ="$TMP/fail-verify-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$FAIL_VERIFY_PROJ"
@@ -6106,10 +7417,9 @@ report["agents"] = [agent for agent in report["agents"] if agent["role"] != "ver
 report["agent_reports"] = [agent["report_path"] for agent in report["agents"]]
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_ROLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when a scholar-verify agent role is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.review-role-binding
+expect_reject l2.p14.reject.review-role-binding "$BAD_VERIFY_ROLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_ROLE_PROJ"
 
 BAD_VERIFY_AGENT_SCOPE_PROJ="$TMP/bad-verify-agent-scope-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_AGENT_SCOPE_PROJ"
@@ -6125,10 +7435,9 @@ for agent in report["agents"]:
         break
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_AGENT_SCOPE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when an agent omits its required verification scope" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.agent-scope
+expect_reject l2.p14.reject.agent-scope "$BAD_VERIFY_AGENT_SCOPE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_AGENT_SCOPE_PROJ"
 
 BAD_VERIFY_AGENT_DUP_PROJ="$TMP/bad-verify-agent-duplicate-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_AGENT_DUP_PROJ"
@@ -6141,10 +7450,9 @@ report = json.loads(path.read_text())
 report["agents"][1]["task_invocation_id"] = report["agents"][0]["task_invocation_id"]
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_AGENT_DUP_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when agents reuse a task_invocation_id" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.task-identity-binding
+expect_reject l2.p14.reject.task-identity-binding "$BAD_VERIFY_AGENT_DUP_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_AGENT_DUP_PROJ"
 
 BAD_VERIFY_STAGE1_PROJ="$TMP/bad-verify-stage1-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_STAGE1_PROJ"
@@ -6158,10 +7466,9 @@ report["stage_1_outputs_to_manuscript"]["checked"] = report["stage_1_outputs_to_
 report["stage_1_outputs_to_manuscript"]["items_scanned"] = len(report["stage_1_outputs_to_manuscript"]["checked"])
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE1_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when Stage 1 omits a reader-facing locked artifact" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.stage1-coverage
+expect_reject l2.p14.reject.stage1-coverage "$BAD_VERIFY_STAGE1_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE1_PROJ"
 
 BAD_VERIFY_STAGE2_PROJ="$TMP/bad-verify-stage2-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_STAGE2_PROJ"
@@ -6173,6 +7480,7 @@ path = pathlib.Path(sys.argv[1])
 report = json.loads(path.read_text())
 report["stage_2_manuscript_to_prose"]["checked"] = [{
     "source_artifact": "tables/results-registry.csv",
+    "row_index": 0,
     "spec_id": "S1",
     "claim_id": "unexpected-row-claim",
     "verdict": "PASS"
@@ -6180,10 +7488,61 @@ report["stage_2_manuscript_to_prose"]["checked"] = [{
 report["stage_2_manuscript_to_prose"]["claims_scanned"] = len(report["stage_2_manuscript_to_prose"]["checked"])
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE2_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when Stage 2 invents row-level claims for a regression-table manuscript" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.stage2-exact-coverage
+expect_reject l2.p14.reject.stage2-exact-coverage "$BAD_VERIFY_STAGE2_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE2_PROJ"
+
+BAD_VERIFY_UNHASHABLE_ROW_INDEX_PROJ="$TMP/bad-verify-unhashable-row-index-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_UNHASHABLE_ROW_INDEX_PROJ"
+python3 - "$BAD_VERIFY_UNHASHABLE_ROW_INDEX_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["stage_2_manuscript_to_prose"]["checked"][0]["row_index"] = []
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.reject.unhashable-row-index
+expect_reject f20.p14.reject.unhashable-row-index "$BAD_VERIFY_UNHASHABLE_ROW_INDEX_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_UNHASHABLE_ROW_INDEX_PROJ"
+
+BAD_VERIFY_FLOAT_ROW_INDEX_PROJ="$TMP/bad-verify-float-row-index-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_FLOAT_ROW_INDEX_PROJ"
+python3 - "$BAD_VERIFY_FLOAT_ROW_INDEX_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["stage_2_manuscript_to_prose"]["checked"][0]["row_index"] = 0.0
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.reject.float-row-index
+expect_reject f20.p14.reject.float-row-index "$BAD_VERIFY_FLOAT_ROW_INDEX_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_FLOAT_ROW_INDEX_PROJ"
+
+BAD_VERIFY_BOOLEAN_ROW_INDEX_PROJ="$TMP/bad-verify-boolean-row-index-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_BOOLEAN_ROW_INDEX_PROJ"
+python3 - "$BAD_VERIFY_BOOLEAN_ROW_INDEX_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["stage_2_manuscript_to_prose"]["checked"][1]["row_index"] = True
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.reject.boolean-row-index
+expect_reject f20.p14.reject.boolean-row-index "$BAD_VERIFY_BOOLEAN_ROW_INDEX_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_BOOLEAN_ROW_INDEX_PROJ"
+
+BAD_VERIFY_MALFORMED_COUNT_PROJ="$TMP/bad-verify-malformed-count-project"
+cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_MALFORMED_COUNT_PROJ"
+python3 - "$BAD_VERIFY_MALFORMED_COUNT_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["stage_2_manuscript_to_prose"]["claims_scanned"] = 3.9
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p14.reject.malformed-stage-count
+expect_reject f20.p14.reject.malformed-stage-count "$BAD_VERIFY_MALFORMED_COUNT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_MALFORMED_COUNT_PROJ"
 
 BAD_VERIFY_FIGURE_PROJ="$TMP/bad-verify-figure-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_FIGURE_PROJ"
@@ -6199,10 +7558,9 @@ for check in report["stage_1_outputs_to_manuscript"]["checked"]:
         break
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_FIGURE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when figure visual inspection is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.figure-inspection
+expect_reject l2.p14.reject.figure-inspection "$BAD_VERIFY_FIGURE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_FIGURE_PROJ"
 
 BAD_VERIFY_LIVE_READ_PROJ="$TMP/bad-verify-live-read-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_LIVE_READ_PROJ"
@@ -6215,33 +7573,9 @@ report = json.loads(path.read_text())
 report["input_artifacts_read"][0]["path"] = "tables/results-registry.csv"
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_LIVE_READ_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when input_artifacts_read includes a live table path" >&2
-  exit 1
-fi
-
-BAD_VERIFY_STAGE2_VALUE_PROJ="$TMP/bad-verify-stage2-value-project"
-cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_STAGE2_VALUE_PROJ"
-python3 - "$BAD_VERIFY_STAGE2_VALUE_PROJ/verify/manuscript-verification.json" <<'PY'
-import json
-import pathlib
-import sys
-path = pathlib.Path(sys.argv[1])
-report = json.loads(path.read_text())
-report["stage_2_manuscript_to_prose"]["checked"] = [{
-    "source_artifact": "tables/model-results.csv",
-    "spec_id": "S1",
-    "claim_id": "unexpected-row-value",
-    "estimate": "0.120",
-    "verdict": "PASS"
-}]
-report["stage_2_manuscript_to_prose"]["claims_scanned"] = len(report["stage_2_manuscript_to_prose"]["checked"])
-path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE2_VALUE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when Stage 2 reports row values for a regression-table manuscript" >&2
-  exit 1
-fi
+# CASE_ID: l2.p14.reject.live-read
+expect_reject l2.p14.reject.live-read "$BAD_VERIFY_LIVE_READ_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_LIVE_READ_PROJ"
 
 BAD_VERIFY_STAGE_DEGRADED_PROJ="$TMP/bad-verify-stage-degraded-project"
 cp -R "$VERIFY_MANUSCRIPT_PROJ" "$BAD_VERIFY_STAGE_DEGRADED_PROJ"
@@ -6254,9 +7588,14 @@ report = json.loads(path.read_text())
 report["stage_1_outputs_to_manuscript"]["degraded"] = True
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE_DEGRADED_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 13 verify should fail when a verification stage is degraded" >&2
-  exit 1
+# CASE_ID: l2.p14.reject.stage-degraded
+expect_reject l2.p14.reject.stage-degraded "$BAD_VERIFY_STAGE_DEGRADED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 14 "$BAD_VERIFY_STAGE_DEGRADED_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "14" ]]; then
+  harness_validate_results --phase-through 14 >/dev/null
+  progress "phases 0 to 14 authoritative harness assertions passed"
+  exit 0
 fi
 
 CITATION_PROJ="$TMP/citation-project"
@@ -6338,6 +7677,17 @@ for source_claim in draft_manifest.get("locked_result_claims", []):
             "claim_text": f"Locked empirical row claim for {row['spec_id']}.",
             "citation_keys": [empirical_cite],
             "source_locator": source_claim["locked_path"],
+            "result_binding": {
+                "binding_type": source_claim["binding_type"],
+                "display_source_path": source_claim["display_source_path"],
+                "display_locked_path": source_claim["display_locked_path"],
+                "value_source_path": source_claim["source_path"],
+                "value_locked_path": source_claim["locked_path"],
+                "row_index": row["row_index"],
+                "spec_id": row["spec_id"],
+                "display_coordinate_kind": row["display_coordinate_kind"],
+                "display_coordinate": row["display_coordinate"]
+            },
             "evidence_span_summary": f"Locked row {row['row_index']} in {source_claim['locked_path']} supports the reported estimate.",
             "support_verdict": "SUPPORTED",
             "contradiction": False
@@ -6470,7 +7820,152 @@ audit = {
 }
 audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$CITATION_PROJ" >/dev/null
+# Deterministic local authority for Phase 15: a minimal read-only Zotero
+# fixture matching work01. This exercises the production local-library gate;
+# it does not disable or replace any citation check.
+FIXTURE_ZOTERO_DIR="$TMP/zotero-fixture"
+mkdir -p "$FIXTURE_ZOTERO_DIR"
+python3 - "$FIXTURE_ZOTERO_DIR/zotero.sqlite" <<'PY'
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+db.executescript("""
+CREATE TABLE itemTypes (itemTypeID INTEGER PRIMARY KEY, typeName TEXT);
+CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER);
+CREATE TABLE fields (fieldID INTEGER PRIMARY KEY, fieldName TEXT);
+CREATE TABLE itemDataValues (valueID INTEGER PRIMARY KEY, value TEXT);
+CREATE TABLE itemData (itemID INTEGER, fieldID INTEGER, valueID INTEGER);
+CREATE TABLE creators (creatorID INTEGER PRIMARY KEY, lastName TEXT);
+CREATE TABLE itemCreators (itemID INTEGER, creatorID INTEGER, orderIndex INTEGER);
+CREATE TABLE deletedItems (itemID INTEGER);
+INSERT INTO itemTypes VALUES (1, 'journalArticle');
+INSERT INTO fields VALUES (1, 'title'), (2, 'date');
+INSERT INTO creators VALUES (1, 'Author');
+""")
+for item_id in range(1, 31):
+    title_value_id = item_id * 2 - 1
+    date_value_id = item_id * 2
+    db.execute("INSERT INTO items VALUES (?, 1)", (item_id,))
+    db.execute("INSERT INTO itemDataValues VALUES (?, ?)", (title_value_id, f"Verified citation fixture for work{item_id:02d}"))
+    db.execute("INSERT INTO itemDataValues VALUES (?, '2020')", (date_value_id,))
+    db.execute("INSERT INTO itemData VALUES (?, 1, ?)", (item_id, title_value_id))
+    db.execute("INSERT INTO itemData VALUES (?, 2, ?)", (item_id, date_value_id))
+    db.execute("INSERT INTO itemCreators VALUES (?, 1, 0)", (item_id,))
+db.commit()
+db.close()
+PY
+export SCHOLAR_ZOTERO_DIR="$FIXTURE_ZOTERO_DIR"
+# Make the optional CrossRef provider deterministically unavailable and fast;
+# Phase 15 must still pass from complete keyed local-library authority.
+FIXTURE_BIN="$TMP/fixture-bin"
+mkdir -p "$FIXTURE_BIN"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$FIXTURE_BIN/curl"
+chmod +x "$FIXTURE_BIN/curl"
+export PATH="$FIXTURE_BIN:$PATH"
+# CASE_ID: phase.15.positive
+expect_pass phase.15.positive "$CITATION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$CITATION_PROJ"
+
+sync_claim_map_counts() {
+  local project="$1"
+  python3 - "$project" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+map_path = proj / "citation/claim-source-map.json"
+audit_path = proj / "citation/citation-audit.json"
+claim_map = json.loads(map_path.read_text())
+count = len(claim_map["claims"])
+for key, value in {"total_claims": count, "supported_count": count, "unsupported_count": 0, "contradicted_count": 0, "locator_missing_count": 0}.items():
+    claim_map[key] = value
+map_path.write_text(json.dumps(claim_map, indent=2, sort_keys=True) + "\n")
+audit = json.loads(audit_path.read_text())
+audit["source_hashes"]["claim_source_map"] = hashlib.sha256(map_path.read_bytes()).hexdigest()
+for key, value in {"total_claims": count, "supported_count": count, "unsupported_count": 0, "contradicted_count": 0, "locator_missing_count": 0}.items():
+    audit["claim_source_map"][key] = value
+audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+}
+
+CITATION_REORDERED_PROJ="$TMP/citation-reordered-project"
+cp -R "$CITATION_PROJ" "$CITATION_REORDERED_PROJ"
+python3 - "$CITATION_REORDERED_PROJ/citation/claim-source-map.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+doc["claims"].reverse()
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+sync_claim_map_counts "$CITATION_REORDERED_PROJ"
+# CASE_ID: f20.p15.empirical-reordered-positive
+expect_pass f20.p15.empirical-reordered-positive "$CITATION_REORDERED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$CITATION_REORDERED_PROJ"
+
+for mode in missing extra duplicate; do
+  project="$TMP/citation-empirical-$mode-project"
+  cp -R "$CITATION_PROJ" "$project"
+  python3 - "$project/citation/claim-source-map.json" "$mode" <<'PY'
+import copy, json, pathlib, sys
+path, mode = pathlib.Path(sys.argv[1]), sys.argv[2]
+doc = json.loads(path.read_text())
+indices = [idx for idx, claim in enumerate(doc["claims"]) if claim.get("claim_type") == "empirical"]
+assert len(indices) == 3
+if mode == "missing":
+    del doc["claims"][indices[0]]
+elif mode == "extra":
+    claim = copy.deepcopy(doc["claims"][indices[0]])
+    claim["claim_id"] = "lrc2:" + "f" * 64
+    doc["claims"].append(claim)
+else:
+    doc["claims"].append(copy.deepcopy(doc["claims"][indices[0]]))
+path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+PY
+  sync_claim_map_counts "$project"
+  case "$mode" in
+    missing)
+      # CASE_ID: f20.p15.reject.empirical-missing
+      expect_reject f20.p15.reject.empirical-missing "$project" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$project"
+      ;;
+    extra)
+      # CASE_ID: f20.p15.reject.empirical-extra
+      expect_reject f20.p15.reject.empirical-extra "$project" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$project"
+      ;;
+    duplicate)
+      # CASE_ID: f20.p15.reject.empirical-duplicate
+      expect_reject f20.p15.reject.empirical-duplicate "$project" -- bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$project"
+      ;;
+  esac
+done
+
+BAD_EMPIRICAL_BINDING_PROJ="$TMP/bad-empirical-binding-project"
+cp -R "$CITATION_PROJ" "$BAD_EMPIRICAL_BINDING_PROJ"
+python3 - "$BAD_EMPIRICAL_BINDING_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+map_path = proj / "citation/claim-source-map.json"
+audit_path = proj / "citation/citation-audit.json"
+claim_map = json.loads(map_path.read_text())
+empirical = next(item for item in claim_map["claims"] if item.get("claim_type") == "empirical")
+empirical["result_binding"]["value_source_path"] = "tables/wrong-results.csv"
+map_path.write_text(json.dumps(claim_map, indent=2, sort_keys=True) + "\n")
+audit = json.loads(audit_path.read_text())
+audit["source_hashes"]["claim_source_map"] = hashlib.sha256(map_path.read_bytes()).hexdigest()
+audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p15.reject.empirical-result-binding
+expect_reject l2.p15.reject.empirical-result-binding "$BAD_EMPIRICAL_BINDING_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_EMPIRICAL_BINDING_PROJ"
+
+BAD_CITATION_MALFORMED_SPECIFICITY_PROJ="$TMP/bad-citation-malformed-specificity-project"
+cp -R "$CITATION_PROJ" "$BAD_CITATION_MALFORMED_SPECIFICITY_PROJ"
+python3 - "$BAD_CITATION_MALFORMED_SPECIFICITY_PROJ/citation/citation-audit.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+audit = json.loads(path.read_text())
+audit["claim_specificity"]["max_citation_keys_per_claim"] = []
+path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: f20.p15.reject.malformed-specificity-count
+expect_reject f20.p15.reject.malformed-specificity-count "$BAD_CITATION_MALFORMED_SPECIFICITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_MALFORMED_SPECIFICITY_PROJ"
 
 FAIL_CITATION_PROJ="$TMP/fail-citation-project"
 cp -R "$CITATION_PROJ" "$FAIL_CITATION_PROJ"
@@ -6503,11 +7998,9 @@ audit["fix_checklist"] = {
 }
 path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
 PY
-FAIL_CITATION_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$FAIL_CITATION_PROJ" 2>&1 || true)"
-case "$FAIL_CITATION_OUT" in
-  *"route_back_phase=13"* ) ;;
-  *) echo "FAIL: Phase 15 structured FAIL report should expose route_back_phase=13, got $FAIL_CITATION_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: phase.15.negative
+expect_reject phase.15.negative "$FAIL_CITATION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$FAIL_CITATION_PROJ"
 
 ROUTE_STATE_14_PROJ="$TMP/route-state-14-project"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$ROUTE_STATE_14_PROJ" >/dev/null
@@ -6542,10 +8035,17 @@ path = pathlib.Path(sys.argv[1])
 lines = path.read_text().splitlines()
 path.write_text("\n".join(lines[1:]) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_EXPORT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when exported references omit a cited key" >&2
-  exit 1
-fi
+python3 - "$BAD_CITATION_EXPORT_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+path = proj / "citation/citation-audit.json"
+audit = json.loads(path.read_text())
+audit["source_hashes"]["exported_references"] = hashlib.sha256((proj / "citation/references.bib").read_bytes()).hexdigest()
+path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p15.reject.exported-reference-coverage
+expect_reject l2.p15.reject.exported-reference-coverage "$BAD_CITATION_EXPORT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_EXPORT_PROJ"
 
 BAD_CITATION_REFERENCE_PROJ="$TMP/bad-citation-reference-project"
 cp -R "$CITATION_PROJ" "$BAD_CITATION_REFERENCE_PROJ"
@@ -6558,10 +8058,9 @@ audit = json.loads(path.read_text())
 audit["verified_references"][0]["verification_status"] = "UNVERIFIED"
 path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_REFERENCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when a cited reference is unverified" >&2
-  exit 1
-fi
+# CASE_ID: l2.p15.reject.verified-reference
+expect_reject l2.p15.reject.verified-reference "$BAD_CITATION_REFERENCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_REFERENCE_PROJ"
 
 BAD_CITATION_CLAIM_PROJ="$TMP/bad-citation-claim-project"
 cp -R "$CITATION_PROJ" "$BAD_CITATION_CLAIM_PROJ"
@@ -6575,10 +8074,17 @@ claim_map["claims"][0]["support_verdict"] = "UNSUPPORTED"
 claim_map["unsupported_count"] = 1
 path.write_text(json.dumps(claim_map, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_CLAIM_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when a claim is unsupported" >&2
-  exit 1
-fi
+python3 - "$BAD_CITATION_CLAIM_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+path = proj / "citation/citation-audit.json"
+audit = json.loads(path.read_text())
+audit["source_hashes"]["claim_source_map"] = hashlib.sha256((proj / "citation/claim-source-map.json").read_bytes()).hexdigest()
+path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p15.reject.claim-support
+expect_reject l2.p15.reject.claim-support "$BAD_CITATION_CLAIM_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_CLAIM_PROJ"
 
 BAD_CITATION_ANCHOR_PROJ="$TMP/bad-citation-anchor-project"
 cp -R "$CITATION_PROJ" "$BAD_CITATION_ANCHOR_PROJ"
@@ -6591,10 +8097,17 @@ claim_map = json.loads(path.read_text())
 claim_map["claims"][0]["manuscript_anchor"] = "This anchored claim is not present in the manuscript [@work01]."
 path.write_text(json.dumps(claim_map, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_ANCHOR_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when a claim-source record is not anchored to manuscript text" >&2
-  exit 1
-fi
+python3 - "$BAD_CITATION_ANCHOR_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+path = proj / "citation/citation-audit.json"
+audit = json.loads(path.read_text())
+audit["source_hashes"]["claim_source_map"] = hashlib.sha256((proj / "citation/claim-source-map.json").read_bytes()).hexdigest()
+path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p15.reject.manuscript-anchor
+expect_reject l2.p15.reject.manuscript-anchor "$BAD_CITATION_ANCHOR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_ANCHOR_PROJ"
 
 BAD_CITATION_LOCATOR_PROJ="$TMP/bad-citation-locator-project"
 cp -R "$CITATION_PROJ" "$BAD_CITATION_LOCATOR_PROJ"
@@ -6609,10 +8122,17 @@ claim_map["claims"][0]["source_locator"] = ""
 claim_map["locator_missing_count"] = 1
 path.write_text(json.dumps(claim_map, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_LOCATOR_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when a locator-required claim lacks a source locator" >&2
-  exit 1
-fi
+python3 - "$BAD_CITATION_LOCATOR_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+path = proj / "citation/citation-audit.json"
+audit = json.loads(path.read_text())
+audit["source_hashes"]["claim_source_map"] = hashlib.sha256((proj / "citation/claim-source-map.json").read_bytes()).hexdigest()
+path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p15.reject.source-locator
+expect_reject l2.p15.reject.source-locator "$BAD_CITATION_LOCATOR_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_LOCATOR_PROJ"
 
 BAD_CITATION_RETRACTION_PROJ="$TMP/bad-citation-retraction-project"
 cp -R "$CITATION_PROJ" "$BAD_CITATION_RETRACTION_PROJ"
@@ -6627,20 +8147,77 @@ audit["retraction_check"]["records"][0]["status"] = "retracted"
 audit["retraction_check"]["records"][0]["retracted"] = True
 path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_RETRACTION_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when a cited work is retracted" >&2
-  exit 1
-fi
+# CASE_ID: l2.p15.reject.retraction
+expect_reject l2.p15.reject.retraction "$BAD_CITATION_RETRACTION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_RETRACTION_PROJ"
 
 BAD_CITATION_PLACEHOLDER_PROJ="$TMP/bad-citation-placeholder-project"
 cp -R "$CITATION_PROJ" "$BAD_CITATION_PLACEHOLDER_PROJ"
 printf '\nSOURCE NEEDED\n' >> "$BAD_CITATION_PLACEHOLDER_PROJ/manuscript/manuscript-draft.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_PLACEHOLDER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 14 verify should fail when manuscript contains unresolved source placeholder text" >&2
-  exit 1
-fi
+sync_draft_fixture_hashes "$BAD_CITATION_PLACEHOLDER_PROJ"
+python3 - "$BAD_CITATION_PLACEHOLDER_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+verification_path = proj / "verify/manuscript-verification.json"
+verification = json.loads(verification_path.read_text())
+manuscript_hash = sha(proj / "manuscript/manuscript-draft.md")
+draft_manifest_hash = sha(proj / "manuscript/draft-manifest.json")
+verification["source_hashes"]["manuscript"] = manuscript_hash
+verification["source_hashes"]["draft_manifest"] = draft_manifest_hash
+verification["selected_manuscript_hash"] = manuscript_hash
+for agent in verification["agents"]:
+    agent["input_hashes"]["manuscript"] = manuscript_hash
+    agent["input_hashes"]["draft_manifest"] = draft_manifest_hash
+verification_path.write_text(json.dumps(verification, indent=2, sort_keys=True) + "\n")
+PY
+OLD_PHASE14_SESSION="$(python3 - "$BAD_CITATION_PLACEHOLDER_PROJ/verify/manuscript-verification.json" <<'PY'
+import json, pathlib, sys
+document = json.loads(pathlib.Path(sys.argv[1]).read_text())
+print(document["review_evidence"]["rounds"]["verification_panel"]["session_id"])
+PY
+)"
+bash "$SCRIPT_DIR/auto-research-state.sh" review-abort "$BAD_CITATION_PLACEHOLDER_PROJ" 14 "$OLD_PHASE14_SESSION" \
+  --reason "fixture manuscript placeholder mutation requires renewed Phase 14 verification evidence" >/dev/null
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$BAD_CITATION_PLACEHOLDER_PROJ" 14 verification_panel >/dev/null
+python3 - "$BAD_CITATION_PLACEHOLDER_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+manuscript_hash = sha(proj / "manuscript/manuscript-draft.md")
+draft_manifest_hash = sha(proj / "manuscript/draft-manifest.json")
+verification_hash = sha(proj / "verify/manuscript-verification.json")
+claim_path = proj / "citation/claim-source-map.json"
+claim_map = json.loads(claim_path.read_text())
+claim_map["selected_manuscript_hash"] = manuscript_hash
+claim_map["source_hashes"]["manuscript"] = manuscript_hash
+claim_path.write_text(json.dumps(claim_map, indent=2, sort_keys=True) + "\n")
+audit_path = proj / "citation/citation-audit.json"
+audit = json.loads(audit_path.read_text())
+audit["selected_manuscript_hash"] = manuscript_hash
+audit["source_hashes"]["manuscript"] = manuscript_hash
+audit["source_hashes"]["draft_manifest"] = draft_manifest_hash
+audit["source_hashes"]["phase13_verification"] = verification_hash
+audit["source_hashes"]["claim_source_map"] = sha(claim_path)
+audit_path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p15.reject.placeholder
+expect_reject l2.p15.reject.placeholder "$BAD_CITATION_PLACEHOLDER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 15 "$BAD_CITATION_PLACEHOLDER_PROJ"
 
 ETHICS_PROJ="$TMP/ethics-project"
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "15" ]]; then
+  harness_validate_results --phase-through 15 >/dev/null
+  progress "phases 0 to 15 authoritative harness assertions passed"
+  exit 0
+fi
+
 progress "phases 16 to 18 ethics, replication, and quality fixtures"
 cp -R "$CITATION_PROJ" "$ETHICS_PROJ"
 mkdir -p "$ETHICS_PROJ/safety" "$ETHICS_PROJ/data" "$ETHICS_PROJ/ethics"
@@ -6715,9 +8292,9 @@ report = {
     "ai_disclosure": {
         "tools": [
             {
-                "tool": "Codex",
-                "provider": "OpenAI",
-                "model_or_version": "Codex CLI session model",
+                "tool": "AI coding assistant",
+                "provider": "portable fixture provider",
+                "model_or_version": "provider-neutral fixture model",
                 "stage_used": "workflow design and validation",
                 "task_performed": "contract design, fixture construction, and validation checks",
                 "data_type_shared": "project structure, code, manuscript excerpts, aggregate non-identifying artifacts",
@@ -6726,7 +8303,7 @@ report = {
                 "cloud_or_local": "cloud"
             }
         ],
-        "statement": "The authors used AI-assisted coding and writing tools, including Codex, to help structure workflow checks, draft non-substantive disclosure language, and validate code paths. No personally identifiable participant data or restricted microdata were shared with AI tools. All AI-assisted content, code, citations, interpretations, and declarations were reviewed and verified by the human authors before inclusion in the manuscript.",
+        "statement": "The authors used AI-assisted coding and writing tools to help structure workflow checks, draft non-substantive disclosure language, and validate code paths. No personally identifiable participant data or restricted microdata were shared with AI tools. All AI-assisted content, code, citations, interpretations, and declarations were reviewed and verified by the human authors before inclusion in the manuscript.",
         "human_reviewed": True,
         "sensitive_data_shared": False
     },
@@ -6801,7 +8378,7 @@ summary = """
 # Ethics and Open Science Declarations
 
 ## AI Use Disclosure
-The authors used AI-assisted coding and writing tools, including Codex, to help structure workflow checks, draft non-substantive disclosure language, and validate code paths. No personally identifiable participant data or restricted microdata were shared with AI tools. Human authors reviewed all AI-assisted content before inclusion.
+The authors used AI-assisted coding and writing tools to help structure workflow checks, draft non-substantive disclosure language, and validate code paths. No personally identifiable participant data or restricted microdata were shared with AI tools. Human authors reviewed all AI-assisted content before inclusion.
 
 ## IRB and Consent
 The IRB statement records an exempt secondary-data determination. Consent collection by the authors was not applicable because the project uses public secondary data without direct identifiers.
@@ -6820,7 +8397,9 @@ The CRediT statement covers conceptualization, methodology, formal analysis, val
 """
 (proj / "ethics/ethics-open-science.md").write_text((summary.strip() + "\n\n") * 3)
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$ETHICS_PROJ" >/dev/null
+# CASE_ID: phase.16.positive
+expect_pass phase.16.positive "$ETHICS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$ETHICS_PROJ"
 
 FAIL_ETHICS_PROJ="$TMP/fail-ethics-project"
 cp -R "$ETHICS_PROJ" "$FAIL_ETHICS_PROJ"
@@ -6853,11 +8432,9 @@ report["fix_checklist"] = {
 }
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-FAIL_ETHICS_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$FAIL_ETHICS_PROJ" 2>&1 || true)"
-case "$FAIL_ETHICS_OUT" in
-  *"route_back_phase=4"* ) ;;
-  *) echo "FAIL: Phase 15 structured FAIL report should expose route_back_phase=4, got $FAIL_ETHICS_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: phase.16.negative
+expect_reject phase.16.negative "$FAIL_ETHICS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$FAIL_ETHICS_PROJ"
 
 ROUTE_STATE_15_PROJ="$TMP/route-state-15-project"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$ROUTE_STATE_15_PROJ" >/dev/null
@@ -6894,10 +8471,9 @@ report = json.loads(path.read_text())
 report["ethics_engine"]["skill"] = "generic-ethics"
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when scholar-ethics engine metadata is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.ethics-engine
+expect_reject l2.p16.reject.ethics-engine "$BAD_ETHICS_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_ENGINE_PROJ"
 
 BAD_ETHICS_ENGINE_CAPABILITY_PROJ="$TMP/bad-ethics-engine-capability-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_ENGINE_CAPABILITY_PROJ"
@@ -6910,10 +8486,9 @@ report = json.loads(path.read_text())
 report["ethics_engine"]["integrity"] = False
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_ENGINE_CAPABILITY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when scholar-ethics capability flags are incomplete" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.ethics-capabilities
+expect_reject l2.p16.reject.ethics-capabilities "$BAD_ETHICS_ENGINE_CAPABILITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_ENGINE_CAPABILITY_PROJ"
 
 BAD_OPEN_ENGINE_CAPABILITY_PROJ="$TMP/bad-open-engine-capability-project"
 cp -R "$ETHICS_PROJ" "$BAD_OPEN_ENGINE_CAPABILITY_PROJ"
@@ -6926,18 +8501,22 @@ report = json.loads(path.read_text())
 report["open_science_engine"]["replication_planning"] = False
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_OPEN_ENGINE_CAPABILITY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when scholar-open capability flags are incomplete" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.open-science-capabilities
+expect_reject l2.p16.reject.open-science-capabilities "$BAD_OPEN_ENGINE_CAPABILITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_OPEN_ENGINE_CAPABILITY_PROJ"
 
 BAD_ETHICS_HASH_PROJ="$TMP/bad-ethics-hash-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_HASH_PROJ"
-printf '\nMinor manuscript drift after ethics audit.\n' >> "$BAD_ETHICS_HASH_PROJ/manuscript/manuscript-draft.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when manuscript hash is stale" >&2
-  exit 1
-fi
+python3 - "$BAD_ETHICS_HASH_PROJ/ethics/ethics-open-science.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report["source_hashes"]["manuscript"] = "0" * 64
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p16.reject.manuscript-hash
+expect_reject l2.p16.reject.manuscript-hash "$BAD_ETHICS_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_HASH_PROJ"
 
 BAD_ETHICS_IRB_PROJ="$TMP/bad-ethics-irb-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_IRB_PROJ"
@@ -6950,10 +8529,9 @@ report = json.loads(path.read_text())
 report["irb_status"]["status"] = "pending"
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_IRB_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when IRB status is pending" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.irb-status
+expect_reject l2.p16.reject.irb-status "$BAD_ETHICS_IRB_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_IRB_PROJ"
 
 BAD_ETHICS_DATA_PROJ="$TMP/bad-ethics-data-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_DATA_PROJ"
@@ -6966,10 +8544,9 @@ report = json.loads(path.read_text())
 report["data_availability"]["sharing_mode"] = "no-data-conceptual"
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_DATA_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when data availability sharing mode conflicts with data status" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.data-availability
+expect_reject l2.p16.reject.data-availability "$BAD_ETHICS_DATA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_DATA_PROJ"
 
 BAD_ETHICS_AI_PROJ="$TMP/bad-ethics-ai-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_AI_PROJ"
@@ -6982,10 +8559,9 @@ report = json.loads(path.read_text())
 report["ai_disclosure"]["human_reviewed"] = False
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_AI_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when AI disclosure lacks human review" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.ai-human-review
+expect_reject l2.p16.reject.ai-human-review "$BAD_ETHICS_AI_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_AI_PROJ"
 
 BAD_ETHICS_CREDIT_PROJ="$TMP/bad-ethics-credit-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_CREDIT_PROJ"
@@ -6998,10 +8574,9 @@ report = json.loads(path.read_text())
 report["authorship_credit"]["credit_roles"] = []
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_CREDIT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when CRediT roles are missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.credit-roles-missing
+expect_reject l2.p16.reject.credit-roles-missing "$BAD_ETHICS_CREDIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_CREDIT_PROJ"
 
 BAD_ETHICS_REPLICATION_PROJ="$TMP/bad-ethics-replication-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_REPLICATION_PROJ"
@@ -7014,10 +8589,9 @@ report = json.loads(path.read_text())
 report["open_science"]["replication_ready"] = False
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_REPLICATION_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when replication handoff is not ready" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.replication-handoff
+expect_reject l2.p16.reject.replication-handoff "$BAD_ETHICS_REPLICATION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_REPLICATION_PROJ"
 
 BAD_ETHICS_PLACEHOLDER_PROJ="$TMP/bad-ethics-placeholder-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_PLACEHOLDER_PROJ"
@@ -7030,10 +8604,9 @@ report = json.loads(path.read_text())
 report["irb_status"]["statement"] = "The [University] Institutional Review Board approved protocol [number] on [date] for this study."
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_PLACEHOLDER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when ethics JSON contains bracket placeholders" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.json-placeholder
+expect_reject l2.p16.reject.json-placeholder "$BAD_ETHICS_PLACEHOLDER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_PLACEHOLDER_PROJ"
 
 BAD_ETHICS_RESTRICTED_PUBLIC_PROJ="$TMP/bad-ethics-restricted-public-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_RESTRICTED_PUBLIC_PROJ"
@@ -7047,12 +8620,13 @@ proj = pathlib.Path(sys.argv[1])
 path = proj / "ethics/ethics-open-science.json"
 report = json.loads(path.read_text())
 report["source_hashes"]["data_status"] = hashlib.sha256((proj / "data/data-status.json").read_bytes()).hexdigest()
+report["consent_status"]["status"] = "waived"
+report["consent_status"]["statement"] = "Consent was waived for this restricted secondary-data fixture under the recorded exempt determination."
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_RESTRICTED_PUBLIC_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when restricted data is declared public-data-full" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.restricted-public-sharing
+expect_reject l2.p16.reject.restricted-public-sharing "$BAD_ETHICS_RESTRICTED_PUBLIC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_RESTRICTED_PUBLIC_PROJ"
 
 BAD_ETHICS_NO_AI_PROJ="$TMP/bad-ethics-no-ai-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_NO_AI_PROJ"
@@ -7065,10 +8639,9 @@ report = json.loads(path.read_text())
 report["ai_disclosure"]["statement"] = "The authors did not use generative AI tools in preparing this manuscript. This placeholder denial is intentionally inconsistent with auto-research provenance and should not pass the Phase 15 verifier."
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_NO_AI_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when auto-research claims no AI tools were used" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.ai-denial
+expect_reject l2.p16.reject.ai-denial "$BAD_ETHICS_NO_AI_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_NO_AI_PROJ"
 
 BAD_ETHICS_EMPTY_TOOL_PROJ="$TMP/bad-ethics-empty-tool-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_EMPTY_TOOL_PROJ"
@@ -7081,10 +8654,9 @@ report = json.loads(path.read_text())
 report["ai_disclosure"]["tools"] = [{}]
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_EMPTY_TOOL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when AI tool inventory contains an empty object" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.ai-tool-record
+expect_reject l2.p16.reject.ai-tool-record "$BAD_ETHICS_EMPTY_TOOL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_EMPTY_TOOL_PROJ"
 
 BAD_ETHICS_CONSENT_PROJ="$TMP/bad-ethics-consent-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_CONSENT_PROJ"
@@ -7102,18 +8674,16 @@ report["data_availability"]["sharing_mode"] = "restricted-data-code-only"
 report["data_availability"]["restriction_rationale"] = "Restricted interview data cannot be shared publicly."
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_CONSENT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when restricted human data has consent_status not-applicable" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.consent-status
+expect_reject l2.p16.reject.consent-status "$BAD_ETHICS_CONSENT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_CONSENT_PROJ"
 
 BAD_ETHICS_MD_MISMATCH_PROJ="$TMP/bad-ethics-md-mismatch-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_MD_MISMATCH_PROJ"
 printf '\nA critical unresolved conflict remains open despite the JSON pass status.\n' >> "$BAD_ETHICS_MD_MISMATCH_PROJ/ethics/ethics-open-science.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_MD_MISMATCH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when markdown contradicts JSON pass status" >&2
-  exit 1
-fi
+# CASE_ID: l2.p16.reject.markdown-contradiction
+expect_reject l2.p16.reject.markdown-contradiction "$BAD_ETHICS_MD_MISMATCH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_MD_MISMATCH_PROJ"
 
 BAD_ETHICS_CREDIT_ROLE_PROJ="$TMP/bad-ethics-credit-role-project"
 cp -R "$ETHICS_PROJ" "$BAD_ETHICS_CREDIT_ROLE_PROJ"
@@ -7123,12 +8693,17 @@ import pathlib
 import sys
 path = pathlib.Path(sys.argv[1])
 report = json.loads(path.read_text())
-report["authorship_credit"]["credit_roles"] = ["Author 1"]
+report["authorship_credit"]["credit_roles"] = ["Invalid Fixture Role"]
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_CREDIT_ROLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 15 verify should fail when CRediT roles are placeholders or invalid" >&2
-  exit 1
+# CASE_ID: l2.p16.reject.credit-role-invalid
+expect_reject l2.p16.reject.credit-role-invalid "$BAD_ETHICS_CREDIT_ROLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 16 "$BAD_ETHICS_CREDIT_ROLE_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "16" ]]; then
+  harness_validate_results --phase-through 16 >/dev/null
+  progress "phases 0 to 16 authoritative harness assertions passed"
+  exit 0
 fi
 
 REPLICATION_PROJ="$TMP/replication-project"
@@ -7420,7 +8995,9 @@ report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 manifest = {"files": files}
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$REPLICATION_PROJ" >/dev/null
+# CASE_ID: phase.17.positive
+expect_pass phase.17.positive "$REPLICATION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$REPLICATION_PROJ"
 
 FAIL_REPLICATION_PROJ="$TMP/fail-replication-project"
 cp -R "$REPLICATION_PROJ" "$FAIL_REPLICATION_PROJ"
@@ -7452,11 +9029,9 @@ report["fix_checklist"] = {
 }
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-FAIL_REPLICATION_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$FAIL_REPLICATION_PROJ" 2>&1 || true)"
-case "$FAIL_REPLICATION_OUT" in
-  *"route_back_phase=11"* ) ;;
-  *) echo "FAIL: Phase 16 structured FAIL report should expose route_back_phase=11, got $FAIL_REPLICATION_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: phase.17.negative
+expect_reject phase.17.negative "$FAIL_REPLICATION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$FAIL_REPLICATION_PROJ"
 
 ROUTE_STATE_16_PROJ="$TMP/route-state-16-project"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$ROUTE_STATE_16_PROJ" >/dev/null
@@ -7484,27 +9059,47 @@ PY
 
 BAD_REPLICATION_REPORT_PROJ="$TMP/bad-replication-report-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_REPORT_PROJ"
-printf '{}\n' > "$BAD_REPLICATION_REPORT_PROJ/replication-package/replication-report.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_REPORT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when replication report is empty" >&2
-  exit 1
-fi
+python3 - "$BAD_REPLICATION_REPORT_PROJ/replication-package/replication-report.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+report = json.loads(path.read_text())
+report.pop("verdict")
+path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p17.reject.report-schema
+expect_reject l2.p17.reject.report-schema "$BAD_REPLICATION_REPORT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_REPORT_PROJ"
+
+rebind_replication_readme_hashes() {
+  local project="$1"
+  python3 - "$project" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+readme_hash = hashlib.sha256((proj / "replication-package/README.md").read_bytes()).hexdigest()
+for rel in ("replication-package/replication-report.json", "replication-package/MANIFEST.json"):
+    path = proj / rel
+    document = json.loads(path.read_text())
+    files = document["package_inventory"]["files"] if rel.endswith("replication-report.json") else document["files"]
+    item = next(row for row in files if row["path"] == "replication-package/README.md")
+    item["sha256"] = readme_hash
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+PY
+}
 
 BAD_REPLICATION_README_PROJ="$TMP/bad-replication-readme-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_README_PROJ"
 printf '\nTBD [Paper Title]\n' >> "$BAD_REPLICATION_README_PROJ/replication-package/README.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_README_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when README contains placeholders" >&2
-  exit 1
-fi
+rebind_replication_readme_hashes "$BAD_REPLICATION_README_PROJ"
+# CASE_ID: l2.p17.reject.readme-placeholder
+expect_reject l2.p17.reject.readme-placeholder "$BAD_REPLICATION_README_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_README_PROJ"
 
 BAD_REPLICATION_MANIFEST_PROJ="$TMP/bad-replication-manifest-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_MANIFEST_PROJ"
 printf 'unlisted file\n' > "$BAD_REPLICATION_MANIFEST_PROJ/replication-package/unlisted.txt"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_MANIFEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when MANIFEST omits a package file" >&2
-  exit 1
-fi
+# CASE_ID: l2.p17.reject.manifest-coverage
+expect_reject l2.p17.reject.manifest-coverage "$BAD_REPLICATION_MANIFEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_MANIFEST_PROJ"
 
 BAD_REPLICATION_MODE_PROJ="$TMP/bad-replication-mode-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_MODE_PROJ"
@@ -7518,10 +9113,9 @@ report["replication_mode"] = "restricted-data-code-only"
 report["data_handling"]["mode"] = "restricted-data-code-only"
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_MODE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when replication_mode conflicts with Phase 15 sharing mode" >&2
-  exit 1
-fi
+# CASE_ID: l2.p17.reject.replication-mode
+expect_reject l2.p17.reject.replication-mode "$BAD_REPLICATION_MODE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_MODE_PROJ"
 
 BAD_REPLICATION_CLEAN_PROJ="$TMP/bad-replication-clean-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_CLEAN_PROJ"
@@ -7535,10 +9129,9 @@ report["clean_room_verdict"] = "FAIL"
 report["reproduction_match"] = False
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_CLEAN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when public-data clean-room reproduction fails" >&2
-  exit 1
-fi
+# CASE_ID: l2.p17.reject.clean-room
+expect_reject l2.p17.reject.clean-room "$BAD_REPLICATION_CLEAN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_CLEAN_PROJ"
 
 BAD_REPLICATION_LOCK_COVERAGE_PROJ="$TMP/bad-replication-lock-coverage-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_LOCK_COVERAGE_PROJ"
@@ -7551,10 +9144,9 @@ report = json.loads(path.read_text())
 report["locked_artifact_coverage"]["covered_artifacts"] = report["locked_artifact_coverage"]["covered_artifacts"][:-1]
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_LOCK_COVERAGE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when a locked artifact is not covered" >&2
-  exit 1
-fi
+# CASE_ID: l2.p17.reject.lock-coverage
+expect_reject l2.p17.reject.lock-coverage "$BAD_REPLICATION_LOCK_COVERAGE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_LOCK_COVERAGE_PROJ"
 
 BAD_REPLICATION_SCRIPT_COVERAGE_PROJ="$TMP/bad-replication-script-coverage-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_SCRIPT_COVERAGE_PROJ"
@@ -7568,10 +9160,9 @@ report["script_coverage"]["scripts"] = report["script_coverage"]["scripts"][:-1]
 report["script_coverage"]["packaged_script_count"] = len(report["script_coverage"]["scripts"])
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_SCRIPT_COVERAGE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when script coverage omits a Phase 8 executed script" >&2
-  exit 1
-fi
+# CASE_ID: l2.p17.reject.script-coverage
+expect_reject l2.p17.reject.script-coverage "$BAD_REPLICATION_SCRIPT_COVERAGE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_SCRIPT_COVERAGE_PROJ"
 
 BAD_REPLICATION_SCRIPT_HASH_PROJ="$TMP/bad-replication-script-hash-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_SCRIPT_HASH_PROJ"
@@ -7584,17 +9175,22 @@ report = json.loads(path.read_text())
 report["script_coverage"]["scripts"][0]["source_hash"] = "0" * 64
 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_SCRIPT_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when script coverage source_hash differs from Phase 8" >&2
-  exit 1
-fi
+# CASE_ID: l2.p17.reject.script-hash
+expect_reject l2.p17.reject.script-hash "$BAD_REPLICATION_SCRIPT_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_SCRIPT_HASH_PROJ"
 
 BAD_REPLICATION_PATH_PROJ="$TMP/bad-replication-path-project"
 cp -R "$REPLICATION_PROJ" "$BAD_REPLICATION_PATH_PROJ"
 printf '\nLocal path leak: /Users/example/project/data.csv\n' >> "$BAD_REPLICATION_PATH_PROJ/replication-package/README.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_PATH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 16 verify should fail when package text contains local absolute paths" >&2
-  exit 1
+rebind_replication_readme_hashes "$BAD_REPLICATION_PATH_PROJ"
+# CASE_ID: l2.p17.reject.local-path
+expect_reject l2.p17.reject.local-path "$BAD_REPLICATION_PATH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 17 "$BAD_REPLICATION_PATH_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "17" ]]; then
+  harness_validate_results --phase-through 17 >/dev/null
+  progress "phases 0 to 17 authoritative harness assertions passed"
+  exit 0
 fi
 
 QUALITY_PROJ="$TMP/quality-project"
@@ -7626,7 +9222,7 @@ reviewers = [
     ("Q2", "theory-contribution", True, "MINOR_REVISION"),
     ("Q3", "senior-editor", False, "PROCEED_TO_FINAL_ASSEMBLY"),
     ("Q4", "interpretive-skeptic", True, "ACCEPT"),
-    ("Q5", "methods-specialist", True, "ACCEPT"),
+    ("Q5", "survey-methods", True, "ACCEPT"),
 ]
 dimensions = {
     "contribution": 8.2,
@@ -7645,16 +9241,21 @@ role_to_agent = {
     "theory-contribution": "peer-reviewer-theory",
     "senior-editor": "peer-reviewer-senior",
     "interpretive-skeptic": "peer-reviewer-r2-skeptic",
-    "methods-specialist": "peer-reviewer-survey-methods",
+    "survey-methods": "peer-reviewer-survey-methods",
 }
 reviewer_reports = []
 # Improvement A (2026-05-03) — fixture must satisfy contribution_locator
 # consensus. All four reviewers quote the same headline-contribution
 # sentence so cross-reviewer Jaccard >= 0.7 holds for every pair.
 contribution_sentence = (
-    "The paper demonstrates that exposure to neighborhood violence increases "
-    "adolescent depressive symptoms by 0.34 standard deviations using a "
-    "sibling fixed-effects design."
+    "The article contributes to family sociology by showing how economic "
+    "instability can enter expectation formation while making uncertainty "
+    "and design limits part of the substantive claim."
+)
+contribution_line_start = next(
+    line_no for line_no, line in enumerate(
+        (proj / "manuscript/manuscript-draft.md").read_text().splitlines(), start=1
+    ) if contribution_sentence in line
 )
 # Improvement B (2026-05-03) — fixture lists rivals named in lit review
 # AND addressed in discussion. missing_adjudications stays empty so the
@@ -7681,8 +9282,8 @@ role_review_text = {
         "The principal threat is a spun robustness story, because Model 2 is less precise than Model 1; the manuscript answers that concern by describing uneven robustness and refusing uniform confirmation language. "
         "The skeptic found no unsupported escalation after this check."
     ),
-    "methods-specialist": (
-        "The methods-specialist review checked the survey-data design, the Data and Methods section, and Table 1's regression layout. "
+    "survey-methods": (
+        "The survey-methods review checked the survey-data design, the Data and Methods section, and Table 1's regression layout. "
         "The key concern was whether model labels, standard errors, sample size, and design limitations were presented in a form empirical readers can audit. "
         "The review found that Model 1, Model 2, and Model 3 are reader-facing labels and that the regression table is not a registry extract."
     ),
@@ -7724,6 +9325,7 @@ Rivals adjudicated in discussion: {", ".join(rival_named)}
         "contribution_locator": {
             "sentences": [contribution_sentence],
             "section": "abstract",
+            "line_start": contribution_line_start,
             "clarity_score": 8,
             "specificity_score": 8,
             "notes": "Contribution is concrete and located in the abstract and discussion."
@@ -7777,6 +9379,7 @@ quality = {
     },
     "selected_manuscript_hash": sha(proj / "manuscript/manuscript-draft.md"),
     "source_hashes": {
+        "research_question": sha(proj / "idea/research-question.json"),
         "manuscript": sha(proj / "manuscript/manuscript-draft.md"),
         "draft_manifest": sha(proj / "manuscript/draft-manifest.json"),
         "polish_report": sha(proj / "manuscript/polish-report.json"),
@@ -7803,7 +9406,8 @@ quality = {
     "method_specialist_review": {
         "status": "PASS",
         "reviewer_id": "Q5",
-        "role": "methods-specialist",
+        "role": "survey-methods",
+        "method_family": "structured_secondary_data",
         "covered_secondary_data_design": True,
         "covered_model_specification": True,
         "covered_regression_table_reporting": True
@@ -7869,7 +9473,300 @@ quality = {
 }
 write("quality/manuscript-quality.json", json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$QUALITY_PROJ" >/dev/null
+# CASE_ID: l2.p18.reject.missing-review-evidence
+expect_reject l2.p18.reject.missing-review-evidence "$QUALITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$QUALITY_PROJ"
+
+prepare_phase18_method_family_fixture() {
+  local project="$1"
+  local method_orientation="$2"
+  local include_specialist="$3"
+  local specialist_role="${4:-survey-methods}"
+  local specialist_family="${5:-structured_secondary_data}"
+  cp -R "$QUALITY_PROJ" "$project"
+  python3 - "$project" "$method_orientation" "$include_specialist" "$specialist_role" "$specialist_family" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+project = pathlib.Path(sys.argv[1])
+method_orientation = sys.argv[2]
+include_specialist = sys.argv[3] == "1"
+specialist_role = sys.argv[4]
+specialist_family = sys.argv[5]
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def load(relative):
+    return json.loads((project / relative).read_text())
+
+def write(relative, document):
+    (project / relative).write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+rq_path = project / "idea/research-question.json"
+rq = load("idea/research-question.json")
+rq["method_orientation"] = method_orientation
+write("idea/research-question.json", rq)
+
+# Preserve the real prerequisite chain: changing the authoritative RQ changes
+# each downstream document that binds an upstream document by digest.
+blueprint_path = project / "manuscript/manuscript-blueprint.json"
+blueprint = load("manuscript/manuscript-blueprint.json")
+blueprint["source_hashes"]["research_question"] = sha(rq_path)
+write("manuscript/manuscript-blueprint.json", blueprint)
+
+draft_manifest_path = project / "manuscript/draft-manifest.json"
+draft_manifest = load("manuscript/draft-manifest.json")
+draft_manifest["source_hashes"]["research_question"] = sha(rq_path)
+draft_manifest["source_hashes"]["manuscript_blueprint"] = sha(blueprint_path)
+draft_manifest["blueprint"]["sha256"] = sha(blueprint_path)
+write("manuscript/draft-manifest.json", draft_manifest)
+
+verification_path = project / "verify/manuscript-verification.json"
+verification = load("verify/manuscript-verification.json")
+verification["source_hashes"]["draft_manifest"] = sha(draft_manifest_path)
+verification["blueprint_hashes"]["manuscript_blueprint"] = sha(blueprint_path)
+for agent in verification["agents"]:
+    agent["input_hashes"]["draft_manifest"] = sha(draft_manifest_path)
+write("verify/manuscript-verification.json", verification)
+
+citation_path = project / "citation/citation-audit.json"
+citation = load("citation/citation-audit.json")
+citation["source_hashes"]["draft_manifest"] = sha(draft_manifest_path)
+citation["source_hashes"]["phase13_verification"] = sha(verification_path)
+write("citation/citation-audit.json", citation)
+
+ethics_path = project / "ethics/ethics-open-science.json"
+ethics = load("ethics/ethics-open-science.json")
+ethics["source_hashes"]["draft_manifest"] = sha(draft_manifest_path)
+ethics["source_hashes"]["citation_audit"] = sha(citation_path)
+write("ethics/ethics-open-science.json", ethics)
+
+replication_path = project / "replication-package/replication-report.json"
+replication = load("replication-package/replication-report.json")
+replication["source_hashes"]["ethics_open_science"] = sha(ethics_path)
+write("replication-package/replication-report.json", replication)
+
+quality_path = project / "quality/manuscript-quality.json"
+quality = load("quality/manuscript-quality.json")
+quality["source_hashes"]["research_question"] = sha(rq_path)
+quality["source_hashes"]["draft_manifest"] = sha(draft_manifest_path)
+quality["source_hashes"]["manuscript_verification"] = sha(verification_path)
+quality["source_hashes"]["citation_audit"] = sha(citation_path)
+quality["source_hashes"]["ethics_open_science"] = sha(ethics_path)
+quality["source_hashes"]["replication_report"] = sha(replication_path)
+if not include_specialist:
+    quality["reviewer_reports"] = [
+        reviewer for reviewer in quality["reviewer_reports"]
+        if reviewer.get("reviewer_id") != "Q5"
+    ]
+    quality["method_specialist_review"] = {"status": "NOT_APPLICABLE"}
+else:
+    specialist = next(
+        reviewer for reviewer in quality["reviewer_reports"]
+        if reviewer.get("reviewer_id") == "Q5"
+    )
+    specialist["role"] = specialist_role
+    specialist["agent_name"] = f"peer-reviewer-{specialist_role}"
+    specialist["report_path"] = f"quality/agents/q5-{specialist_role}.md"
+    report = project / specialist["report_path"]
+    report.write_text(
+        f"# Reviewer Q5: {specialist_role}\n\n"
+        f"REVIEWER_ROLE: {specialist_role}\nTASK_ID: {specialist['task_invocation_id']}\n\n"
+        f"This {specialist_family} specialist review inspected the Data and Methods section, "
+        "Table 1, Figure 1, and the limitation paragraph in the Discussion. The central "
+        f"risk for the declared {specialist_family} orientation is that a reader could infer "
+        "more design certainty than the observed evidence supports. The review therefore "
+        "checked model labels, uncertainty reporting, sample-size disclosure, robustness "
+        "language, and the boundary between the empirical pattern and the manuscript's "
+        "substantive interpretation. Table 1 preserves reader-facing model labels and the "
+        "Results section describes Model 2 as weaker evidence instead of uniform confirmation. "
+        "The Discussion also retains the observational limitation and identifies selection "
+        "bias and reverse causation as rival explanations.\n\n"
+        "CONTRIBUTION LOCATOR\n"
+        "The Abstract and Discussion state that economic instability can enter expectation "
+        "formation while uncertainty and design limits remain part of the substantive claim.\n\n"
+        "RIVAL ADJUDICATION\n"
+        "Selection bias and reverse causation are named in the literature discussion and "
+        "revisited in the limitations. The family-specific review found no unsupported claim "
+        "escalation, but it recommends preserving those caveats in every final format. "
+        "Decision: ACCEPT.\n"
+    )
+    quality["method_specialist_review"].update({
+        "role": specialist_role,
+        "method_family": specialist_family,
+    })
+write("quality/manuscript-quality.json", quality)
+PY
+  # Phase 14's registered review session binds draft-manifest bytes. Renew it
+  # after the legitimate hash-chain update rather than weakening its evidence.
+  local old_phase14_session
+  old_phase14_session="$(python3 - "$project/verify/manuscript-verification.json" <<'PY'
+import json
+import sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+print(document["review_evidence"]["rounds"]["verification_panel"]["session_id"])
+PY
+)"
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-abort "$project" 14 "$old_phase14_session" \
+    --reason "fixture authoritative research question changed; renew dependent verification evidence" >/dev/null
+  python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$project" 14 verification_panel >/dev/null
+  # Registration writes the new Phase 14 evidence binding into the canonical
+  # verification JSON, so propagate that final byte digest through 15–18.
+  python3 - "$project" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+project = pathlib.Path(sys.argv[1])
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def update(relative, edits):
+    path = project / relative
+    document = json.loads(path.read_text())
+    edits(document)
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+verification_path = project / "verify/manuscript-verification.json"
+citation_path = project / "citation/citation-audit.json"
+ethics_path = project / "ethics/ethics-open-science.json"
+replication_path = project / "replication-package/replication-report.json"
+
+update("citation/citation-audit.json", lambda document: document["source_hashes"].update({
+    "phase13_verification": sha(verification_path),
+}))
+def update_ethics(document):
+    document["source_hashes"]["citation_audit"] = sha(citation_path)
+    expected = {
+        "citation/citation-audit.json": sha(citation_path),
+        "manuscript/draft-manifest.json": sha(project / "manuscript/draft-manifest.json"),
+    }
+    for artifact in document["integrity_review"]["checked_artifacts"]:
+        if artifact.get("path") in expected:
+            artifact["sha256"] = expected[artifact["path"]]
+
+update("ethics/ethics-open-science.json", update_ethics)
+update("replication-package/replication-report.json", lambda document: document["source_hashes"].update({
+    "ethics_open_science": sha(ethics_path),
+}))
+update("quality/manuscript-quality.json", lambda document: document["source_hashes"].update({
+    "manuscript_verification": sha(verification_path),
+    "citation_audit": sha(citation_path),
+    "ethics_open_science": sha(ethics_path),
+    "replication_report": sha(replication_path),
+}))
+PY
+}
+
+# Phase 18's specialist requirement is routed from the authoritative Phase 1
+# method_orientation, not only inferred from whether the final manuscript
+# happens to contain survey/secondary-data vocabulary. Exercise every family
+# that requires a fifth specialist with both sides of the boundary.
+while IFS='|' read -r family method_orientation specialist_role specialist_family; do
+  FOUR_ROLE_PROJ="$TMP/quality-${family}-four-role-project"
+  prepare_phase18_method_family_fixture "$FOUR_ROLE_PROJ" "$method_orientation" 0 \
+    "$specialist_role" "$specialist_family"
+  python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$FOUR_ROLE_PROJ" 18 adversarial_panel >/dev/null
+  case "$family" in
+    computational)
+      # CASE_ID: f20.p18.reject.computational-four-role
+      expect_reject f20.p18.reject.computational-four-role "$FOUR_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FOUR_ROLE_PROJ"
+      ;;
+    qualitative)
+      # CASE_ID: f20.p18.reject.qualitative-four-role
+      expect_reject f20.p18.reject.qualitative-four-role "$FOUR_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FOUR_ROLE_PROJ"
+      ;;
+    linguistic)
+      # CASE_ID: f20.p18.reject.linguistic-four-role
+      expect_reject f20.p18.reject.linguistic-four-role "$FOUR_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FOUR_ROLE_PROJ"
+      ;;
+    mixed-methods)
+      # CASE_ID: f20.p18.reject.mixed-methods-four-role
+      expect_reject f20.p18.reject.mixed-methods-four-role "$FOUR_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FOUR_ROLE_PROJ"
+      ;;
+    demographic)
+      # CASE_ID: f20.p18.reject.demographic-four-role
+      expect_reject f20.p18.reject.demographic-four-role "$FOUR_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FOUR_ROLE_PROJ"
+      ;;
+  esac
+
+  FIVE_ROLE_PROJ="$TMP/quality-${family}-five-role-project"
+  prepare_phase18_method_family_fixture "$FIVE_ROLE_PROJ" "$method_orientation" 1 \
+    "$specialist_role" "$specialist_family"
+  python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$FIVE_ROLE_PROJ" 18 adversarial_panel \
+    --extra-role "$specialist_role" >/dev/null
+  case "$family" in
+    computational)
+      # CASE_ID: f20.p18.accept.computational-five-role
+      expect_pass f20.p18.accept.computational-five-role "$FIVE_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FIVE_ROLE_PROJ"
+      ;;
+    qualitative)
+      # CASE_ID: f20.p18.accept.qualitative-five-role
+      expect_pass f20.p18.accept.qualitative-five-role "$FIVE_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FIVE_ROLE_PROJ"
+      ;;
+    linguistic)
+      # CASE_ID: f20.p18.accept.linguistic-five-role
+      expect_pass f20.p18.accept.linguistic-five-role "$FIVE_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FIVE_ROLE_PROJ"
+      ;;
+    mixed-methods)
+      # CASE_ID: f20.p18.accept.mixed-methods-five-role
+      expect_pass f20.p18.accept.mixed-methods-five-role "$FIVE_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FIVE_ROLE_PROJ"
+      ;;
+    demographic)
+      # CASE_ID: f20.p18.accept.demographic-five-role
+      expect_pass f20.p18.accept.demographic-five-role "$FIVE_ROLE_PROJ" -- \
+        bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FIVE_ROLE_PROJ"
+      ;;
+  esac
+done <<'EOF'
+computational|computational text-as-data analysis|computational-methods|computational
+qualitative|qualitative interview study|qualitative-methods|qualitative
+linguistic|sociolinguistic variation analysis|linguistic-methods|linguistic
+mixed-methods|mixed-methods survey plus interview design|mixed-methods|mixed_methods
+demographic|demographic event-history analysis|demographic-family-methods|demographic
+EOF
+
+verify_phase18_with_detail() {
+  local project="$1"
+  local required_detail="$2"
+  local output rc
+  if output="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$project" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  printf '%s\n' "$output" >&2
+  printf '%s\n' "$output" | grep -Fx "  - $required_detail" >/dev/null || return 97
+  return "$rc"
+}
+
+MISMATCH_ROLE_PROJ="$TMP/quality-computational-mismatched-specialist-project"
+prepare_phase18_method_family_fixture "$MISMATCH_ROLE_PROJ" \
+  "computational text-as-data analysis" 1 survey-methods computational
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$MISMATCH_ROLE_PROJ" 18 adversarial_panel \
+  --extra-role survey-methods >/dev/null
+# CASE_ID: f20.p18.reject.computational-specialist-mismatch
+expect_reject f20.p18.reject.computational-specialist-mismatch "$MISMATCH_ROLE_PROJ" -- \
+  verify_phase18_with_detail "$MISMATCH_ROLE_PROJ" computational-methods
+
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$QUALITY_PROJ" 18 adversarial_panel --extra-role survey-methods >/dev/null
+# CASE_ID: phase.18.positive
+expect_pass phase.18.positive "$QUALITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$QUALITY_PROJ"
 
 FAIL_QUALITY_PROJ="$TMP/fail-quality-project"
 cp -R "$QUALITY_PROJ" "$FAIL_QUALITY_PROJ"
@@ -7901,11 +9798,9 @@ quality["fix_checklist"] = {
 }
 path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-FAIL_QUALITY_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FAIL_QUALITY_PROJ" 2>&1 || true)"
-case "$FAIL_QUALITY_OUT" in
-  *"route_back_phase=12"* ) ;;
-  *) echo "FAIL: Phase 17 structured FAIL report should expose route_back_phase=12, got $FAIL_QUALITY_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: phase.18.negative
+expect_reject phase.18.negative "$FAIL_QUALITY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$FAIL_QUALITY_PROJ"
 
 ROUTE_STATE_17_PROJ="$TMP/route-state-17-project"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$ROUTE_STATE_17_PROJ" >/dev/null
@@ -7933,11 +9828,16 @@ PY
 
 BAD_QUALITY_REPORT_PROJ="$TMP/bad-quality-report-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_REPORT_PROJ"
-printf '{}\n' > "$BAD_QUALITY_REPORT_PROJ/quality/manuscript-quality.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REPORT_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when quality report is empty" >&2
-  exit 1
-fi
+python3 - "$BAD_QUALITY_REPORT_PROJ/quality/manuscript-quality.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+quality = json.loads(path.read_text())
+quality.pop("verdict")
+path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p18.reject.report-schema
+expect_reject l2.p18.reject.report-schema "$BAD_QUALITY_REPORT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REPORT_PROJ"
 
 BAD_QUALITY_LOW_SCORE_PROJ="$TMP/bad-quality-low-score-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_LOW_SCORE_PROJ"
@@ -7950,10 +9850,9 @@ quality = json.loads(path.read_text())
 quality["dimension_scores"]["rq_answer"] = 6.5
 path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_LOW_SCORE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when a quality dimension is below threshold" >&2
-  exit 1
-fi
+# CASE_ID: l2.p18.reject.low-score
+expect_reject l2.p18.reject.low-score "$BAD_QUALITY_LOW_SCORE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_LOW_SCORE_PROJ"
 
 BAD_QUALITY_POLISH_PROJ="$TMP/bad-quality-polish-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_POLISH_PROJ"
@@ -7967,18 +9866,22 @@ quality["polish_audit"]["high_severity_markers"] = 1
 quality["polish_audit"]["route_back_required"] = True
 path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_POLISH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when scholar-polish scan requires route-back" >&2
-  exit 1
-fi
+# CASE_ID: l2.p18.reject.polish-audit
+expect_reject l2.p18.reject.polish-audit "$BAD_QUALITY_POLISH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_POLISH_PROJ"
 
 BAD_QUALITY_HASH_PROJ="$TMP/bad-quality-hash-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_HASH_PROJ"
-printf '\nLate manuscript edit after quality review.\n' >> "$BAD_QUALITY_HASH_PROJ/manuscript/manuscript-draft.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when manuscript hash is stale" >&2
-  exit 1
-fi
+python3 - "$BAD_QUALITY_HASH_PROJ/quality/manuscript-quality.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+quality = json.loads(path.read_text())
+quality["source_hashes"]["manuscript"] = "0" * 64
+path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p18.reject.source-hash
+expect_reject l2.p18.reject.source-hash "$BAD_QUALITY_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_HASH_PROJ"
 
 BAD_QUALITY_REVIEWER_PROJ="$TMP/bad-quality-reviewer-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_REVIEWER_PROJ"
@@ -7991,10 +9894,9 @@ quality = json.loads(path.read_text())
 quality["reviewer_reports"] = [r for r in quality["reviewer_reports"] if r["role"] != "interpretive-skeptic"]
 path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REVIEWER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when a required reviewer role is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p18.reject.reviewer-role-binding
+expect_reject l2.p18.reject.reviewer-role-binding "$BAD_QUALITY_REVIEWER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REVIEWER_PROJ"
 
 BAD_QUALITY_REVIEWER_TASK_PROJ="$TMP/bad-quality-reviewer-task-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_REVIEWER_TASK_PROJ"
@@ -8007,10 +9909,9 @@ quality = json.loads(path.read_text())
 quality["reviewer_reports"][1]["task_invocation_id"] = quality["reviewer_reports"][0]["task_invocation_id"]
 path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REVIEWER_TASK_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when reviewer task IDs are duplicated" >&2
-  exit 1
-fi
+# CASE_ID: l2.p18.reject.reviewer-task-binding
+expect_reject l2.p18.reject.reviewer-task-binding "$BAD_QUALITY_REVIEWER_TASK_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REVIEWER_TASK_PROJ"
 
 BAD_QUALITY_REVIEWER_FILE_PROJ="$TMP/bad-quality-reviewer-file-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_REVIEWER_FILE_PROJ"
@@ -8023,10 +9924,9 @@ quality = json.loads((proj / "quality/manuscript-quality.json").read_text())
 report_path = proj / quality["reviewer_reports"][0]["report_path"]
 report_path.write_text("This file omits the required reviewer role and task id provenance tokens.\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REVIEWER_FILE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when reviewer report file lacks provenance tokens" >&2
-  exit 1
-fi
+# CASE_ID: l2.p18.reject.reviewer-report-digest
+expect_reject l2.p18.reject.reviewer-report-digest "$BAD_QUALITY_REVIEWER_FILE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_REVIEWER_FILE_PROJ"
 
 BAD_QUALITY_BLOCKER_PROJ="$TMP/bad-quality-blocker-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_BLOCKER_PROJ"
@@ -8039,17 +9939,21 @@ quality = json.loads(path.read_text())
 quality["threshold_policy"]["non_overridable_blockers"] = ["unsupported empirical claim"]
 path.write_text(json.dumps(quality, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_BLOCKER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when non-overridable blockers remain" >&2
-  exit 1
-fi
+# CASE_ID: l2.p18.reject.non-overridable-blocker
+expect_reject l2.p18.reject.non-overridable-blocker "$BAD_QUALITY_BLOCKER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_BLOCKER_PROJ"
 
 BAD_QUALITY_MD_PROJ="$TMP/bad-quality-md-project"
 cp -R "$QUALITY_PROJ" "$BAD_QUALITY_MD_PROJ"
 printf '# Quality\n\nPASS.\n' > "$BAD_QUALITY_MD_PROJ/quality/manuscript-quality.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_MD_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 17 verify should fail when markdown summary is too thin" >&2
-  exit 1
+# CASE_ID: l2.p18.reject.markdown-sections
+expect_reject l2.p18.reject.markdown-sections "$BAD_QUALITY_MD_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 18 "$BAD_QUALITY_MD_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "18" ]]; then
+  harness_validate_results --phase-through 18 >/dev/null
+  progress "phases 0 to 18 authoritative harness assertions passed"
+  exit 0
 fi
 
 FINAL_PROJ="$TMP/final-project"
@@ -8061,6 +9965,7 @@ import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 import zipfile
 
@@ -8155,7 +10060,7 @@ This study uses public secondary data and was classified as exempt in the ethics
 The data availability mode is public-data-full and the replication package documents the code and analysis outputs.
 
 ## AI Use Disclosure
-Codex assisted with code checks, format checks, and non-substantive drafting support under human review, as documented in the ethics report.
+AI-assisted coding and writing tools supported code checks, format checks, and non-substantive drafting under human review, as documented in the ethics report.
 
 ## Competing Interests
 The authors declare no competing interests.
@@ -8164,13 +10069,12 @@ write("final/manuscript-final.md", final_md)
 (proj / "final/figures").mkdir(parents=True, exist_ok=True)
 (proj / "final/figures/event-study.png").write_bytes((proj / "figures/event-study.png").read_bytes())
 
-with zipfile.ZipFile(proj / "final/manuscript-final.docx", "w") as zf:
-    zf.writestr("[Content_Types].xml", "<?xml version='1.0' encoding='UTF-8'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/word/document.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/></Types>")
-    zf.writestr("_rels/.rels", "<?xml version='1.0' encoding='UTF-8'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='word/document.xml'/></Relationships>")
-    zf.writestr("word/document.xml", "<?xml version='1.0' encoding='UTF-8'?><w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body><w:p><w:r><w:t>Parental Job Loss and Adolescent Educational Expectations</w:t></w:r></w:p></w:body></w:document>")
-
-write("final/manuscript-final.tex", "\\documentclass{article}\n\\begin{document}\nParental Job Loss and Adolescent Educational Expectations\n\\end{document}\n")
-write("final/manuscript-final.pdf", b"%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n", binary=True)
+for extension, extra in (("docx", []), ("tex", []), ("pdf", ["--pdf-engine=xelatex"])):
+    subprocess.run(
+        ["pandoc", "-s", "final/manuscript-final.md", "-o",
+         f"final/manuscript-final.{extension}", *extra],
+        check=True, cwd=proj,
+    )
 journal_profile_resolution = json.loads((proj / "manuscript/manuscript-blueprint.json").read_text())["journal_profile_resolution"]
 version_id = "2026-04-30T153012Z-v001"
 created_at_utc = "2026-04-30T15:30:12Z"
@@ -8298,7 +10202,9 @@ manifest = {
 write("final/final-manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 (proj / versioned["manifest"]).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$FINAL_PROJ" >/dev/null
+# CASE_ID: phase.19.positive
+expect_pass phase.19.positive "$FINAL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$FINAL_PROJ"
 
 BAD_FINAL_JOURNAL_POLICY_PROJ="$TMP/bad-final-journal-policy-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_JOURNAL_POLICY_PROJ"
@@ -8311,10 +10217,9 @@ manifest = json.loads(path.read_text())
 manifest["content_checks"]["table_placement_policy_applied"] = "embedded_main_text"
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_JOURNAL_POLICY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when final assembly claims the wrong journal table-placement policy" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.journal-table-policy
+expect_reject l2.p19.reject.journal-table-policy "$BAD_FINAL_JOURNAL_POLICY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_JOURNAL_POLICY_PROJ"
 
 BAD_FINAL_RAW_HTML_TABLE_PROJ="$TMP/bad-final-raw-html-table-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_RAW_HTML_TABLE_PROJ"
@@ -8367,10 +10272,9 @@ for record in manifest["format_generation"].values():
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 (proj / manifest["versioned_output_paths"]["manifest"]).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_RAW_HTML_TABLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when editable-text final markdown contains a raw HTML table" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.raw-html-table
+expect_reject l2.p19.reject.raw-html-table "$BAD_FINAL_RAW_HTML_TABLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_RAW_HTML_TABLE_PROJ"
 
 BAD_FINAL_PROVENANCE_PROJ="$TMP/bad-final-provenance-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_PROVENANCE_PROJ"
@@ -8387,10 +10291,9 @@ manifest["journal_profile_resolution"]["source_strategy"] = "asr_fallback"
 manifest["journal_profile_resolution"]["resolved_profile_name"] = "American Sociological Review"
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_PROVENANCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when final-manifest journal_profile_resolution drifts from the blueprint" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.journal-provenance
+expect_reject l2.p19.reject.journal-provenance "$BAD_FINAL_PROVENANCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_PROVENANCE_PROJ"
 
 FAIL_FINAL_PROJ="$TMP/fail-final-project"
 cp -R "$FINAL_PROJ" "$FAIL_FINAL_PROJ"
@@ -8422,11 +10325,9 @@ manifest["fix_checklist"] = {
 }
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-FAIL_FINAL_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$FAIL_FINAL_PROJ" 2>&1 || true)"
-case "$FAIL_FINAL_OUT" in
-  *"route_back_phase=19"* ) ;;
-  *) echo "FAIL: Phase 19 structured FAIL report should expose route_back_phase=19, got $FAIL_FINAL_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: phase.19.negative
+expect_reject phase.19.negative "$FAIL_FINAL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$FAIL_FINAL_PROJ"
 
 ROUTE_STATE_18_PROJ="$TMP/route-state-18-project"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$ROUTE_STATE_18_PROJ" >/dev/null
@@ -8463,27 +10364,36 @@ PY
 
 BAD_FINAL_MANIFEST_PROJ="$TMP/bad-final-manifest-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_MANIFEST_PROJ"
-printf '{}\n' > "$BAD_FINAL_MANIFEST_PROJ/final/final-manifest.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_MANIFEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when final manifest is empty" >&2
-  exit 1
-fi
+python3 - "$BAD_FINAL_MANIFEST_PROJ/final/final-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest.pop("verdict")
+path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p19.reject.manifest-schema
+expect_reject l2.p19.reject.manifest-schema "$BAD_FINAL_MANIFEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_MANIFEST_PROJ"
 
 BAD_FINAL_HASH_PROJ="$TMP/bad-final-hash-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_HASH_PROJ"
 printf '\nLate final edit.\n' >> "$BAD_FINAL_HASH_PROJ/final/manuscript-final.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when final md hash is stale" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.output-hash
+expect_reject l2.p19.reject.output-hash "$BAD_FINAL_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_HASH_PROJ"
 
 BAD_FINAL_SOURCE_PROJ="$TMP/bad-final-source-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_SOURCE_PROJ"
-printf '\nLate draft edit after final assembly.\n' >> "$BAD_FINAL_SOURCE_PROJ/manuscript/manuscript-draft.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_SOURCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when source manuscript hash is stale" >&2
-  exit 1
-fi
+python3 - "$BAD_FINAL_SOURCE_PROJ/final/final-manifest.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["source_manuscript_hash"] = "0" * 64
+path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+PY
+# CASE_ID: l2.p19.reject.source-manuscript-hash
+expect_reject l2.p19.reject.source-manuscript-hash "$BAD_FINAL_SOURCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_SOURCE_PROJ"
 
 BAD_FINAL_DOCX_PROJ="$TMP/bad-final-docx-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_DOCX_PROJ"
@@ -8496,13 +10406,15 @@ import sys
 manifest_path = pathlib.Path(sys.argv[1])
 docx_path = pathlib.Path(sys.argv[2])
 manifest = json.loads(manifest_path.read_text())
+versioned_docx = manifest_path.parents[1] / manifest["versioned_output_paths"]["docx"]
+versioned_docx.write_bytes(docx_path.read_bytes())
 manifest["output_hashes"]["docx"] = hashlib.sha256(docx_path.read_bytes()).hexdigest()
+manifest["versioned_output_hashes"]["docx"] = hashlib.sha256(versioned_docx.read_bytes()).hexdigest()
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_DOCX_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when DOCX is not a valid Word zip" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.docx-authenticity
+expect_reject l2.p19.reject.docx-authenticity "$BAD_FINAL_DOCX_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_DOCX_PROJ"
 
 BAD_FINAL_SAMESOURCE_PROJ="$TMP/bad-final-samesource-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_SAMESOURCE_PROJ"
@@ -8515,18 +10427,16 @@ manifest = json.loads(path.read_text())
 manifest["same_source"]["all_formats_from_source_md"] = False
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_SAMESOURCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when same-source proof is false" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.same-source
+expect_reject l2.p19.reject.same-source "$BAD_FINAL_SAMESOURCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_SAMESOURCE_PROJ"
 
 BAD_FINAL_LATEST_PROJ="$TMP/bad-final-latest-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_LATEST_PROJ"
 printf '2026-04-30T153013Z-v001\n' > "$BAD_FINAL_LATEST_PROJ/final/LATEST.txt"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_LATEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when final/LATEST.txt does not match version_id" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.latest-pointer
+expect_reject l2.p19.reject.latest-pointer "$BAD_FINAL_LATEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_LATEST_PROJ"
 
 BAD_FINAL_VERSION_COPY_PROJ="$TMP/bad-final-version-copy-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_VERSION_COPY_PROJ"
@@ -8539,10 +10449,9 @@ manifest = json.loads(path.read_text())
 versioned_docx = path.parents[1] / manifest["versioned_output_paths"]["docx"]
 versioned_docx.unlink()
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_VERSION_COPY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when a versioned final copy is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.versioned-copy-missing
+expect_reject l2.p19.reject.versioned-copy-missing "$BAD_FINAL_VERSION_COPY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_VERSION_COPY_PROJ"
 
 BAD_FINAL_VERSION_HASH_PROJ="$TMP/bad-final-version-hash-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_VERSION_HASH_PROJ"
@@ -8555,18 +10464,35 @@ manifest = json.loads(path.read_text())
 versioned_md = path.parents[1] / manifest["versioned_output_paths"]["md"]
 versioned_md.write_text(versioned_md.read_text() + "\nVersion-only drift.\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_VERSION_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when a versioned final copy differs from canonical" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.versioned-hash
+expect_reject l2.p19.reject.versioned-hash "$BAD_FINAL_VERSION_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_VERSION_HASH_PROJ"
 
 BAD_FINAL_PLACEHOLDER_PROJ="$TMP/bad-final-placeholder-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_PLACEHOLDER_PROJ"
 printf '\nTODO add journal title\n' >> "$BAD_FINAL_PLACEHOLDER_PROJ/final/manuscript-final.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_PLACEHOLDER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when final markdown contains placeholders" >&2
-  exit 1
-fi
+python3 - "$BAD_FINAL_PLACEHOLDER_PROJ" <<'PY'
+import hashlib, json, pathlib, sys
+proj = pathlib.Path(sys.argv[1])
+manifest_path = proj / "final/final-manifest.json"
+manifest = json.loads(manifest_path.read_text())
+canonical = proj / manifest["output_paths"]["md"]
+versioned = proj / manifest["versioned_output_paths"]["md"]
+versioned.write_bytes(canonical.read_bytes())
+digest = hashlib.sha256(canonical.read_bytes()).hexdigest()
+manifest["output_hashes"]["md"] = digest
+manifest["versioned_output_hashes"]["md"] = hashlib.sha256(versioned.read_bytes()).hexdigest()
+manifest["same_source"]["source_md_sha256"] = digest
+for record in manifest["format_generation"].values():
+    record["source_md_sha256"] = digest
+manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+(proj / manifest["versioned_output_paths"]["manifest"]).write_text(
+    json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+)
+PY
+# CASE_ID: l2.p19.reject.placeholder
+expect_reject l2.p19.reject.placeholder "$BAD_FINAL_PLACEHOLDER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_PLACEHOLDER_PROJ"
 
 BAD_FINAL_ENGINE_PROJ="$TMP/bad-final-engine-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_ENGINE_PROJ"
@@ -8580,10 +10506,9 @@ manifest["assembly_engine"]["name"] = "manual-export"
 manifest["assembly_engine"]["fallback_used"] = True
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_ENGINE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when assembly_engine does not use Pandoc same-source rendering" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.assembly-engine
+expect_reject l2.p19.reject.assembly-engine "$BAD_FINAL_ENGINE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_ENGINE_PROJ"
 
 BAD_FINAL_COMMAND_PROJ="$TMP/bad-final-command-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_COMMAND_PROJ"
@@ -8596,10 +10521,9 @@ manifest = json.loads(path.read_text())
 manifest["format_generation"]["pdf"]["command"] = "pandoc manuscript/manuscript-draft.md -o final/manuscript-final.pdf"
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_COMMAND_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when format_generation command does not use final/manuscript-final.md" >&2
-  exit 1
-fi
+# CASE_ID: l2.p19.reject.format-source-command
+expect_reject l2.p19.reject.format-source-command "$BAD_FINAL_COMMAND_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_COMMAND_PROJ"
 
 BAD_FINAL_NONPANDOC_PROJ="$TMP/bad-final-nonpandoc-project"
 cp -R "$FINAL_PROJ" "$BAD_FINAL_NONPANDOC_PROJ"
@@ -8612,9 +10536,14 @@ manifest = json.loads(path.read_text())
 manifest["format_generation"]["tex"]["command"] = "python render.py final/manuscript-final.md final/manuscript-final.tex"
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_NONPANDOC_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 18 verify should fail when format_generation command does not invoke Pandoc" >&2
-  exit 1
+# CASE_ID: l2.p19.reject.nonpandoc-command
+expect_reject l2.p19.reject.nonpandoc-command "$BAD_FINAL_NONPANDOC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 19 "$BAD_FINAL_NONPANDOC_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "19" ]]; then
+  harness_validate_results --phase-through 19 >/dev/null
+  progress "phases 0 to 19 authoritative harness assertions passed"
+  exit 0
 fi
 
 SUBMISSION_PROJ="$TMP/submission-project"
@@ -8625,6 +10554,7 @@ import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 import zipfile
 
@@ -8717,11 +10647,12 @@ The submission manuscript reads as journal-facing body prose. No structural mach
 write("submission/semantic-body-prose-read.md", semantic_report)
 (proj / "submission/figures").mkdir(parents=True, exist_ok=True)
 (proj / "submission/figures/event-study.png").write_bytes((proj / "final/figures/event-study.png").read_bytes())
-with zipfile.ZipFile(proj / "submission/manuscript-submission.docx", "w") as zf:
-    zf.writestr("[Content_Types].xml", "<Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='xml' ContentType='application/xml'/></Types>")
-    zf.writestr("word/document.xml", "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body><w:p><w:r><w:t>Submission manuscript fixture</w:t></w:r></w:p></w:body></w:document>")
-write("submission/manuscript-submission.tex", "\\documentclass{article}\n\\begin{document}\nSubmission manuscript fixture.\n\\end{document}\n")
-(proj / "submission/manuscript-submission.pdf").write_bytes(b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n")
+for extension, extra in (("docx", []), ("tex", []), ("pdf", ["--pdf-engine=xelatex"])):
+    subprocess.run(
+        ["pandoc", "-s", "submission/manuscript-submission.md", "-o",
+         f"submission/manuscript-submission.{extension}", *extra],
+        check=True, cwd=proj,
+    )
 write("submission/LATEST.txt", submission_version_id + "\n")
 versioned = {
     "submission_md": f"submission/versions/{submission_version_id}/manuscript-submission-{submission_version_id}.md",
@@ -8903,7 +10834,52 @@ write("submission/submission-package-manifest.json", json.dumps(package_manifest
 (proj / versioned["hygiene_json"]).write_text(json.dumps(hygiene, indent=2, sort_keys=True) + "\n")
 (proj / versioned["package_manifest"]).write_text(json.dumps(package_manifest, indent=2, sort_keys=True) + "\n")
 PY
-bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$SUBMISSION_PROJ" >/dev/null
+# CASE_ID: l2.p20.reject.missing-review-evidence
+expect_reject l2.p20.reject.missing-review-evidence "$SUBMISSION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$SUBMISSION_PROJ"
+
+# The stable semantic report is a package artifact, not review authority. A
+# separately registered evidence report with RED content must control the
+# verdict even when the stable report and hygiene counters still say GREEN.
+BAD_SUBMISSION_EVIDENCE_RED_PROJ="$TMP/bad-submission-evidence-red-project"
+cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_EVIDENCE_RED_PROJ"
+cp "$BAD_SUBMISSION_EVIDENCE_RED_PROJ/submission/semantic-body-prose-read.md" \
+  "$BAD_SUBMISSION_EVIDENCE_RED_PROJ/submission/semantic-body-prose-read-red-evidence.md"
+python3 - "$BAD_SUBMISSION_EVIDENCE_RED_PROJ/submission/semantic-body-prose-read-red-evidence.md" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+report = path.read_text()
+report = report.replace("STATUS: GREEN", "STATUS: RED")
+report = report.replace("BLOCKING_ISSUES: 0", "BLOCKING_ISSUES: 2")
+report = report.replace("STRUCTURAL_PATTERN_COUNT: 0", "STRUCTURAL_PATTERN_COUNT: 1")
+path.write_text(report)
+PY
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$BAD_SUBMISSION_EVIDENCE_RED_PROJ" 20 semantic_body_reader \
+  --evidence-report semantic_body_prose_reader=submission/semantic-body-prose-read-red-evidence.md >/dev/null
+# CASE_ID: l2.p20.reject.evidence-red
+expect_reject l2.p20.reject.evidence-red "$BAD_SUBMISSION_EVIDENCE_RED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_EVIDENCE_RED_PROJ"
+
+python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$SUBMISSION_PROJ" 20 semantic_body_reader >/dev/null
+# CASE_ID: phase.20.positive
+expect_pass phase.20.positive "$SUBMISSION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$SUBMISSION_PROJ"
+
+renew_submission_review_evidence() {
+  local project="$1"
+  local old_session
+  old_session="$(python3 - "$project/submission/submission-hygiene.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+print(doc["review_evidence"]["rounds"]["semantic_body_reader"]["session_id"])
+PY
+)"
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-abort "$project" 20 "$old_session" \
+    --reason "fixture input or semantic report changed; reserve fresh evidence" >/dev/null
+  python3 "$REGISTER_REVIEW" "$SKILL_DIR" "$project" 20 semantic_body_reader >/dev/null
+}
 
 sync_submission_fixture_hashes() {
   local project="$1"
@@ -8971,6 +10947,9 @@ for key in ("hygiene_json", "package_manifest"):
         source = hygiene_path if key == "hygiene_json" else manifest_path
         target.write_text(source.read_text())
 PY
+  if [[ "$update_semantic_binding" == "1" ]]; then
+    renew_submission_review_evidence "$project"
+  fi
 }
 
 BAD_SUBMISSION_RAW_HTML_TABLE_PROJ="$TMP/bad-submission-raw-html-table-project"
@@ -9001,27 +10980,25 @@ text = re.sub(
 path.write_text(text)
 PY
 sync_submission_fixture_hashes "$BAD_SUBMISSION_RAW_HTML_TABLE_PROJ" 1
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_RAW_HTML_TABLE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when editable-text submission markdown contains a raw HTML table" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.raw-html-table
+expect_reject l2.p20.reject.raw-html-table "$BAD_SUBMISSION_RAW_HTML_TABLE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_RAW_HTML_TABLE_PROJ"
 
 BAD_SUBMISSION_MISSING_STAGE_B_PROJ="$TMP/bad-submission-missing-stage-b-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_MISSING_STAGE_B_PROJ"
 rm "$BAD_SUBMISSION_MISSING_STAGE_B_PROJ/submission/semantic-body-prose-read.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_MISSING_STAGE_B_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when semantic body-prose report is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.missing-stage-b
+expect_reject l2.p20.reject.missing-stage-b "$BAD_SUBMISSION_MISSING_STAGE_B_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_MISSING_STAGE_B_PROJ"
 
 BAD_SUBMISSION_STALE_STAGE_B_PROJ="$TMP/bad-submission-stale-stage-b-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_STALE_STAGE_B_PROJ"
 printf '\nA late edit after Stage B should stale the semantic read.\n' >> "$BAD_SUBMISSION_STALE_STAGE_B_PROJ/submission/manuscript-submission.md"
 sync_submission_fixture_hashes "$BAD_SUBMISSION_STALE_STAGE_B_PROJ" 0
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_STALE_STAGE_B_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when semantic body-prose report hash is stale" >&2
-  exit 1
-fi
+renew_submission_review_evidence "$BAD_SUBMISSION_STALE_STAGE_B_PROJ"
+# CASE_ID: l2.p20.reject.stale-stage-b
+expect_reject l2.p20.reject.stale-stage-b "$BAD_SUBMISSION_STALE_STAGE_B_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_STALE_STAGE_B_PROJ"
 
 BAD_SUBMISSION_RED_STAGE_B_PROJ="$TMP/bad-submission-red-stage-b-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_RED_STAGE_B_PROJ"
@@ -9043,19 +11020,17 @@ report = report.replace("STRUCTURAL_PATTERN_COUNT: 0", "STRUCTURAL_PATTERN_COUNT
 report_path.write_text(report)
 PY
 sync_submission_fixture_hashes "$BAD_SUBMISSION_RED_STAGE_B_PROJ" 1
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_RED_STAGE_B_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when semantic body-prose report is RED" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.red-stage-b
+expect_reject l2.p20.reject.red-stage-b "$BAD_SUBMISSION_RED_STAGE_B_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_RED_STAGE_B_PROJ"
 
 BAD_SUBMISSION_VERIFIED_MARKER_PROJ="$TMP/bad-submission-verified-marker-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_VERIFIED_MARKER_PROJ"
 printf '\nPrior work supports this claim [VERIFIED-WEB: Example2020].\n' >> "$BAD_SUBMISSION_VERIFIED_MARKER_PROJ/submission/manuscript-submission.md"
 sync_submission_fixture_hashes "$BAD_SUBMISSION_VERIFIED_MARKER_PROJ" 1
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_VERIFIED_MARKER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when submission manuscript leaks VERIFIED citation markers" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.verified-marker
+expect_reject l2.p20.reject.verified-marker "$BAD_SUBMISSION_VERIFIED_MARKER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_VERIFIED_MARKER_PROJ"
 
 BAD_SUBMISSION_MACHINERY_PROJ="$TMP/bad-submission-machinery-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_MACHINERY_PROJ"
@@ -9070,10 +11045,9 @@ cat >> "$BAD_SUBMISSION_MACHINERY_PROJ/submission/manuscript-submission.md" <<'E
 We carry ten accepted limitations into the manuscript.
 EOF
 sync_submission_fixture_hashes "$BAD_SUBMISSION_MACHINERY_PROJ" 1
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_MACHINERY_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when submission manuscript leaks machinery prose" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.machinery-prose
+expect_reject l2.p20.reject.machinery-prose "$BAD_SUBMISSION_MACHINERY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_MACHINERY_PROJ"
 
 BAD_SUBMISSION_HYPOTHESIS_PROJ="$TMP/bad-submission-hypothesis-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_HYPOTHESIS_PROJ"
@@ -9085,11 +11059,9 @@ cat >> "$BAD_SUBMISSION_HYPOTHESIS_PROJ/submission/manuscript-submission.md" <<'
 - **H2.** The association is partly attenuated after adjustment.
 EOF
 sync_submission_fixture_hashes "$BAD_SUBMISSION_HYPOTHESIS_PROJ" 1
-BAD_SUBMISSION_HYPOTHESIS_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_HYPOTHESIS_PROJ" 2>&1 || true)"
-case "$BAD_SUBMISSION_HYPOTHESIS_OUT" in
-  *"proposal-style hypothesis bullet/list blocks"* ) ;;
-  *) echo "FAIL: Phase 20 verify should fail when submission manuscript leaks hypothesis bullet/list blocks" >&2; echo "$BAD_SUBMISSION_HYPOTHESIS_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: l2.p20.reject.hypothesis-list
+expect_reject l2.p20.reject.hypothesis-list "$BAD_SUBMISSION_HYPOTHESIS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_HYPOTHESIS_PROJ"
 
 BAD_SUBMISSION_PROVENANCE_PROJ="$TMP/bad-submission-provenance-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_PROVENANCE_PROJ"
@@ -9106,10 +11078,9 @@ doc["journal_profile_resolution"]["source_strategy"] = "asr_fallback"
 doc["journal_profile_resolution"]["resolved_profile_name"] = "American Sociological Review"
 path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_PROVENANCE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 20 verify should fail when submission provenance drifts from the final manifest" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.journal-provenance
+expect_reject l2.p20.reject.journal-provenance "$BAD_SUBMISSION_PROVENANCE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_PROVENANCE_PROJ"
 
 FAIL_SUBMISSION_PROJ="$TMP/fail-submission-project"
 cp -R "$SUBMISSION_PROJ" "$FAIL_SUBMISSION_PROJ"
@@ -9141,11 +11112,9 @@ hygiene["fix_checklist"] = {
 }
 path.write_text(json.dumps(hygiene, indent=2, sort_keys=True) + "\n")
 PY
-FAIL_SUBMISSION_OUT="$(bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$FAIL_SUBMISSION_PROJ" 2>&1 || true)"
-case "$FAIL_SUBMISSION_OUT" in
-  *"route_back_phase=20"* ) ;;
-  *) echo "FAIL: Phase 20 structured FAIL report should expose route_back_phase=20, got $FAIL_SUBMISSION_OUT" >&2; exit 1 ;;
-esac
+# CASE_ID: phase.20.negative
+expect_reject phase.20.negative "$FAIL_SUBMISSION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$FAIL_SUBMISSION_PROJ"
 
 ROUTE_STATE_19_PROJ="$TMP/route-state-19-project"
 bash "$SCRIPT_DIR/auto-research-state.sh" init "$ROUTE_STATE_19_PROJ" >/dev/null
@@ -9183,42 +11152,41 @@ PY
 BAD_SUBMISSION_PATH_PROJ="$TMP/bad-submission-path-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_PATH_PROJ"
 printf '\nLocal figure path: /Users/example/figure.png\n' >> "$BAD_SUBMISSION_PATH_PROJ/submission/manuscript-submission.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_PATH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when submission manuscript leaks a local path" >&2
-  exit 1
-fi
+sync_submission_fixture_hashes "$BAD_SUBMISSION_PATH_PROJ" 1
+# CASE_ID: l2.p20.reject.local-path
+expect_reject l2.p20.reject.local-path "$BAD_SUBMISSION_PATH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_PATH_PROJ"
 
 BAD_SUBMISSION_INTERNAL_PROJ="$TMP/bad-submission-internal-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_INTERNAL_PROJ"
 printf '\nSee verify/runtime-sanity.md for the derivation.\n' >> "$BAD_SUBMISSION_INTERNAL_PROJ/submission/manuscript-submission.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_INTERNAL_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when submission manuscript leaks internal metadata" >&2
-  exit 1
-fi
+sync_submission_fixture_hashes "$BAD_SUBMISSION_INTERNAL_PROJ" 1
+# CASE_ID: l2.p20.reject.internal-metadata
+expect_reject l2.p20.reject.internal-metadata "$BAD_SUBMISSION_INTERNAL_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_INTERNAL_PROJ"
 
 BAD_SUBMISSION_PLACEHOLDER_PROJ="$TMP/bad-submission-placeholder-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_PLACEHOLDER_PROJ"
 printf '\nTODO add cover metadata.\n' >> "$BAD_SUBMISSION_PLACEHOLDER_PROJ/submission/manuscript-submission.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_PLACEHOLDER_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when submission manuscript contains placeholders" >&2
-  exit 1
-fi
+sync_submission_fixture_hashes "$BAD_SUBMISSION_PLACEHOLDER_PROJ" 1
+# CASE_ID: l2.p20.reject.placeholder
+expect_reject l2.p20.reject.placeholder "$BAD_SUBMISSION_PLACEHOLDER_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_PLACEHOLDER_PROJ"
 
 BAD_SUBMISSION_REFS_PROJ="$TMP/bad-submission-refs-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_REFS_PROJ"
 printf '\n- Bullet reference entry that should not render as a list.\n' >> "$BAD_SUBMISSION_REFS_PROJ/submission/manuscript-submission.md"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_REFS_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when References render as a Markdown bullet list" >&2
-  exit 1
-fi
+sync_submission_fixture_hashes "$BAD_SUBMISSION_REFS_PROJ" 1
+# CASE_ID: l2.p20.reject.reference-bullets
+expect_reject l2.p20.reject.reference-bullets "$BAD_SUBMISSION_REFS_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_REFS_PROJ"
 
 BAD_SUBMISSION_LATEST_PROJ="$TMP/bad-submission-latest-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_LATEST_PROJ"
 printf '2026-04-30T153501Z-v001\n' > "$BAD_SUBMISSION_LATEST_PROJ/submission/LATEST.txt"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_LATEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when submission/LATEST.txt does not match submission_version_id" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.latest-pointer
+expect_reject l2.p20.reject.latest-pointer "$BAD_SUBMISSION_LATEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_LATEST_PROJ"
 
 BAD_SUBMISSION_VERSION_PROJ="$TMP/bad-submission-version-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_VERSION_PROJ"
@@ -9231,10 +11199,9 @@ manifest = json.loads(path.read_text())
 versioned_md = path.parents[1] / manifest["versioned_outputs"]["submission_md"]
 versioned_md.unlink()
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_VERSION_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when versioned submission manuscript is missing" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.versioned-copy-missing
+expect_reject l2.p20.reject.versioned-copy-missing "$BAD_SUBMISSION_VERSION_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_VERSION_PROJ"
 
 BAD_SUBMISSION_DOCX_PROJ="$TMP/bad-submission-docx-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_DOCX_PROJ"
@@ -9258,10 +11225,9 @@ for item in manifest["package_inventory"]["files"]:
         item["sha256"] = bad_hash
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_DOCX_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when submission DOCX is invalid" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.docx-authenticity
+expect_reject l2.p20.reject.docx-authenticity "$BAD_SUBMISSION_DOCX_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_DOCX_PROJ"
 
 BAD_SUBMISSION_COMMAND_PROJ="$TMP/bad-submission-command-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_COMMAND_PROJ"
@@ -9274,10 +11240,9 @@ hygiene = json.loads(path.read_text())
 hygiene["format_generation"]["pdf"]["command"] = "pandoc final/manuscript-final.md -o submission/manuscript-submission.pdf"
 path.write_text(json.dumps(hygiene, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_COMMAND_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when format_generation command does not use submission/manuscript-submission.md" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.format-source-command
+expect_reject l2.p20.reject.format-source-command "$BAD_SUBMISSION_COMMAND_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_COMMAND_PROJ"
 
 BAD_SUBMISSION_NONPANDOC_PROJ="$TMP/bad-submission-nonpandoc-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_NONPANDOC_PROJ"
@@ -9290,10 +11255,9 @@ hygiene = json.loads(path.read_text())
 hygiene["format_generation"]["docx"]["command"] = "python render.py submission/manuscript-submission.md submission/manuscript-submission.docx"
 path.write_text(json.dumps(hygiene, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_NONPANDOC_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when format_generation command does not invoke Pandoc" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.nonpandoc-command
+expect_reject l2.p20.reject.nonpandoc-command "$BAD_SUBMISSION_NONPANDOC_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_NONPANDOC_PROJ"
 
 BAD_SUBMISSION_INVENTORY_HASH_PROJ="$TMP/bad-submission-inventory-hash-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_INVENTORY_HASH_PROJ"
@@ -9309,70 +11273,884 @@ for item in manifest["package_inventory"]["files"]:
         break
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 PY
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_INVENTORY_HASH_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when package inventory records a stale hash" >&2
-  exit 1
-fi
+# CASE_ID: l2.p20.reject.inventory-hash
+expect_reject l2.p20.reject.inventory-hash "$BAD_SUBMISSION_INVENTORY_HASH_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_INVENTORY_HASH_PROJ"
 
 BAD_SUBMISSION_MANIFEST_PROJ="$TMP/bad-submission-manifest-project"
 cp -R "$SUBMISSION_PROJ" "$BAD_SUBMISSION_MANIFEST_PROJ"
 printf '{}\n' > "$BAD_SUBMISSION_MANIFEST_PROJ/submission/submission-package-manifest.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_MANIFEST_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 19 verify should fail when submission package manifest is empty" >&2
-  exit 1
+# CASE_ID: l2.p20.reject.package-manifest-schema
+expect_reject l2.p20.reject.package-manifest-schema "$BAD_SUBMISSION_MANIFEST_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 20 "$BAD_SUBMISSION_MANIFEST_PROJ"
+
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "20" ]]; then
+  harness_validate_results --phase-through 20 >/dev/null
+  progress "phases 0 to 20 authoritative harness assertions passed"
+  exit 0
 fi
 
-printf '{"safety_status":"PASS","files_scanned":1,"no_data_declared":false,"high_risk_unresolved":0}\n' > "$PROJ/safety/safety-status.json"
-if bash "$SCRIPT_DIR/auto-research-state.sh" hash-check "$PROJ" >/dev/null 2>&1; then
-  echo "FAIL: hash-check should detect changed completed artifact" >&2
-  exit 1
-fi
+# P10_REVIEWED_POST_STOP20_START
 
-STALE="$(bash "$SCRIPT_DIR/auto-research-state.sh" next "$PROJ")"
-case "$STALE" in
-  *"NEXT_PHASE=0"* ) ;;
-  *) echo "FAIL: expected stale NEXT_PHASE=0 after safety artifact mutation, got $STALE" >&2; exit 1 ;;
-esac
+HASH_STALE_PROJ="$TMP/hash-stale-project"
+# POST_STOP20_CALL_BEGIN p10.hash.init
+bash "$SCRIPT_DIR/auto-research-state.sh" init "$HASH_STALE_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.hash.init
+# POST_STOP20_CALL_BEGIN p10.hash.set-mode
+bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$HASH_STALE_PROJ" autonomous "fixture" >/dev/null
+# POST_STOP20_CALL_END p10.hash.set-mode
+mkdir -p "$HASH_STALE_PROJ/safety"
+printf '{"safety_status":"PASS","files_scanned":0,"no_data_declared":true,"high_risk_unresolved":0,"status_by_file":{}}\n' > "$HASH_STALE_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN p10.hash.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$HASH_STALE_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.hash.setup
+# POST_STOP20_CALL_BEGIN p10.hash.complete
+bash "$SCRIPT_DIR/auto-research-state.sh" complete "$HASH_STALE_PROJ" 0 >/dev/null
+# POST_STOP20_CALL_END p10.hash.complete
+printf '{"safety_status":"PASS","files_scanned":1,"no_data_declared":false,"high_risk_unresolved":0}\n' > "$HASH_STALE_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN p10.hash.reject-stale
+# CASE_ID: l2.p0.state.reject.hash-check-stale-safety
+expect_reject l2.p0.state.reject.hash-check-stale-safety "$HASH_STALE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" hash-check "$HASH_STALE_PROJ"
+# POST_STOP20_CALL_END p10.hash.reject-stale
+# POST_STOP20_CALL_BEGIN p10.hash.accept-next
+# CASE_ID: l2.p0.state.accept.next-stale-safety
+expect_pass l2.p0.state.accept.next-stale-safety "$HASH_STALE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" next "$HASH_STALE_PROJ"
+# POST_STOP20_CALL_END p10.hash.accept-next
 
 INIT_PROJ="$TMP/init-project"
-mkdir -p "$INIT_PROJ/.claude"
+mkdir -p "$INIT_PROJ/.claude" "$INIT_PROJ/data/raw"
+printf 'id\n1\n' > "$INIT_PROJ/data/raw/a.csv"
+printf 'id\n2\n' > "$INIT_PROJ/data/raw/b.csv"
 printf '{"data/raw/a.csv":"CLEARED","data/raw/b.csv":"LOCAL_MODE: sensitive microdata"}\n' > "$INIT_PROJ/.claude/safety-status.json"
-IMPORT_OUT="$(bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$INIT_PROJ")"
-case "$IMPORT_OUT" in
-  *"SAFETY_STATUS=PASS_LOCAL_MODE"* ) ;;
-  *) echo "FAIL: expected PASS_LOCAL_MODE import, got $IMPORT_OUT" >&2; exit 1 ;;
-esac
+assert_import_fixture_source "$INIT_PROJ" '{"data/raw/a.csv":"CLEARED","data/raw/b.csv":"LOCAL_MODE: sensitive microdata"}' data/raw/a.csv data/raw/b.csv
+# POST_STOP20_CALL_BEGIN p10.import-local.accept-import
+# CASE_ID: l2.p0.state.accept.import-local-mode
+expect_pass l2.p0.state.accept.import-local-mode "$INIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$INIT_PROJ"
+# POST_STOP20_CALL_END p10.import-local.accept-import
 # 2026-05-25: Phase 0 verify requires CLAUDE.md marker block (workflow contract).
+# POST_STOP20_CALL_BEGIN p10.import-local.setup
 bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$INIT_PROJ" >/dev/null
-bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$INIT_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.import-local.setup
+# POST_STOP20_CALL_BEGIN p10.import-local.accept-verify
+# CASE_ID: l2.p0.accept.imported-local-mode
+expect_pass l2.p0.accept.imported-local-mode "$INIT_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$INIT_PROJ"
+# POST_STOP20_CALL_END p10.import-local.accept-verify
 
 BLOCKED_PROJ="$TMP/blocked-init-project"
-mkdir -p "$BLOCKED_PROJ/.claude"
+mkdir -p "$BLOCKED_PROJ/.claude" "$BLOCKED_PROJ/data/raw"
+printf 'id\n1\n' > "$BLOCKED_PROJ/data/raw/a.csv"
+printf 'id\n2\n' > "$BLOCKED_PROJ/data/raw/b.csv"
 printf '{"data/raw/a.csv":"CLEARED","data/raw/b.csv":"NEEDS_REVIEW: possible PII"}\n' > "$BLOCKED_PROJ/.claude/safety-status.json"
-if bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$BLOCKED_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: import-init should block unresolved NEEDS_REVIEW entries" >&2
-  exit 1
-fi
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$BLOCKED_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 0 verify should fail on imported unresolved safety entries" >&2
-  exit 1
-fi
+assert_import_fixture_source "$BLOCKED_PROJ" '{"data/raw/a.csv":"CLEARED","data/raw/b.csv":"NEEDS_REVIEW: possible PII"}' data/raw/a.csv data/raw/b.csv
+# POST_STOP20_CALL_BEGIN p10.import-blocked.reject-import
+# CASE_ID: l2.p0.state.reject.import-needs-review
+expect_reject l2.p0.state.reject.import-needs-review "$BLOCKED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$BLOCKED_PROJ"
+# POST_STOP20_CALL_END p10.import-blocked.reject-import
+# POST_STOP20_CALL_BEGIN p10.import-blocked.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$BLOCKED_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.import-blocked.setup
+# POST_STOP20_CALL_BEGIN p10.import-blocked.reject-verify
+# CASE_ID: l2.p0.reject.imported-unresolved
+expect_reject l2.p0.reject.imported-unresolved "$BLOCKED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$BLOCKED_PROJ"
+# POST_STOP20_CALL_END p10.import-blocked.reject-verify
 
 BARE_OVERRIDE_PROJ="$TMP/bare-override-project"
-mkdir -p "$BARE_OVERRIDE_PROJ/.claude"
+mkdir -p "$BARE_OVERRIDE_PROJ/.claude" "$BARE_OVERRIDE_PROJ/data/raw"
+printf 'id\n1\n' > "$BARE_OVERRIDE_PROJ/data/raw/a.csv"
 printf '{"data/raw/a.csv":"OVERRIDE"}\n' > "$BARE_OVERRIDE_PROJ/.claude/safety-status.json"
-if bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$BARE_OVERRIDE_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: import-init should block bare OVERRIDE without rationale" >&2
-  exit 1
-fi
+assert_import_fixture_source "$BARE_OVERRIDE_PROJ" '{"data/raw/a.csv":"OVERRIDE"}' data/raw/a.csv
+# POST_STOP20_CALL_BEGIN p10.bare-override.reject-import
+# CASE_ID: l2.p0.state.reject.import-bare-override
+expect_reject l2.p0.state.reject.import-bare-override "$BARE_OVERRIDE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$BARE_OVERRIDE_PROJ"
+# POST_STOP20_CALL_END p10.bare-override.reject-import
+
+# F2 (audit 2026-07-07): import-init must SKIP leading-underscore meta keys
+# (_safety_level / _meta) when counting scanned files. Before the fix the meta
+# key inflated files_scanned and — lacking a recognized status token — forced a
+# spurious BLOCKED on every scholar-init project. Regression matrix:
+#   (a) meta + one CLEARED data file   -> PASS, files_scanned=1, Phase 0 PASS
+#   (b) meta only (no data)            -> PASS, files_scanned=0, no_data_declared
+#   (c) meta + a genuine NEEDS_REVIEW  -> still BLOCK (partition must NOT unblock)
+META_KEY_PROJ="$TMP/meta-key-project"
+mkdir -p "$META_KEY_PROJ/.claude" "$META_KEY_PROJ/data/raw"
+printf 'id\n1\n' > "$META_KEY_PROJ/data/raw/x.csv"
+printf '{"_safety_level":"standard","data/raw/x.csv":"CLEARED: public demo"}\n' > "$META_KEY_PROJ/.claude/safety-status.json"
+assert_import_fixture_source "$META_KEY_PROJ" '{"_safety_level":"standard","data/raw/x.csv":"CLEARED: public demo"}' data/raw/x.csv
+# POST_STOP20_CALL_BEGIN p10.meta-cleared.accept-import
+# CASE_ID: l2.p0.state.accept.import-meta-cleared
+expect_pass l2.p0.state.accept.import-meta-cleared "$META_KEY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$META_KEY_PROJ"
+# POST_STOP20_CALL_END p10.meta-cleared.accept-import
+# POST_STOP20_CALL_BEGIN p10.meta-cleared.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$META_KEY_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.meta-cleared.setup
+# POST_STOP20_CALL_BEGIN p10.meta-cleared.accept-verify
+# CASE_ID: l2.p0.accept.import-meta-cleared
+expect_pass l2.p0.accept.import-meta-cleared "$META_KEY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$META_KEY_PROJ"
+# POST_STOP20_CALL_END p10.meta-cleared.accept-verify
+
+META_ONLY_PROJ="$TMP/meta-only-project"
+mkdir -p "$META_ONLY_PROJ/.claude"
+printf '{"_safety_level":"standard"}\n' > "$META_ONLY_PROJ/.claude/safety-status.json"
+assert_import_fixture_source "$META_ONLY_PROJ" '{"_safety_level":"standard"}'
+# POST_STOP20_CALL_BEGIN p10.meta-only.accept-import
+# CASE_ID: l2.p0.state.accept.import-meta-only
+expect_pass l2.p0.state.accept.import-meta-only "$META_ONLY_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$META_ONLY_PROJ"
+# POST_STOP20_CALL_END p10.meta-only.accept-import
+
+META_BLOCKED_PROJ="$TMP/meta-blocked-project"
+mkdir -p "$META_BLOCKED_PROJ/.claude" "$META_BLOCKED_PROJ/data/raw"
+printf 'id\n1\n' > "$META_BLOCKED_PROJ/data/raw/x.csv"
+printf '{"_safety_level":"standard","data/raw/x.csv":"NEEDS_REVIEW: possible PII"}\n' > "$META_BLOCKED_PROJ/.claude/safety-status.json"
+assert_import_fixture_source "$META_BLOCKED_PROJ" '{"_safety_level":"standard","data/raw/x.csv":"NEEDS_REVIEW: possible PII"}' data/raw/x.csv
+# POST_STOP20_CALL_BEGIN p10.meta-blocked.reject-import
+# CASE_ID: l2.p0.state.reject.import-meta-needs-review
+expect_reject l2.p0.state.reject.import-meta-needs-review "$META_BLOCKED_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" import-init "$META_BLOCKED_PROJ"
+# POST_STOP20_CALL_END p10.meta-blocked.reject-import
 
 ZERO_SCAN_PROJ="$TMP/zero-scan-project"
 mkdir -p "$ZERO_SCAN_PROJ/safety"
 printf '{"safety_status":"PASS","files_scanned":0,"high_risk_unresolved":0,"status_by_file":{}}\n' > "$ZERO_SCAN_PROJ/safety/safety-status.json"
-if bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$ZERO_SCAN_PROJ" >/dev/null 2>&1; then
-  echo "FAIL: Phase 0 verify should fail on zero scanned files without no_data_declared" >&2
-  exit 1
+# POST_STOP20_CALL_BEGIN p10.zero-scan.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$ZERO_SCAN_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.zero-scan.setup
+# POST_STOP20_CALL_BEGIN p10.zero-scan.reject-verify
+# CASE_ID: l2.p0.reject.zero-scan-undeclared
+expect_reject l2.p0.reject.zero-scan-undeclared "$ZERO_SCAN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$ZERO_SCAN_PROJ"
+# POST_STOP20_CALL_END p10.zero-scan.reject-verify
+
+# F5 (audit 2026-07-07): Phase 0 verify enumerates data-like files (by filename)
+# under data/raw/** and qualitative dirs, and RED-fails a hand-authored no-data
+# or partial safety artifact when input data is present on disk (B0.5 hole).
+#   (a) no-data artifact + data/raw/*.csv on disk -> Phase 0 FAILS
+#   (b) genuinely data-free                        -> Phase 0 PASSES
+#   (c) artifact omits an on-disk data file        -> Phase 0 FAILS
+UNSCANNED_DATA_PROJ="$TMP/unscanned-data-project"
+mkdir -p "$UNSCANNED_DATA_PROJ/safety" "$UNSCANNED_DATA_PROJ/data/raw"
+printf 'id,v\n1,2\n' > "$UNSCANNED_DATA_PROJ/data/raw/secret.csv"
+printf '{"safety_status":"PASS","files_scanned":0,"no_data_declared":true,"high_risk_unresolved":0,"status_by_file":{}}\n' > "$UNSCANNED_DATA_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN p10.unscanned.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$UNSCANNED_DATA_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.unscanned.setup
+# POST_STOP20_CALL_BEGIN p10.unscanned.reject-verify
+# CASE_ID: l2.p0.reject.unscanned-data
+expect_reject l2.p0.reject.unscanned-data "$UNSCANNED_DATA_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$UNSCANNED_DATA_PROJ"
+# POST_STOP20_CALL_END p10.unscanned.reject-verify
+
+DATA_FREE_PROJ="$TMP/data-free-project"
+mkdir -p "$DATA_FREE_PROJ/safety"
+printf '{"safety_status":"PASS","files_scanned":0,"no_data_declared":true,"high_risk_unresolved":0,"status_by_file":{}}\n' > "$DATA_FREE_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN p10.data-free.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$DATA_FREE_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.data-free.setup
+# POST_STOP20_CALL_BEGIN p10.data-free.accept-verify
+# CASE_ID: l2.p0.accept.data-free
+expect_pass l2.p0.accept.data-free "$DATA_FREE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$DATA_FREE_PROJ"
+# POST_STOP20_CALL_END p10.data-free.accept-verify
+
+PARTIAL_SCAN_PROJ="$TMP/partial-scan-project"
+mkdir -p "$PARTIAL_SCAN_PROJ/safety" "$PARTIAL_SCAN_PROJ/data/raw"
+printf 'id,v\n1,2\n' > "$PARTIAL_SCAN_PROJ/data/raw/on-disk.csv"
+printf '{"safety_status":"PASS","files_scanned":1,"no_data_declared":false,"high_risk_unresolved":0,"status_by_file":{"data/raw/listed-only.csv":{"source_status":"CLEARED","category":"cleared"}}}\n' > "$PARTIAL_SCAN_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN p10.partial-scan.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$PARTIAL_SCAN_PROJ" >/dev/null
+# POST_STOP20_CALL_END p10.partial-scan.setup
+# POST_STOP20_CALL_BEGIN p10.partial-scan.reject-verify
+# CASE_ID: l2.p0.reject.partial-scan
+expect_reject l2.p0.reject.partial-scan "$PARTIAL_SCAN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$PARTIAL_SCAN_PROJ"
+# POST_STOP20_CALL_END p10.partial-scan.reject-verify
+
+harness_validate_results --checkpoint state-tail
+progress "state-tail authoritative harness assertions passed"
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "state-tail" ]]; then
+  exit 0
 fi
+
+# L4_COMPLETION_TAIL_START
+
+# F05/F06 (audit 2026-08-25): completion runs the verifier internally and
+# derives required outputs from the contract. A prior disk stamp is neither
+# required nor authoritative.
+F9_PROJ="$TMP/f9-stamp-project"
+# POST_STOP20_CALL_BEGIN l4.f9.init
+bash "$SCRIPT_DIR/auto-research-state.sh" init "$F9_PROJ" >/dev/null
+# POST_STOP20_CALL_END l4.f9.init
+# POST_STOP20_CALL_BEGIN l4.f9.set-mode
+bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$F9_PROJ" autonomous "fixture" >/dev/null
+# POST_STOP20_CALL_END l4.f9.set-mode
+mkdir -p "$F9_PROJ/safety"
+printf '{"safety_status":"PASS","files_scanned":0,"no_data_declared":true,"high_risk_unresolved":0,"status_by_file":{}}\n' > "$F9_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN l4.f9.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$F9_PROJ" >/dev/null
+# POST_STOP20_CALL_END l4.f9.setup
+# POST_STOP20_CALL_BEGIN l4.f9.accept-complete
+# CASE_ID: l4.f9.accept.complete-without-prior-stamp
+expect_pass l4.f9.accept.complete-without-prior-stamp "$F9_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$F9_PROJ" 0
+# POST_STOP20_CALL_END l4.f9.accept-complete
+
+F9_STALE_PROJ="$TMP/f9-stale-project"
+# POST_STOP20_CALL_BEGIN l4.f9-stale.init
+bash "$SCRIPT_DIR/auto-research-state.sh" init "$F9_STALE_PROJ" >/dev/null
+# POST_STOP20_CALL_END l4.f9-stale.init
+# POST_STOP20_CALL_BEGIN l4.f9-stale.set-mode
+bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$F9_STALE_PROJ" autonomous "fixture" >/dev/null
+# POST_STOP20_CALL_END l4.f9-stale.set-mode
+mkdir -p "$F9_STALE_PROJ/safety"
+printf '{"safety_status":"PASS","files_scanned":0,"no_data_declared":true,"high_risk_unresolved":0,"status_by_file":{}}\n' > "$F9_STALE_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN l4.f9-stale.setup
+bash "$SCRIPT_DIR/setup-project-claudemd.sh" "$F9_STALE_PROJ" >/dev/null
+# POST_STOP20_CALL_END l4.f9-stale.setup
+# POST_STOP20_CALL_BEGIN l4.f9-stale.verify
+bash "$SCRIPT_DIR/auto-research-verify.sh" 0 "$F9_STALE_PROJ" >/dev/null
+# POST_STOP20_CALL_END l4.f9-stale.verify
+printf '{"safety_status":"PASS"}\n' > "$F9_STALE_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_BEGIN l4.f9-stale.reject-complete
+# CASE_ID: l4.f9.reject.stale-stamp-completion
+expect_reject l4.f9.reject.stale-stamp-completion "$F9_STALE_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$F9_STALE_PROJ" 0 "$F9_STALE_PROJ/safety/safety-status.json"
+# POST_STOP20_CALL_END l4.f9-stale.reject-complete
+
+CHAIN_PROJ="$TMP/completion-chain-project"
+# POST_STOP20_CALL_BEGIN l4.chain.artifact-setup
+python3 - "$CHAIN_PROJ" "$PHASE13_WRONG_HALF_EVEN_PROJ" "$REPLICATION_PROJ" "$FINAL_PROJ" "$SUBMISSION_PROJ" "$TMP" "$SCRIPT_DIR/templates/claudemd-auto-rules.md" >/dev/null <<'PY'
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
+import sys
+import zlib
+
+project, phase13, replication, final, submission, fixture_root, workflow_template = map(Path, sys.argv[1:])
+project.mkdir(parents=True, exist_ok=False)
+
+if workflow_template.is_symlink() or not workflow_template.is_file():
+    raise SystemExit(f"canonical workflow template missing/unsafe: {workflow_template}")
+workflow_template = workflow_template.resolve(strict=True)
+loaded_skill_root = workflow_template.parents[2]
+if workflow_template != loaded_skill_root / "scripts/templates/claudemd-auto-rules.md":
+    raise SystemExit(f"canonical workflow template is outside loaded skill: {workflow_template}")
+required_executables = {
+    "setup": loaded_skill_root / "scripts/setup-project-claudemd.sh",
+    "verifier": loaded_skill_root / "scripts/auto-research-verify.sh",
+}
+for label, executable in required_executables.items():
+    if executable.is_symlink() or not executable.is_file():
+        raise SystemExit(f"canonical workflow {label} executable missing/unsafe: {executable}")
+token = "__AUTO_RESEARCH_SKILL_DIR__"
+template_source = workflow_template.read_text(encoding="utf-8")
+if template_source.count(token) != 5:
+    raise SystemExit(f"canonical workflow token cardinality mismatch: {template_source.count(token)}")
+workflow_rules = template_source.replace(token, str(loaded_skill_root))
+workflow_contract = (
+    "<!-- scholar-auto-research:BEGIN auto-rules v1 -->\n"
+    + workflow_rules.rstrip() + "\n"
+    + "<!-- scholar-auto-research:END auto-rules -->\n"
+)
+for label, executable in required_executables.items():
+    if f'bash "{executable}"' not in workflow_contract:
+        raise SystemExit(f"canonical workflow {label} command is not bound to loaded skill: {executable}")
+for filename in ("CLAUDE.md", "AGENTS.md"):
+    destination = project / filename
+    destination.write_text(workflow_contract, encoding="utf-8")
+    if destination.read_text(encoding="utf-8") != workflow_contract:
+        raise SystemExit(f"canonical workflow contract write mismatch: {destination}")
+
+sources = {
+    "idea": phase13 / "idea",
+    "literature": phase13 / "literature",
+    "design": phase13 / "design",
+    "data": phase13 / "data",
+    "analysis": phase13 / "analysis",
+    "tables": phase13 / "tables",
+    "figures": phase13 / "figures",
+    "evidence": phase13 / "evidence",
+    "review": phase13 / "review",
+    "manuscript": phase13 / "manuscript",
+    "verify": phase13 / "verify",
+    "results-locked": phase13 / "results-locked",
+    "citation": replication / "citation",
+    "ethics": replication / "ethics",
+    "replication-package": replication / "replication-package",
+    "quality": fixture_root / "quality-computational-five-role-project" / "quality",
+    "final": final / "final",
+    "submission": submission / "submission",
+}
+for relative, source in sources.items():
+    destination = project / relative
+    if source.is_symlink() or not source.exists():
+        raise SystemExit(f"canonical materialization source missing/unsafe: {source}")
+    if source.is_dir():
+        shutil.copytree(source, destination)
+    elif source.is_file():
+        shutil.copy2(source, destination)
+    else:
+        raise SystemExit(f"canonical materialization source is special: {source}")
+
+for relative in (
+    "review/agents",
+    "quality/agents",
+    "submission/semantic-body-prose-read-red-evidence.md",
+):
+    target = project / relative
+    if target.is_dir():
+        shutil.rmtree(target)
+    elif target.exists():
+        target.unlink()
+
+overlays = {
+    "manuscript/journal-spec.json": replication / "manuscript/journal-spec.json",
+    "design/model-specs.json": fixture_root / "bad-preexec-engine-project/design/model-specs.json",
+    "design/identification-strategy.json": fixture_root / "bad-preexec-engine-project/design/identification-strategy.json",
+    "data/variable-dictionary.csv": fixture_root / "bad-preexec-engine-project/data/variable-dictionary.csv",
+    "data/measurement-plan.md": fixture_root / "bad-preexec-engine-project/data/measurement-plan.md",
+    "idea/research-question.md": fixture_root / "fallback-rq-project/idea/research-question.md",
+    "idea/rq-evaluation-panel.json": fixture_root / "fallback-rq-project/idea/rq-evaluation-panel.json",
+    "idea/rq-selection-rationale.md": fixture_root / "fallback-rq-project/idea/rq-selection-rationale.md",
+    "idea/candidate-rqs.json": fixture_root / "fallback-rq-project/idea/candidate-rqs.json",
+    "verify/manuscript-verification.md": replication / "verify/manuscript-verification.md",
+}
+for relative, source in overlays.items():
+    if source.is_symlink() or not source.is_file():
+        raise SystemExit(f"canonical overlay source missing/unsafe: {source}")
+    target = project / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+blob = r'''c-ri}*>>W}mNxn>b^Y&Cl7L;CGe%t)12Sw!P+%b;-2t)zHKc198>I8{=bI5~LPEG(+5ICu*2tA<gPMq#%{Tl1??0CNWt2Sap8hlc$3GsU<^CV>a=&}He>(g>!PB?>fBe7yaew@_8C{RJt9bZyzu=E+y?b1l!{=2TJ$rgLTE+h3DxU8qyWW3Y@2>FOtKG`!hTh%ipH0^-4F0lO^d48Hos4$Jf8+af|8!|YPpfNjP3juk7koFlb%wfc{_C)g?bLIIiEC_j^o)l)aox@{hnl<Kkw3)q@C?uBJgm*rcD2KOZl3acXYVk3bai~s!MhmIi}=p<*j^j+jqA+tJR8ropZ#mS<u1HvbkoCi_S5KwYwNuo_&0Xq-St|_#q8V2+`jmD?$Yc&dDp#ox!6YdJMv;La$B=>gmvQQ#9Q=U*8AzkH*CDyR$C{%E&UnYj9=Wno%&`cTDRE7!?Tx;|2#5r{bHuC<N33)H^J(LzH28-r?VIPx5rxXv*%1{-|79L+bcRJd_SH=t`XsW-RDJXy!B1273<H=W4<&aykGRZr28%Kt~ax9Sl4uE4pZ;$N-Nea*U<8uXurIf;f&WCoP)7+?AGYU|F(2a(a1bR9-SpV^UW>o8QxLfuJ_?a(13Hq-k#`OXn*A1$>(J>WQVxdBd&d1?euS}7M(Ml{dD6R-NPC*uv}ohyY^09-zx4NuoqZcH^CZpI=eUbWiQvYXesAucY~GD!CuXxHN8vlZR6jJb?>g&dz_*7=q-G_Khe}I@tyfoPUpqB>KE=a#j|fT`Tcm?S({yLNoT#_59?Mha_PF3hiis=aX!P0W((S->-dWwUsw~~VR;iBS1s(R<grIj^3aIgjq>*t{IxdiU|~ezI#HgJ-D92(cFH~J`xe`&*W*vb($OaWPS2O0^}6);BIC!E6Q$rSk_#c|c)Ku$Pej)%hxn?(lPUHG=V$Nl?d}2J4QO8$t=>1{XWq2eF=)XV?r_!*o*4xhT_?DnuK7lLK8oFzo6dGT;5#p7i5rZ!Jn$kGTxmQW>D==0^R&Z*;f}>TWQH9ulLu}*i<#x^y#AHuTI&-}!_*DtZ8yErC+46cbBZ+@#Jf00$PE0fEkP&#P1GcRzz3ZdT=$H1zO17ztu<J-SQCxDtXs1Ol6TmjN63;#&=swBi|5g2_+8U=O?*Dz$am@G&&zn~6#3@-;2Om5B%{C&akig(2EMQI7s)@@8AD!2+Wj5za|b-j|5`4ta1WC6I5YeXpFev^Z|6DQ3*^@Z*K6Kle8gHbl3OEFe*tge{v^vHI`e3qD15!=5%DiRGax5A;L{^ybxP;z9KR{F%61v;`O39;pWcJN=MM@EHu3JiiDu<><HO3pT8G_?Hzc3AjvuMdyjPx$^%_`HlPpm0m-8V1B|O-&H9BX=w)}mbpx>Y$M-?6I#$9~{S?Xc^poJ%rg@R6uMmZQRC7ta2g`mkT?i+$1_n;Lz&!EHwjn{vJ{+2XicO#<Xl{3^<EqW)&Fte+JkG`#pQwSaScyHn!rX71R$!WF`*FpamG*s$F=;0Y;uO2N7Z;P{kx|j418YG=HRKE+|0vV0>_hZnqEziAv7Rq@G`S0fIHRs}8ZP2cu=b8=&W`W*4q@)|Y1<B)))QRAsOebx;#g=GVllN?cKZhFWb@1pTaDnoEb6oo`eBT3406%2Uysgv2Uhv4nQs@Svq0z4RJl8vQeS))xzR?IDxTM2LZiaXd$QvO8c6zS!NoOZ3W31!6o*^fI8#vC9|AlvLfmTSDk$l(!&q40==p3Mncy=F>JHQZzonwsROm3Yna2@ouGvAQ>A<O`oq+p)xJ*AG!`N?9*sQCP0D$i+A(XqJiO-~0N6gt6Muqw?%rmb!wsef}heLYIO{u*+A7_fL?ctI3;!RW}-b%*x{ZO<9BSbx)D!Fb2gb;5(tn3%JWnZwAn<|mdypO{|2gK@|qJ15Qv{O9ddx^r9O$Mww&7$tg!jCm%xD(Q5jd3}!i&NY@^owzeHT<hwHzuU|h854)4__xOUcF0mMaIL8ZeROhzE9fR>u$1BYX~O!w9kZq_=&TO62AcY8A#+-gS-^xi<Brsmqqb{#u^Vil>$cIPA8p+r)L9zEEQM}Np)YYAbH=f2MFF!$9Tt07-!Q`YZ@D!;a%;Su^g;PC>(KMPeifTT?r%NlLoX(bCiVIvb!)n7T%oV;AcG4#0DKg!q%4TUo?q)&za8EKdy-DVAHug%<|QAI(+ZCbwSQN6t)MlD+Xc33l7|w<LQm~iQ5XDTALO|R`bfwoS(AK;hdbbG;EHeqnL+Yb@GWFa1YGqEvQgC;CBNJVx?g=%cdQK#yxr3l#%${)RlJtb@WZM#&UJ}$f5pyAx&^)8f~FV7=>_`dLD*_{ox2K;$3v1q9qdDT+u{M%cf^`rSbzKg*$T`7EMyD?X1R?<m9>_<%wF>MUMK%LvJ8vUegi)}D7Z0w?>+c1w^gOSStoe!Z0{DOPBVmU(~K=r=waBa_5;~fgl*}33p$Qxkat616??mGk#5i-=driW@OkNgW?E97gSS%VxZrmeJigYr<0c$uL%7s+=DO$1lL`Lj#uRdBV*vMtUO!B^IX#kGanp61_g&44hg;T<Le`(3c!^1*{cMx|hWr<@@(S2FJhC)wxdwPVn8lO62YCQI9e~ea->@KrjPYa0y4VZGv1f%E$tGq2GeaUxESKaXsLjXcZrcs~Siv#7+}6e3f@Y$a<iDi->52EFm|FtBM?Bc>xHF8oF%BT>TFe+6y#R99+8iO5PoCqpC)OCU3%|#{c$ODH3gfvh^p}nIn`@q<@JAdG4hR2ukH9;cw2ukX4Dmf*%0<Y1=6GAk-Gp1cm;u$`{u(#tZTwEB{hjpZ8i#y@oq>O2kDURohn;~xEZ7_&zp+0a_Qi$$;o@Cg<sEd`_Z;@UeV})NTm&|2i+y)vd&kXD2W!PTN4f{ygR|{;uvIwLJTVz?#0c~-(kFOF?qCmsHTGbWde%6=nWfBPx@(Z0Vr|Ik9WUjY^vO6UX?M2dS-WKa#AEEU9r2h)Uf^#@4`GcR=)DuO{J_I{aJCxu8ghRa;ys`%UHs04?(icw7`1t72Y5HUOD|N<`l8Jy<ucBeY1pIG1*Ncfl(?WB&w}m+%|XXN7rJ;Z(f>FAJx6ZZ3$Q-u=YiqI(<3*bo2_*Rx)Sfipp&*+!Kb-A-b0@(aIM`vO8<t?xq2ppc0So6!<r3V%DjMV6wl~l4fdHGlJU;d${2<M4>rg(!o{Gm3?Ef=jNvX|-#O!_+y{}#E5d~p8CA76S?x3BOshJKaPbj;$d=p-?7k11?4}Gq&Km5jiajFqUiIhF4pa5Mdghs~hV436^u<SXB;>Orad*{6*NeOxJ1DR@e!jmUx}I$_J2ro}ZvM_6zz{e)UE<<>Z@U(F4R(b2_~Pz*Pr$c@9(~B)^#lGI(ElN`(Sbc8@*j%*`9AOKZ(%!ppL@j>A183T!0Wpv+#uFV{4H_%bZT>Jw0Z1aZ~ptg|KtCZp62`0{rdT^`?mkbU-ysS{(8;FOgf2hS=EmMdp<k!ho!K+qId~BD(wxy+ls7(?cWkUKE+23zBPR4_O4dZNpZA?oPZ5^+PcC=I0FXlq`&}DPZ+}^Fvw%Gzt!L4vlkzj1vs{o(LMQu$Y=ZPw!(&MbkLPAY@vmb+qwJ!I$;l4BKCi^x1Uzm1=e`RnxE)1$c=|8HjExJIUsl#y8a3Hu~^%h_R)ZBgUv(dDb8KRv~h-UTJ{0>gJiQx4|}ggG(Sxm@DFe_`EkY_+BfX6p5ykBinI3P$R)pM)Qw$-W6k~p_H`%ZmI1pTdPmY5@$TTIlppg$RcCa9bxYBud*Gn>gfjz<C;2FOO8Pu*xW1Bp=!Wlq;*9s+<9!60yopF&gSUmudUg#-Q}}mGJOv(!fPanU;*tD<u<gkwrefZ){4ArBwXp?em>Uv%OjFOCC(PuqEje(_Y{!6SCRPNTG3`JvA6Wpsm~I1DZY>Ws7;Mrl@K?ee4(zkmVfz7rje*&QvDe>*uA}Z(WepiV&1Gv74sKY7s#|d;#D6$bt&Zgy?Y703u-DcV{>^Ugr+ftN#a`+W`8a)n6Ua`e(BRRfxPd|=nQ!rNb=N)O-J{jDF7z<Y?s*+Um#MmVPd<zpaFHD@jNJacWOo3Qo87H9l>Y0wy^!nDSL7$K{s7p~m9hr-+>58chdczH4H)nxY<JlA-j>BfVB9F4z~=YNK?hg{pY=lEnhtlSC!CGO;`z~qea^rSlYR*PVjb+;Yc?lne)b3%5CGR;-I;%f>`L-8IX3z1G@QR!Uu~bTw;TE1;taar?`}YLIrjA>qY<1TI}|qAeoQuU<*aZ`=sTSJio5%I46te&CO8irGAt}HQq4ZxXMPLwvOcZy&{gV^|Au&{4@8@8bneW_m(!Z`Hz`Y_oon?1o`$eB)*9^0EeH1W`g0w>-vPgFacxML*8|S>tX`D+|1av(??~4|t{XP+o*mvAC5F6Rc+eM-kYBJx6R&Rf<2u4a9_(y)AHKrVAG41?O79$d%<=9M3w!6du#?un^RNYtag4nNZIh1-wn+;5Fk$Zm1K3g1jvK%(wXR^}4#6k$1ol;j>^jzmt(Sa)-uGlzb)IQIa*Rwq?p1x?NcLZ!(P-hvzICK-yamQsnWywNeoX85{3Cnc=vVkV^d64`*o@E_&<M`F&7BeKGU$o`wvpi`lfDm|ZrYhxuwyM3HYGc86SiL9ws<^9CMKxgx;nwO+D=S6W-)_K8GVM{DUPJC$j7Pr8ZXEfU^_`~_%3kA6J+l}u~UGVxbb-zK9j!PD2spGu;+QjZ;p3${72~E%XY_}e{(^@Tw+R{oAVZIHRxL5Q^CGYPo$g4*UE)oWZGutK!e@fX5_O7LfxY?Nomi+bV4!4fONqe@@Q)CpclVxLnyknHGaus50yAzazU14I0tkr*MF@SXLAdQ=<hx)uQPu|r@)(kS6<M5aVzZbeiXRQ^yrxkdo|UC56OazPN$FovzVEq7QUx(bBI0N0^6(;27T&6p8*GxKN@?>V3~oIuRo(7^(`=ku$3wHD)K|3t|sjByEpfl=!y1N<Xk{z;9l+L<<0D{y8ey!8u-Ek-Fksfz7$}@IcSufJaa_;EQ1AC_!+VRG|P=y$Yb*HkML&$><PJSk>7{3B@ZZu4vZS}PhpY5F3b6_ZgVJlG5ap$Xl|q3E=u|GyU{b@bJib`|8qOBc<9B0l*c3JvWTz+a0y|&bsJbCVkXmBIt6yO3A-CEzUNttaEXq4q+SrF!0-B}^k2EhvB=Z8g!8gJ#lF;HB%R|bUjIIN4z>}aGwqY#k+Ab1Va@=U!HZbBX#qEErEDGVyuJ_G-gF3C18+cH%nkY-VY-Pk)krS_V?b_SeMZkwd`apWGcvHh@0Ahqd)DAU{_l(iAF=1ZolJJgcO3H_?8}7Ytw(zXjKET&S;&RJ#lC}vV|&L8*edA;pZPmC##MdDZwL0L#ah4}E#}N{R*)5?ocMR?e;iZ1_&~WM(iZ2h#r()O@tnnh?{ZqB9JSBbac;{OdVjR5VmS}*BItXO#b1J}gzvN?zt)n84V~Zrb`*c2Z`JD-+ehI?hQ6iyvg>AkyNJm%KQhJLU<cIk3i-l-2MGHNwIWUtxChps9#{~~nRWF~)~7$cWtGox?%=U?ME75dcfh{vo1O_d4B8$ixAE!4OX|;`kw2OCbT8!#zSC;hXYstQ?q7Gr^WN}7e(+4+5fl8I=gNoQ`COy!&Ud0Gkz?cNkcsoZakl*ZXWQ`H&z*0>p8wD@=F)fCA{j;4w_^9!V#mBC?>nmIjZj?wUHj=RYuB}x*aMl<hWqxfE?|=H@a}uc0UB%XqDlK(Eygd;k>ctiMt?oVIryXt@*G&1-#YA;F{TCk<oUn4rtG@uv$*b!m<ah}S8<l7w9oeKy7y_l_IG)GVt-#=e;f0B;LP=RpZWPd<#J&s`Lli>$`5@1ea`t@jr-s^u$P42l`tIa)l=%_pW%I1t+9+N>bcL@ZhH>bg}f_y=W=W?!v`{^kmsOGH=op_QI_wxm2s+3LRkIQy3%f~QO5>0p9EL*Cvj@m-J6j{yyZzd{8)+SVL#V5w5QuGFl)4~#H^H9@m)9b2}Xz8mdr)Jbwq9qaGCV!{cxYL%AeOtzFbqj(0hIDN>0%`d~5H|4a#N2P|5G62v9K9nKj!nhZ&U9;--{uH-}9HoNof-25a)&wzx$(2?LGwL)aK|*kP^#J2!C+7kq~ON$q$-IU?4)&Ld<~y@yVY&bclx@@UpAI}pCy*X_5D)A-w%;=OdP{UADjZ`^?1?Z^z+z2;N{ji;2)f^&;lf8Byz(Pk;@xG`uvU6Wt4#rrrv%3Cz1u=R-cL(n96#hf1}j=dvaznABLTvu_4x`w8_z7M{8aqZ&n`(wg9*G}Y)$uq?MtWUg8^$pk`$_EQ(5l<;k6}GO!G&g1m>|a=u<CyZFfOp#973^bZxE9&L<hvyP;5+a_%B;2VS^dP$_0!hBkvTHBj}A@~xhlU78~zXsSme|+=JaJb3c?O*k-wVufa2}lvi>a5tC%d7c{ihA3R?FguTQaD8+J6Vj7c_8-rZFKxwiBAvtZI+gDz*0OE$R4H0S}yLW%>E58u^Uus%*K*yH`HHh8Ex7rb0YJ?H0h@BexE|0-U6n<vK6#Nh!?2knVTbWZW5X^UA5yfIIhGw<+#G80K&;O8`KF>|g@92fdxno!&v`~kl5x1KdkCnn`u4)pJc(|-a_ycz3wuP*3(Z(UH4fAo$q)d1>wOd`N~2qXXR8a(|YV_CJDnt18>lz*At8n!_>n70eA`Od6!yYD?qOgz$9It(EHjfpiN*|}xGaLWi^SQNXwI=PM)K~L?7-n?Mb#`|=<cuX~CI;Y<OgHhfF@B1<2jt;qftk*UuzSr!X=I1dmDZ31pXfD`>t`(-92^^SuJMejj^dEHRiQ*%|zfZAki)k#dBj6nD%Xl{d_7S?1;;V++Va71#*1EngTE=%TS>2|nx%HhBbe7D!`GN78T20Hl;wp4b<VVLIQ;smz^0|Z^fCq;m={?q`oM{_tnS*2IE$kD{?@FgQ2XHZX9XK)tZZz;F1~YgcSi*4i`Z>KTRw>Sj<h74?A5y#<a%t4&{Q>rT4jDZ)Ab&uclpj3Bdu~8Ov}brf5mBL-Im5d^H(QibJqLZe1~c7@=Oo{2e!8XHs!UES7ha^E*AMmOe#n+k<yRh?pB{2r%VP7-%RSZlzCsUq9P`x}(A6j6Mpqw<n_hh){#Sc1S=)7hp3uFU@Of?4a)>LmC!fXc^lJP8dQ#Be=XLPg@q?l!gk=4u%vHDemdBtkW4xVMbKp{8Ye5ddHiJy^h}VNP;Te)!Ef2f^J=^ju*j?5voPcgYd%9=MgbrudpY@CS%X6JQ)1`fZ`%rG&Ldn^sda+^MA0gtsjlB%qg{`ebEh(qm%U~&dL>;Od$n#xgZn^!hwvy)uTVK?nmGQYVzNnmu@^4-Ek#1u>e5F?A=s9oXOf>r`sg6+Sy;Y0&pdp_ntMSkCkHqzh9@VJ4kX^jG%XId6J}B1gy(|rRW(%rAP2O!kt34xtJ%9%nvuL5bL#^gh;BX~Icb31d;ty}Jjog+k@;pfntj%uXUuWy6(9TC?jfy8S-oDe7xVDtV=Xv*8ox9$ZwbRf+3%twfrXg3DYMX(TG8`FDKDN6U9kTWPQ;9v2yhxXNSDZsp<6=Z%mJ=nOIl0#J{iRw1@YB_)n%Ak=Ko{#L-}Jkww$n##;rCtpMjl%QvwkdBh@P+3a^<xJgrgg6Cl$jhGFRGChRnTOIvQ{=us!shh?zmQHRMlLeMmQ;RZ;Kost@S{d4xrt<#`Ta#a<D80Z2c+YOkEF^&@uUWtn}H{a!lSt1*R3zLvLajqmu}kLR&{zvp@4nOyKNY{tjcuJg?|^{4Ooym#3sA9-Fy_crDMRqC(u+MtC|e7B*tb!--xbf~Fy4>@hVOGYd83NOCs%aZjh=?_#{0C{~PyEv<Zzu2=ye4gc&J&JRZ{d0s(HM+T!BU#-)ckyPeQR8#+bNkWHDS53YYNp@)43!Q_UASM>>wT)dnr<wmp0T;UeACn$<watN@zymCkoSaR1;%^ESv*y0*5zldMXRVA6tRc=ysI_5@^{TOLHTF1qQ>RS=d9?YybiRXmitnU+@+oZwLBvGLB&3lo9o9><R@=@4}5Yz?4HLDZ>UD9f|(P_E6VP9#)DM5NPRxs+($G#sI`YGePlIbYVBrE2NqLmbyb<ydB|nqB|Ti`eRrRHM}Kbe`CD0!s%oDW{0Xx@BmFb~5tlmU>OFqX!d9>3mF_6s69M0EwUu+M<)fcKqp~(w%}WJ-X!}+B=rg&iMNN9)SNwZ<)B>w4MgI;?IdZMWehIMSXgx0Wc^P+iBlGl9t7D~m^`%YKeX8OiI*Yd2Z$W*&metQz>icp#7H2MM)0$<Ds7dR9&Z!?$ZohSEx!}9P2d2M6N436BEv?$G>~lDS;_g1ty-xTI*QXU3x3^^vKG<^iH`6M<FZx5h+lEv9#*}+uEEnUKRjfzZvk61Av)*|WGkIF&ec*;gtn-lddIKGe^FA^%CJK3j&#G8;4{VwByII9u?RG&JV|pl`qv!~u;0Mr$_mbzv-rtBGdmB~e(X*so*o#-K(MH()iC)_M*FD+qA*&Zud#tFwijUg8KGm0JJ=3svWM{mrv;5lI-RJ{7CC>GUh*uco``vEclxm&aj%SKq60M0fJxxq|%hRj&#2O`Tz*;PDJLG5f`n|2^40L8OZDP%+jv<kCQPGZ@xQp`sm7Y4-L-1cx^fL*(fEfeL4dxovOz{2&_oLdXdCCLwrEgB2NxA6wUNEPa7bMVC+YJT@`6fM!YWi79{U3NbNLa8*xplQ`vg@$s(nmpg&x@^+&ormJVd@ESn)H3@DG^Qjo5YRh`h@m|dLKCChnfX$Fm2=KK*XBUt0NCaCuWQiF9<a*e9F{sCv5TlT&2lOZW8~O{uQ|gvk=$gy{9Sb4|F&1wy?SJ_a=3*-&mVYaVYLgQy%jzr?{;(+_C;P5Gzk-A@7fl%p76={2jMK@+a@=HT-Iwzp#mdE!DQ|CjCKcVp9K#;cjBh(~09!4+*>r<(ROO8;gDyCl-Vv@5FT|b}-O6`O4z~&S;H&2=V-JIJvISqb7RCK{on=)*5qo2pdq}jUe;w<aMWnQHj@u-++2zuHq@-<CE`1qE}X_x2XnS^ux(*VO0m@y`kpyUTYOQ8vOD`9!C8=72CC!`zAKTcO$a{+4%^W|F4bIdGg&!POYhq`?{yE;z%2r-B^v=Ref`rPbQise-D?FuWlyljwPKd@l@)ecB96~d$P~sbx)(-fOCm;H=N{JZkylrLg;eY8*EXt8OnD~zwbMj_Jof;_Z_j%&z^Y_zbo<M*?S+B!skxC1%=-u>vz~pAN=~e(g)Q`B=?m*rotyHX$1SeGNao5UwE(YOSk3wm{~lA`p_2GrANJWA)|?ohoqCY*z?Dgj3retN#0Y=?z^w~iMDD?`vW~8*1N-!Izjwr{*QkwpZ#6EBgBpn0jQC(43A6du6Z-2?i%2#Y{d!^12?ABg%E%LuP3U~ql3`sL)DsBJd3UIi|F8qdoE*<f$+Ez9eZaFge<)56x2?<7oS1h8(;yi1lm2zhRnT)FIi?8t?NOt6apZktc!)(U4W`Xz?q7+Ro<1liBbg#z5ip@x#6s9YHoeP`h9ePbW2a+iMoy@S-0VrY6pW3-fvXt=H?oamUrGzyHqIFFc3#{01DREVx3J^vA1>i<I<utd>vAzsaxcGq9=q9_1u!Vr49spyFirQ&3NnWr_U>ATI-lIeD?DQ+I2SsUB&*jK%00D(0)@?;2nFVK7%NK>3E&`J7vEw)}KdT&XB+80@wXZW}VC)sKe!11T5{%nKf#t`j8zkBzF=WMX}-)P%<~l3e$7X1a)xC-qBG0?F@BrwAK_gD(R#B;u<Gdq}m~;J&K5~8~0VYH(B?hYYzCDqMC8EYltubjf+a5jDAY5OpSgnbQ3S1r=s^9RoBm_;l9*u{4eQo=>|n7noLq=-lG%0(-nT!jzE1Ed8v*TOMbH3Laqp_Lh!C4!<Z7;IQ!mT-Xc1)K!uf&UY)9%+XpQ_9jjet$1S|eU#wq^4rJGBP1n~nSa!YJbbYJo`pI?E^<l&HgJZ+>C)V_QYt(do+H^f{dVVb{IJ@3xygq5Ve$#Y)r{Vg9H9bEVG+aMQ8n179elTsiUT?adH=Td5Zo0nRbp51h|I@3cZezJuRp>v}L&5IO`H^J6!Z<|ti!<4u(MZ!CT_ue)-n2*kraijS8)>|eN1FENs@+KAjWl}IL?fq08gF{O)x@I%t&v6>pWnozgC-t5HS(y{#G|8QBaJpaKWO67QQAnOjXcuCqa&m7`bHjU;?YqPkEV@0nhqLh+<smzpeL!D_CjF2X1RU-y)U`_CAWW5xotm_Cwyg`41q}%{G!P4V-@2N2Gk!)`-3oG&2uiZsD#Hs-nYD0iEmCKlLhalcJ^<y=PuY&WRpFv?)2RAMA7o&8HU~GcFP&hrb-7n%DQ|4?i99;z|ED<u}>}gSmH70yDXB!uG9>h!d4>B9qf*X-nWMTXsXGfve({X3vApI*c3KsxH72A9Yy{cJMJIc#kO+&(y%*ZyTW#P$S^wX^{L$J?qMZ5{PTzW{2I^Xt;n75LJ>}<X%*Ri(iup5I=c@=cl|_Gzu`Wnw_V-vyel~Dl5rwCJ5pptu?_5ovyZ*UmFO(**QyOg6f>J@aC($om6d2mOLV-a?2reF9%R{0E7jg0dx`Lho7ow-x9S0X!WqaZG)CdYQrDQ!)PsAw8x#FX`@nu+)_E87OLon9w0Ty=P1lNT<nWigqNLOzs<)_iAIGQ2Vd`I>MeXt~6q%2s;)75#Luq2ecD+;W9lf%a+Xcy*L%cG(tukU-kL1yN0q02%Rui_X>`}9SrNKKDcV4I~ihA99rXysN97NTGXMk?^)vkusu2hc{u@P9cmc6^VWP4IZAx*!@y8Rwx1ju_@wUmmTdSw}T<iNjKm)8dUFQb~-eH(bH*~3VFE|C>bUe}o2U8`~`CWS1F;hv(|8E>u5Xr%O4)%_$z<fO=GEPV(E*`a?J<P#}~COqf@U#YySMc(PXfT3jcBf~A}*+hxrzEWn^x}`SBx963d$Wva|SY7ykE1ylj`0Ncn<9A<t_6DCBUwrl!pRK?6><vDfTz~P|8+_LJ;<GpStm;$y;<Ix;JFzc)_6DB~k}p1ci_h2>pS{6n{7av`#b^2#pS{Ir?iZiE#b?PEpS{6n?Jquii_gL@K6{<dYVocwK0D{L(dmoN-r%$Ijyzv{R_C)XefAcgX<vNy7N5<(`0Ncn<6rT!xA?5}#b<Bv+2)JS-r%#zm%s51K4Zrp&1dI1UCLfo>todXmP-Ch-esXSos_C<pS&!Gt5RQ4>D+vkOib#)z_+f&BiGs()NPN&^Ok3Mk!Ou)QrvE0vBc}s<Z+q+4&Di9`ZIoty_mZBxyCH;f{nqgk;cqCcKudmY>{u3=N}*3#g(j%HQj`#+nr0D8!d0gf>|(eXact%dZNqfEEMk;Y-!T?i7G!`V;H&4=){AKCcCeOx|q(MZd#l=vR*3{(V`CJe6qVo6Ic3I$B8vfXiA=IjM}0Tn&_H1>TqMO)0A_X;7;8psS_p-sKenlcB#9h$y&_Xv?k_A$F&CJP`fhOeX%`)7R8xV>s91LGnO)qQFlL4={v-lvDRQjljaRK2vaYZcW9ELn}%(#&!}^vL0viVKB?EoJEc_JyzVe(Zg@e6{TT*o4T@Tu^W)FI>>|P}-dM*m3fvY|)ndO4Mit1xDB(CqG5tK~MX*awJhgXjI@iQ=(lvF8J>vZmFIZ!(*lR1=F{)U`S-8g3;Hla*M$K&>Wz!Ic)X6br)S(^p#DhT_&jTGXof(4;?yu8CcP=`7j_^)b26bkpu8_RHIWlXYdDQ9I+O%=z9gn8UUpH5Tmt9Rj(?xagSYPd_YPS32i!M5)Y_H@dW_;|Ej$QN$y2)|?)5>?6s`_^2XSDB)G}qWAr>qCNs4HL33)`(6TXP-K>B9$EDY|K%CZ)>hsQZ>~sZ468?)Q|Vndebn?CA2Q9?9wlDW5SC73!Mk(sQAcNS%%$zf^he%<S=a7DmI_>)pXBxs=Vi<Sfoyjeo^@g#8j7z9^5^H>FHJpPH!Rh0eoU80U?(N`6{2bQ66Y&*XKTR7d%sbcMLkv0c{46;s4(v|)$#-QC<9&*rapLc^Yd#srOA!Zhdkd)55!1NLSsy3h;#M3vf&)4Hm;qOCVD!0z?6X7Zz{6Zq@6I_AIz&|Khi(Je@J)VS2C<(!99+5iHXhmm<Vw+F9Rj(<j8OuyvCkCzwvm%RA#@}gGn@g*;Qh`d;T$%`K^FWO)7;>XL2T7B1-y!a9FqE^HEB`<!2yr|Vgf60p<AusAR=3nyShsX=|B`<!wywJYn#gCU4{0m?F1bN|p$%`K^FIr#n;>XL2TECDldGSN!MffEzez?4-^*H*H7e7K?)O$vK$%`K$FKRuwzU0LZkr(Ngy!i3*f`8$QpCB*hU-II|%M0U6Ui<`k@s)q^6XeC_OJ4kVdC~cj7e8EH)O)~w$qQ9p$mv@D#^2TH4$*QK|KsV~^Iz-xf5gkj+I$Du7t-#E>4B1-BCR%IYv((szpA;bb{l(e6nnC#xeMLEcWB~Nc9yjn2#_=F>h;u9nm^!~N#4s-<hYi7A755Z=h5BUY5sXbzU*0z!hA5a=1C<#SLu7%I31^~M``ZcUg>px;jHpK%qNQU#YEp~pZzTVJ)igmJ~6k^$gIpKph+uu2extVdQa4o7&NKL$>~aO)azc>PqjzyE~mC+J&JFu@x%PRwEIOboAe?kFz!L8`YN8*<_C12NfwFRVl$ig*uazC!h7^gF&hIk+1m>K&nLYJ+RSCmbTfslu}#~>ItzJ76M3+P%KAn(yaU?#=85Usy&?x1bo5P3Ba`dhLPouSKBZi~@j*|UOKY#>zl$l>#`a|`r&zA0H(CCttzDi?A*L^8d@rwq?&bN^@y4lsD^tuQ$e&X^!-n|^lROW#K7l4%|3XZ*qaLo3X6Cv*oe#Qq_TVj?Q0KKKolx|!Y?kvm&F0gqLw01<X^cgW;cPmhn5IJ$f~qq<dN_*%O%KA^SLS#e)Ly+KGm`@*y?gZRCB2OAM$Z>`sk1g^zP*bxSsFgo$~@PwNTtVdUW?G6&&w%3LKY55Pv|R}n~_cPn&&v>x_7;F#&gf!Y)ULO*obL))%9)GEt)*Njl}e+n_@1@#uvPwuXmUNA3^pCOb2?7wB_}swX5=i>hd~N6O~B5J6z?t<BPl3c;WO?sms_G6Ai0VhKjz?dH-iwQ?W854Z3M7F+#(voZvBk_uAB=?5u}f(rw~A<a={_KJ5L^Jes|Q%RV5h*+*n``U_-r`UlJE^i#50|B$Q>m-x&V)5*>zj^}kkMepc$&SUy#V^7<%Z}~&5HpjB<-qg~^^S7|@S&#4rJE@o>aKZM;WpO?WXG)V3ubXMigB>N$Uz}OBRt$8$Bzy~*R^@eFsZFA3d!m2&hTdIFfXmK_U$>ie#7%U}CZvg4Mh`ZJPcpO0durcus_(pD<CYWbsE4~t(|23;p_svSJ)Y)Rd^Dh$JhRAw9xCjGJ2^41y1rg|4}3|ri%alzA+NG&eZ_h~Q=pqiX}4sPR4=T(Mx%Hp|CY;9N6TgW%zsVBXP6?}i@N;nC4$EnYpH*T2c5Gi)PEbFoK5cgiTH%yeFUG(e*r$3|H1fV{uz9te+Zw%wRaZ0Z?`htMEokI^?qOMGXI6x#r+6&F@6DdG5%oeVtfX>@aRL>rS{H(_ai@>a!b4^X4QRPOk?~)Ow;-hrb&JQrb+%_Op|;D)A+wXrb&JsrkPxS1k-GO0jAmf!I)<A8BEju{V~nv7h;<5BbcW13ouRR55_c|&tRH~{o7-j&acBXgX0G<&58YdKMkJw$6}hZwZ99~SiRpJ)70tcXJQ(fY4LtcV-0>jrm+TpE~YtK`+G3W;Pl&Lni?JbR7_)yK7eUz^GtpUrWquEE~YtK`+G3WiT(C|ni?JbTuhUG2-76L0MjIYFsAv8pT^?9Kc@M0ej1t|^Z`sW{RNn2`Uhj0>1QyF_WNU+=`X}I^N(N}{TE;w{SU@8`e!f=|Ly%WH9Gpan8x@Brs2Dvk7@Ys&&4$LwZ9M3c)vZSsnOBT#WcxBFwOcGV4C$GjA_=N!8EPkAJeRVA*R`U1k<#C0j6pH!I-A~8B8-7{`Q!r{R=To=OdV=)}!>NV4BI@pNnbgYkwc6iGF)bGx>EjOf(ns{g@`W`uUh9xcYN3&Dq-DgK0*`-yYM{=;)_nn&2a~sH0y{i#qy)Yf(p^sYOlLZ||q6(a}%EG^6ALm?mLA-%o>Q{;`<mZ0+yDG{N|H$24_1`nj0qBYv8I{Q^wG{$NbQK7(n}-yhSkUx;a@AHg)*FTga~AB<_V&tMw<+xuy1bo6sEjs6i#!+*Y?2G9I+F%AEWpC+(>drZTBp`V6-q}NQ~{sK(n{=t~W{S2ltet%5k{z6Q%{s^XN{Q^wW`hzh|>r<FU|LrkN>lb30_D3+y<mcBt;hBFfrkQ-E?kU**_Lye!>*}78$w%s*g76n$n(z<CG~s73P3QN=G~utqH0jj`FbzBYd`!cRe=epuTl;%3P0D_IKTVB}er|u7(|a+^>Si3U;9HAXQ8cjzt%)-|dDbRz126WhdCLu=9e0L1*Ye{@e|>VT&|t=><5^RUSywuX-Ig1VTCT-Gf4EowO5>>?G3?n}d}Kj)VjYm7_F-*CqJR178Z_8i7udjyvF}6nj@Ybvj~}BCiuZ+H@RO_K2s(>sDeFagSY@BzYN!91YEK6iTqQiX(jfZ|)L;3wHQT!J33Ng|(sA#bS$YfF@t`Zfzn$9{JGU!&2>c{)5@@Wzh`0`Gp#JP1=wlY*JqP*=c>ihCA3SBec?7RW-oN2T;5wyucl#r}Rjj2-@7cbH9{HV6;90!OeN{depQ*YX&x3BTL+X3J-b4SAZgFNsPyTu@c<>U=>$JVMyEyAE@zyh8NxAl7-Ss~G)Nk_$I_glLZtO3;2gxV!R`i_d1KjTf8fd?AE$PEU<PEz=mvC#fKkdh8!trS@MgPxRobl3WKQC`)hbleOS<fCJzn|PiRP4zD@*FZ%_V+i3(96)jgg;yKE}YJku>9j{*ZJm~`cr)mp;uZ9S~qZAwO@IzuX~ZJ7kbjF_J0<A=b>-x=)3O6MIO2E>{cPOm1n=}e#KfJ?%tsTe&~9B(_Y%~DRI-$Kbh$s-PAQ0t<jktJ<E?K{Xxey+;q}s3Adt<$Kx2f!SKwvF|k<6jH$t_al~UU;(b5zf?>c6SLeZ0XC{x{?D-mIG<DsJR*T-Fn8Dy2H$<}~ruKjlde%E~8q|CI7#vl;uh3=et_QyBmFMr|pLdz1@!MN#M84xA?~gjS*42^Sbzx(SpMWO`U*O&+=mMSO1NeRhTeK6bTW)Dj-!N%kkS;20D_m!ie4j-hz*i=4{l;>-(1XVf+a0s}LMJ$6pXqp?D4UtkQ|2#Zw#5f*?s8qD+T07VM>O-}*%LOQI@cjPr~ETr)&J1bH$9R&#8<l8B77!vh~(kB%Q6(_{z81V0zS-Wgs+TQw7R}Z-m7cCXOD!-g>7ndpFj`KuUt#=<S(Jqh)=Jpdh~<zv8TO+y$N~+4dR?`<E^%;(sos6y(K5#tB3Z$LC^`S7?_UM0BlkHT;PfVYtGZNSviL5oOJK|?#Cs5x%BM9m!mxUUH2>2dZWF^H}oUd^Skz{e_F>ZnFL{*S#ynB!-&H!@|;0uV$Iv!#NVbJbH`0!Uqmb(L2q7lV0&ym%WXlQv|(E$6UW}d8VR{G+d`M5t~K1c!JD<~OwtrEv!frE3o(Q0Nn-cHE{#dv&C|E@f-3j;G5*!!eT81@k2c`DjdK1Ok4#^zLAQUGXbJ0&4A!3}lRNFm`hyo0_vQG6<OBE~I68cGTihspQo!rd4gg&i{s~-1vYzDN`~9vnve63rg5~zb*1wr0ODXdYzF|Ll##Y!c0!tdojH2ClnEjCL6U{MN30c0TbNH{S%+EjbRXhM4**gl^)1nzbT=)n`k4QeAzte7zbW-Tf<emD)?*2tKkknzg-wkMDclp{JZ>o6zvo!Kv+d$D<Z^_E{>LTDG|AE%+EyNm<+UEjW6xcIjY5kpi*zdk$f7kuE$TJt7{g&-@@qVRmru!Zr>knPe2mMm?cV;Kl@G{QeeBKpkhiGCLHq8Fp75Xvi9+m=cboNd6SR3|}C+5k`9%^#vo4b&6>PE1;CMNkv`PQ{~<XRg8Hi^#SdCRlB$g@U<XU%r7M-s0;Kk@)}M}YSU+>;yNr`U^G-ws`47I?wN;1+a|nd_KRr!UQ6O7X0UFQbBWCDy^Yv?)e`bA-;ax0Aky`_2=xmw0SPEPyR!jyfzIha9#NGv)>}y&VsRJBFXU7<j<JyO=zl^s$ZrwpNM1b``&)F6R)^b9sMAe!G+fz0eK(kOzY{i^s6hn9dC7TgTNsbCmL6WVpeo;{{g+k72u6cF6l1>T{=gftxUEgZH0zuy?U{U71g&#4Kkd%k<S=tT|<gJTKVEkO`-UOec%If)yy=eQ!UjF`%aNuF>IiYU4CEkKOCdf76^ee|cE`C;jgq@%{4Y`LFx<et-B!yxi{|?w<~4!{Pws-MIU*)Vl=u9zC;ECdvUuE;;IB`{3ba7A^Z3ii-xhee)c_aOVRjWBpMGPbd>?0t6Yy-`hw6yYqo^d61>?UVHu*lpP7PJ(S|B_aWi4BxMy3pFP8V{T)lE48Xnp1VRaxWV9J_NTe9<NJIE?Kp4v*o7e-qM<=T8QS`jNvB_Y>!9_6*Cp>dN!w`V*->-IJKcMj22N)GP07ioQX}7Un3r-i`7X~%mw*&<`8FJ*1+XL|aFNEXsg=-JeSkr~lSSJnN-E#m)Tf4vOrmo{f{!MtuhZEk$k12t+Ou&`Sa;(>nyTT}ekb3YJvp@<O0oD%?x(60)=U|wBvi=qR^p@o_$Ksu&QqKpM+FKAlK)e___&^F(QS>_q80{VVOM%B18F1J0L4wcAJ+Ff(5wN*!d0PldVc6Xk0JXDiR0P?*tM55I$oK3VYC%?ce?wezs9!@udP#x6)-->&f7gr!2z40D=20p*(C`X0y58wB&{XcD2EP1@9FsVUVz6XxP_E7Gc5TeHTN#iQ4mY7(tMr_DI6se)5FGzm41pEFpUS{UQXJ9xW=6md{G}HTw6imi2_8oupl9i@1C&uTGK=Au8_(=g;QM*inhM7~z<dZ$8D*e2h9U<*ra;?F&kP1~<RlP!ospT-bT5RW*Rik9`Fq?p>>+?M_?wbNXrLwddcg|^i!I)3i2J~($J*#zd}C<PyW=|WOHXl>%<~{LK)s!M&h}+x!f=YCwltui1Oz?GfLR`p7~S|0_VgP$pj;XJ#Ja{hc<Y%Q2+DeJeHIW^XdViJzDom3$(fTSUii%eInC&x7^q1`3)@u&yk$_fJO{jEK;XOxqEPS>z+5JEWbZAL4nhikNYL7AEzRi3qad!J0r9!G-dk+9t3{7K(^iQvn&cT85#9~=zp?2ZgWCo658t6c4c1R|smP+S-21AN>fv?WkkP9uv&*5QkY_rK5wU+Ubix4!#jE?68)EC`{Z<vd;6;EhjfTGpWnAZ%7JncoqX)gZinGLwg$Jd75;A9m&p^YWOmsMPDDeTbuj8{vH_>6_5x<ZuD`|oPn+rv5;XSv|d5{$ZZ08O81MqrdKUEWYx~*FnAJEGOoP|QuWc145GYs|@0?Gh&&;GS=&K^Ne6aZA6l8{Y9l7VEjKi=c4phvJL5dhce5qd<*p%%bc90f~9+)FqW);HrvY25c{2sHLskHAGV&=`D?8Ot)Dt{Tc@{O=%Bv=tdriEtcC`YVPU_sIBEX^H}ZWP}hOy?BN53`Vw0r~+W4;k@BS@V`vNN@OB|OhN!}P?C~HPW2_8KQd1*>y~0*?*$%uSQ*|!CUYpEOP+USAN3Z_UkT8SYtE=%Z>~${Q5LwU7?;o=0MewVm}<Q5=<Gp1WdN|yt1x)tA+Uv@jYHwMkB8?@GJtg8Dy)}`MsYu2CtL8jFvOcNo^nm}7kJBX$q7UTFFAl)v}SUAR)9GSA{r9x;ab6$PxyYcx*=TG6}03x((yRLUUqOD8AQ2JU3^d7Gr|gjw(Tx(0^a|I0)aFP+pgi-uI`(hbUNsEcp#cR8@63@uAk|V8@$&dOJKU;0WfqV_}CmCX%PB-7Gzl6gd38#WR!sB3c8h!g<giyr2e2YcUu{K?;-#9#DAG=-(|A*hMham<r-v=CC;4h=gx%}!fGo+&*-G01EI@EW=ow)^bWaBPU<|d;>^(?@K4+!T#&6n@Yh><@`>=XyBJ~p(jk=T*WB^*bnE0c$Gpz-)j^Pov)~M)?t5eaN8Ii{l5SEQYQk_LW7WI6(jjl4XQvy;)@Yq2U*?W0oJqM~CMB;yHc*00ZYSM%q#K2f^I@0JxsvU%23}M3W4=y_7sa{0j7%H*!gcACz&bOh-db(^x+i1ah9P^&CIJmYXXM6yM!$t@$cCv`hHCR5JhC)wxds{fGZ@g`j-`C(1+2rI8I13+!!1AN<}CJtF%0HVV<|qhLJDod7<P>bunS9leD1bkNXJaY>djbQB;tC`NOOZIU}-OAfgQq-h7ldb%o*vE{#DzB!S4p_<OVRV<ALs4!<eU=&ZN&H7SprYiKTYn#-o&_8^{4QIeM(hpCX~92s~0UPCCQ-vDTO+ZZO{Rz>6qY%j1#GEe}6WJHp8j^N<;Kz)bLTJd2s-?Y#b#=346$Pq7cd9PfIiPs~9@Uc+!taTXfMIp56IpC=HivWN6?3wD!`A2VrJ8`4=0ew4ulU3;f}Y(J9|4A&Vor^B)GZX|ml3n^&``cUx3BCX5Xab^QTW>PSKk`*cGr#e6$cBsG}poigePMev7gFgR8_;EoFALH=gI~~FgFRL3*VyXUB#bNTg^C-i}QFlkSy1)%`Z98s70Z+Zqi|0DdFXg5SIvGo+l1b+~>bUU$=S1fh;yXZPshi>~V+K0reLL_RhI5a0I8%-FL1&5+sj!I*=-oJq1!fg=G(GWt6mv_^QpAHTC4t4<z_U}<V#eU;1)C0N`^fu)ljpeYiA7E({N8aB&mw0R=owNTIthF>hkjM?giN&3)Znp5_7Qs6?-X{n<83DnB^3}at-(J7jT`g!gw_=BaMGV^JO$0BGyIzaiwtl*XdZu9usOQc75JPI*<9=u1=uQhKwvNm#z01;nFBrof9~ACj>H-q@RLPN1vfecp<wF^nKH2k9o`QU*P5Ta{x;y&HpcG^X05T_Q8MYTp<`ydNk2S#>QL$24^fj>coO7<js5cj2Du>4op#Wg>t2AfNash-0zXm!Ee8Ll^vrc@;tT^GW6k|R%Hmnb`ao@_9pXFfy3?+7+zXpo(pOFk`x0*phg^*BI)2UnL(WY5D4ljEN(d-*W{sB>y2|}(wP0dBFe9JY$orDtz@wQy-}knZV2u3(etvv$ffrUS-V`9naiLf%;aYO66RvFx+}4u}3=v3evZ1nfhVFFc4H&o=c{g@Y*r)jU{-#H`U+U&PI}b$XGCfOB!SxS0E_qe|7c{KcOErH*E#VHBRU~LP*piuUBO6k_2XJf`7!;I94qBYMpW};|_TFxjzfJLzoF!%D@02BIhQ8g+_G0?o&)`iPrg^XbcV&#p?+V=2oCNka_Ad~=1Yln8Jcw9-5AmJvy(iM&^TxUCec0FE|Jh3uwwhs+UoRwFDQ)q$Xr%aFc@|T-ZwnO@?rVv0gP}FY`Qf`1Ah<tlck8GBlz;u>+vENIA5ZJu{eFF43l40T1foFTL;xZ)ydv<nIyo{6hv5YW42Uiz<J~9cKn6yaf*7X_nE+!U_%lbT;<y?DByV5Vd$u8mB8aAUcc)X<JY{^y$^k<f>zM;9DJlreE`SGRfc<L&aPhQ0bL@4KrQtovtZEThNN=xuA(U+lVf9SWUx3*iImF5M_JtD@2AU9-!r=e|wzK!0;U4SAp6_j85Qiem76zs#9c<c?jJ84NWdtT)lj9eHf(%2E`G9+S`C;Ech?AjjMC1_59c3HgIH71KK#(if4TF!9qfLB{GZ0l}+5YB6751v9t&Hvy42#W_9IS)k_|~B+n<&jHjR<(so<C*p`y{K5a^VG`f%gD$AMyM`vE3F1t4$drNuls={79{w5!HKgU&sjq@JP?3%xdBE{pOQnW7pfl(1PJOhVe|5VO?4a&X7O((%=>uAO3lDNyXVC*ZGE!2lK&TB}anDTwUea%=G*7Y+@0h5E&5_+J#UpE1*=GQueS~1p}oO&>q5gC+F6lG7LO}vPmSJ6?CwVBrPw<dF5?|Q|v73Kx9Xd5DCu$FX>fXpi1Lhu9<{XT4sz;7N*G9Om1P6;|vmE_?Hf~+_0|+r}Db&J`^R-9Gi-xSr`!jw2QOsHbpi>T9M_`TAzK-r@d0wDzbAAF*!07C%UXwkpaMl%$X~Z#YYAS6mvrKMb6hEvqWSm38!>+zsep^l|+8VM2op|vKllsWw7yF*#iI>GMF=+hZ_orij03V=fNR4%3c@haV`V-HwuQjL_21rRb?_cxv-zZZX%pI_25iMGDie*bb9amxFIt&q>85P3xS)J;a97ELJ#|{Z>6JZ_;fF-nks>>1^8Q5=U!{%M0xa#NIH@z6JlS@O0)5~bdp>h>QzT#9Wul9JUAx6q6|jMjN)u>cD<~cCEEF=ETTZ##*M3$B0{Es$ELd2$2n!b5lAK8C9o~er+L3_Wo0jvHv!x3{{HT`k@Peabb;@7=v;4W^pVR;zgTzSSO-7Cur+D#>{JG`3gZN8iXQTSY}JV%9CMKfgeldg?!wlnx@9ecH%~6<ZWDTk*0bnE*|Vi{QRoxZnK-T(U#qyAIc9B5W}rwX7#YKAAfRI84=MY%6H~y4GSLb>U!iB>IW8R}A6Z-JU>8^bYs`a<8^{NGZYUf+QfEGmZaCIGdt6I7eUvg4bSrpH^0fr;cpvi=<v~YxA7;8n!5#)Vb~`V)j<TtRLs9DM*$e41dZ%ioZ^e<PiK@6ntc3!gBD0S6C<D5cGnae>-8AfCABTI%%LiW#J}m%XT_++3x}cr=s*{Es&y>)RE)1!|)P1huG@0cHyg-$H3t%GLn+)1?t#@TWrB(qcd5JIrRewvm#@-UBHw3?%+2?u1`e61yca-%=!6fHIhOZh35qee97a47t(UJ!ZvjDcYx1UyOmQP&{$l$XKlHZU6dYWSfs=lms9T+A`pt^~6o<~EOsaeXpUJ>-Wm6%f|&m<Y{GiNVuOTJGQa3c(cckb=zz4AR)uvuBbW){_DgcXCOA@L+(&kSSafz{%iD%Gb{-LSA9^CX=-7+qFHwl^!o&1f2!*YO{vp(?SXqNks0NdlA!NkN<NtTHerITHn-k!ThBS&*}IK7%&Ni3t5Z3?yw<gRP!nKT~xyXq<FT9@we{nckCFQ^8p;RUXtcEPs}yQD$`Sy2`)xtxvk=`g4ggl}Z>9yzR<lkVVe_*?lv|MOjre7V_95-5>&|=lk$x!cE$nGmE{EaO3HeSW@1%qy_9jr$IJQ0OW{24;4IG&3@mJK7_nVZ;gy5s2aw!pRsNc_;rnWQzA}&?k~mlPWR|Ju(=HWD5_2G#JRmUL8hRiQtnF32iam2m6=hIfqxW1AZuXUI{ABxOwno(Hm|6W^toD;zi;OWX5innmIP3d;S}Vq%J8g0L{!I6!oZWfcST1EUAw3I+!u)p>ne}s$#BE2uo=Ohxz4>9#8k4AKh6VU@3&hP%neC@&=b~N=l$@+QkJk_lT56zgMYVqaCKtXQ7>k?XTfgovyRv2u}jY9V02>fESNasfTw)RVscR1Td(g$uJb-8q_U2RY`--K%X=DC=j4w22L8<S&LH8ID;>@B@BY<sVoehcWbPWHwr9-(ZiO0UqjH1RIXJoLx=sAgED9F6ZE|n}UmhnWYcXrnnwTRU*BaQ1Hg9s)l)R-@mB>9GmUd2!4-X>nTn`9GDqR%L9wl)u$KaHZ5oO7fPmSMQQxFlfEGv$cM6f)|bf@BltP&0ML6rfN&F<gu2kD<_Nbt<El$Q%HqI=5>S2eMz^8P9of=(MZV?^jC!lG1trzW_-&Za6x4cITD_k$b;M#+-r%=2q%80`#mDt11djgq9(1I8d5VMa-VS+b7AJCuZ=;7%oh(@w|_Bm7!}i1rTWViy7Tc^)hrj9(ycL-l<HZpbSc4STze`8R<*O~UsSOxCHpOuUY}RPjl2zU*FdV?PU9J*z&c;@75q;v%_}aE6+crk(@zfA-AEc?r3{Xccn5Ca=0-?njYyM*cH-Zo)UE*iV#DA$0f+aCK})0)q&wJ*Gh53k4D=nM?%O%kBetX1|KP3ZGcvLmJ8e=%_z1WM$~7tkk^eQ8y8CI;(aO?N>xLOXZzuJ#^;c-DUR-*pXYo!}*>Qejey!`?^=$Bl92RG<l92MfJyMGu7B(8igXcK=@N6EokJotDK7rT%CACJlqLah8GtVLCV^07sc8Xx|a!iOA&-7{o8qf90({$QC(}@7n>zB5H2OGuZ<**%!9PTUn%d?6PUNw1&Na6vV@Pd^v}kWz$Ah~u!-@`t+0|DxE4V$S>=}}yH@Bi6t<cAJsFI^xnTVwp)O0*(I9I(!bYIP%p&oK&P?S6c|Maw*on~L!lt6`KN;SqAkXQA0<#j2=d??Hgkk0z7W5FxZW!m?&njnFu>(2}GGHHGNOI~$R9OvtFRSJVOH)Es)dmzc3V87w1yr)CuNtl_d`9?g6Yk6tv}tXADI06@9klZ%My#HHx4I8brnAqJ;NP3n{XQ(yh`YTPQ6&W)Sy1wr(0L<KJ#=ebX}1<T+WkQ~2?obWaCLMl$u7kILRX07<wpK0lXNa)wD)1*hD84yw-z?kLD0rdFK9#T>G`^e=gXw1NZR?UIIk+N>+eRqEoA)%6VgvSyG~Z~R&)n-T`?dtIu{brL*E&`S^$E**e{2$Y3My#YGRB`h^g3>72SJ!04AaR=)7Lo5+!cbE&N8L=V-rQFEo*fFpvXyk7M2~M@?KRlWtUb){qd|oWwI|)$k&9EYYc3i|7QWccq;}bZT}87i57#PO>ShPOEk#5Xm?K1Cf2Xr4EXL>kP2wL7T_;k2+QubF62c@OZAdL71|5s<XZed&)gR`xwj_rT8iKf-BuKdFUFz$^pLL@8vwMRP_;UWHyo_zs~Tne5aFZ40I0s&8UM$FltlM8g<i{^xY$~MlFV?a%WCHpmc&ic%L>i!PC|_bkk@D44=BzIKckE-k4$?!$3I?>0fK9KD&`Iv98jI<p-X1WpEQ~p(He89J4e$dFGt#9-SMm=9#c~VlRRnk@A?GCKji}AYm)udnt!*7D+>fo2bteeu|-xi;xj^nqkn;rE0tWRfqRSEuMOT8*C$PG9CA)eQ$ZzTw~S{cGPz3#o(`gXz*a8PfTxzcWq;>r%4|+OJL(#H<|P|y6PLK_{DyBwcziU=)<f$@##WB_Fnt<fBc{Sc-ZZi(SM5nU#h30kTg`}_z6pEbcvDsY$dk#P?}2hCMvPw0yQXKLeGn>59Eq~nQ)+{pn%@H)s50Pu$u1y2-6L!t~|BzO%bYko!u%$q(8>gS983}hM=69oa`1NkN7<~kJWrDc2y5Gh|p@TIvR2eCHYJ9RE9BynX0%{Ar5G7AWEV})uT2)aTmP@QS6<G*9LPQrl2qDTW}3XGJ8hvg&-jAk(p?D$dgBF8Dfv9-ee`*`VbeCOJ6imQgRpLXiq5{v<7NGlGP9iHz2M%l1Wg6u??HTBBHrhab5NdMNIrJ(IB}A7lu--FJ1ncmo)~c-n*_kAE~j5RJBSof!D901}h!exMJ9?G#4leV-r=BMbEN{-b`7G^4+`U?`DPJYVK^Jm`8x|JX%t|m#kd?jW*XPWb{Ifb+S-WhfFAPmt-j|XSJ>Q_a1N#C*P5clc>oA(JB=$SMy%$*XOh<-%-HxVK+0M=zK(oDazcPL<{2Hf^G`>sWjr<o!|Ry8j|5!xrf<VRi35L5j9Dv7B)jw@neNw6HnAcz2)kj|C6Ox|Ab1<UERA{D#`_ZA3h4X(vaR%<Iytos)U(p-+3hzSCbDJtj}OY-IS`-mSthvToxPT`hz?yT=Yt9c2Q>yx&!@0q8Z>>N=`kWya8q^b<tT(gWY_e2Dg80O=q>R4f~^hhf>YRwf0a=t*SSwtewTCDNW+FaFv%gIH~Rjet$pAYrjv}&uP_VCByYp+w&l5Sr(NrK-RFsrgR+9Xgs^OdY&<8o?HhHdC04%Ls3kdmBHJ!CXnPV6ZOJ*xI(&i*e1gP^-xzVYgQ;^a&=fGz3k_@sqM)co0!~An+uJM^-#DCtdY(|?Z&7B2x_o&O7Ok|zSmhW(0G3vFlt%^sO38D32?ma#?bv1pfQ;U{ds%RpB@1T1Lh0}#^Pr?oH*2YVP0>xp@zt_#s;-Ue%J%gbZgCPh&HI9O4cZ5hc&cDFVqO_mKxB}I^Wz2n8?@q3#BfJpDX6jG{;@fYjYNluC)XGed}Z{7fWw@4%PeE?F&tE57aP64K=`&0BmL&HMW>Q$77{{?byQ<yJ>pi#2m)V8l-^Xz)kanrGvz?raGWI_Rx#nbhs6v3P5?UA8jXn>~+0Sq5`c;w|XU{vh%ZsmOqW=_S6jR>L9|QxG#9>g)s8}6*O3pGYXa=S2Sd^tSuHziW+)oT*gfG{iphX%nTQ4v$<X^<$IYPTewUqweKd+sjtdk1v70|=7~a%Bu6`W?my`K;Ks6vY~CP;8XtNTwv-q(t+|{+vJ)gWsNkoxG4C7l)gyUs3l~#R)`dxT%O~({6+g$)&3=|X@-AE}TsjAGZ5GebyCko7OJ@c>+-|D5*onH$NH*cD;9=k*TF*+Ps#F_3Dmb=y_ji6@%WG=g#TC8Jvv4)4JR|D&PY*>cuyVdryL-LRng#)$a=a+r)WD6@IA<xFPVJ_m@mD9LpVez~dR)b{eqKGtnB3jnR$)UKofp5p->+iUFvF7_;ga%ifIDG}dVBGArGb9)J<qXfUSCnC*~&AjvNPXr*n_htLAN5+si+;reYysHUZ!qU<*I7uuSHFKmTtQnJ$=j<&}=iE%Z#jM*bsP;+>-(1P%3N3GMiGmsmVqaDWcwDs4r!`LZ!i6mfDyqHcUoW(semg2AWtRZK502c$4~ih#Enq!KipPHB%)#dF$lsI{tGR>v3aqY^n(dJ%SfW7s#|!HJz~9jJUy$nx8lJ4Tn1!uI5@jt>KQ+rer^o^R!reKD{_pgYK&gy%?15T1z*$YitI7O?#@GUp;MErtRiw@aOlu#1oWao6F_;^D=q3zBH6pHa>f5l+_ANu3EjqeePbA7jl3=X$Q~LI_%1Do|5L;XU+aa%DI%^4|!TcCUf+qXl@wQ!i6;&toY<AVT{7JQB83e>XbS{da(>mig*5Z@qM!!<Gi=)J=H7ud05w!eFwsdZ);7BZ-s9_Sw~q9^@)2H>r#3_$vp*5pyu+VqbLlsr8H&L2KO9M*Y&c59-y!n*;Jyxk0OKWJr!gcUZb17uw5W$fyD@$c@aw^;M_1_&TPj;qqiwA+4@Me<Q~<g8q+qj!nPZP)XXj9j<;hD<cvAjd0@xP7)KL_wI)ubE;TE62#*wM;C*sEM-lFqFl(w!Od!Fu7kmBf)(ZwFmTq@$8bvH%Cty8|Tbnj;v*E?;<XThQ13x>{j%#gzuU$1H9(tLqXMH;cmeg51-cGC`o<()*17PwV)eX1EHSbcRIFp*OPEXvJZ8?5+ow>%S*1R7DR3D3X#hRvg{zmnOXjzj-YEHKmI5iz<oLunGjlj1pFYtF_zk+GYjRzgqvGESr&y??2x-nQVO1%D>YL0<-2OS=Snrq<ibY!^IRPrK~FDpl?^$O?)_maLpW;f<%62ERct(<Ao{=Q)^i0_@*D{nnZd{6a#%l;vRAt;4Z_)93<30x{dwdy`(rB0d76^;FKeDsa_-c<(x6s0v;ACt4NZr&{WR4cQ{8p2k}V$=qy&1DZ4eKuuD%))rwu4A8YK>5B`XM2(NQjwuS`(FvG`?M?Ri3cTQqT)}{W2vg=l|D$YHy*Om2<oXMQj-*Ud}vM;+io)-DrB!F@!+err`nH5wH?dGqi@@;m+tWs?9U3F7JJj!&qEz@<1Pr(W(_qRzU9_jn^*(LKdP}Gbs&3FAs_mKgs0=!P3?#okX>mMGQ-<V`n?_AKk-b~!TVC*g2csHd(JTAz^rak=|v_QNGp4@U1#B8FBr8ZCiHkJ`Y<G%?gtqRIT&;7k7rJ)v1dFn=aBb<BZW{Y{^JG%1N(B~7G#|@huoXCL~np#e*6u>qFFixf2gP0Wc`(5ZiPo^pon^;aEF?hZc^+y*30nwDgHzOcc3>?d&l~r&Ql&ttS$DOdRD*=wxByqyu0X$u#KxdAbvs9)P=njzFF`k?B>6q4_Zav7HbX~f(~-#&~x(?bPWA8i(P7jYI%_xdt1_XJRKa}fQK%0stCFF*C)Isoqakn@qC;;^`F6>E0})_ye`wvi`39e54o0$bF_g2W;>VC3}T|6UNGt79a0*+G&g81_^gF<$5~D(9pHpN;%rz7U1*UGXKjx{%Kf=s!FURGrsmkL<a3-E)0i{HKJ|znpugP{$9+L32BkXCz1$!Q-85`_eeA6z^gYp3>Jd$)ls>fXFzlB{v=~&<3+kyiS(EXsuSq-rMu2?j4}ljzCqab$!)gqibst(E_vT{#)Kg;$dS@*{7WfbHhxUJd1bqMlao`glwyJAf3WNXZhQYPxmjf3*TGCO<%`(;HdUTrHjb5vXFF)J!N~)3=RI}5L{8~%dkYp6~IT<f+7p^D|P|^j2jV+ol|2`PG+OH<!Lu=qY%tPCp+2f%V&BoLD@e5ObA57g$0|I+&>v;wOH>-GrN==2$zh^IR(A)*=qSezBA-k?lEc$lv14^&!NV==0`>1*}$KS;|*2%x#xMw%JMpy3j=6lpq7sm(h^UrU#6|A%Pa7x(6+3AKDHdRS2&ErTv^(@3QmH2ve|Fic%K2y+dmev$6_s>u3zjlv@|MdS_K3wb-Ue81LuQK)gQW;LwHmml!u9f5LD>%Ci`3Sr*H9YFG1$jrYF-GM$edw0dg-nE=@6RGi>2oRXsE<7{Nay0a24s*q1umz??N^W;)FUgb;_P@#LkcL}lzh+8J>}^XB_x${g=f)jV{aFIxX52s`k5PZdtk%qFCwk7Rr)f?U%rq%VzM?TP5CZcvdu()#D$R$T6y(Z-w3aZ9=CQmL@n=A)%*-f0X;pGLqWVm_?D<wyP7X@UcwV(c;$u4Up(WrT(Wn^b1%dx3;DY9o!OpxRA*`Wj}86kw(ef^M+<P4qWp$pCwXk8UPe{P`=KFK!%DAG;LG*-n)j?8b1t8GeLjS1C7wYxxwOA0{j2)$r}Mq3_voT`6aEB|Th}~<uQvGhe5i{~KERgj^-Swy$@%cYSNsY}&Q5l{!KcjwI*3<9&uXKd+t9ox46>@B)kmEcp3VpJ<=4;K7lur!19^*hM#F&3gNU(}`wW}tZ=DnMu)J_ivq#89JsT+Vj&mCQ&2s|Yxo}R)dYt3!eM$Z%{U#UpMHyK1<7sz(;>WXoaor0o8tNsF_-riX(BF>*%xDnJQ^pIGoI~h%{nGd3OpAG44#8I6WHJIeuo^>t6nsc&(fR)0RPvJ4eBYwYgOVrrv>Ga<G<zCW*AaQS4RRH9HGUAS2li2Q@Jaa{$f$^7bCrBuirXx*l3h6r<?3Qv5#@aqnSE7lmm-I(iQK;BLiQT2^?fECoPSTfPraN@4zZGQo=R`i%lXJk?x!Jmo%$|{+=*KLr|KJiaVhU%?<su)^Y%lPcxuZN1Jp<LUdYNovcg|nYaP?kWN%q&i{w9-IfqY5S)($~LGKp*l`rJuMlS4IoMTFZ?6Q^x+Y33)V%;L&W!R;2PxIVz>}jjkE3cOS=+n@+hM2gT&r%MJYoJ@@dz5RVr&<0B(UHi3AzD@jZC=jjc9cPxXTxHPJQQkuV9;JuZWEOk-tK!;N_C!B@cv<7%D^m{yTI;rnjItU4l|;D^_8Jni-!F2%23XN)(2|YVVO5t<jE*Q)f^dTWp~xs=u!@X(~5q}#eNrZM}3CeXT6g9@<c7y8cN|z`JMTO-8IBP%6pZ0G0y2p*xu*!NMwm~b-;BN7svf~AC0r*c`cQJb%p${w2crguOPQezv@08ysgkGm4#DohfZZ>XY+^dn)2^GQLg#QcZ-3c>M&jr*CM`J%$jG2IK#H|zuH@AyNFnQR$kheLoaf6*2eaAyCEL7)E=x0%29JFx%S6epZ`jnj$+%87f-dE?n`r|j(P6*n)=OVYnSs;>UsTQt=jT^_swaJa!o0(?2-H#Z<PHNwjbpPuH|4r>K%+T=zUZ7lwY5<R)F4^;ojYZ2IAuE{(AjcO8!euZ+A5e9xJ&o=a?_@W#8#MSEpCnH$7>uF0w(&15WnUmdfOzhp5F?<ll%g?tHi<?T^UwSY7x2cV&zYvWG0NxWlPD9ebzc-+cy6ZiOtPwgix~zy|rOgJMpC+DelAn$TH9qeTl!+15zrkcd)qW1K?27)qbve5k3?o`G+n=VXt6^8F~e<+o=;COa>_m`h{tF7>um?BjCyv)--lYg1p?SM2078>^awbY^3f{GR3hRleU-^>r%rsuMlk---5>pj8@9n!k&fyFxjLazE;`k3`#x?txlo;XBj@Ll<pos0FIhF7CV!a*uN7bSnS%%;C|mx5g9axb3XXu12lPL`yX@dR`i$WnG=FHW^(}3xY~N=5?|@n`M#Bsu1l4s13wa%q|(6<#`D|O^bB+=u*G!)XQwAtUo%nZVl>qq>)B0l=n8+u$3IXckpY!@_lihGkMOE&vt?a%66{_@VcJyS)8|)h3rgRW3!<a6vaFdQ}FEGlY`p(OX^ol=e+P<u-;VRBdVi=?5UoqsOJ!EQ{-$RdB)K}ZA*bOjAgrsS9^tLc~0saJZf<$>G^l%Sx?EAT$TBfZ}M)LTiGk<ZDb1FnV)HY7WJ&W?F7}RfPb?&T*pl@2dA-psrMoWKKDfX2mJnJy*qBIeW|_2dulV{(EKKwS{7`w)*Fx^;gcAay!WDe(b`VTGu){2ET~OpKDacqS7d7v(SGt+%tVp$Vn`+XFVuEbw$|v<*(82k@^3cdjN}%z`fQkubCw(VylTxPw%T1h$5L;WgO?wwXVEMJF4k9k*!NSF8>6uD{YvZQd|n&&ldz;{M@_ZBz<ZBH>lkxO@_xU(?q&0jLUC?#=A7_J<nNAaXByca(k`Ug0lu88cO!H`k&}<-)@Ijv_*oOJkyeJAx5E{42&A4LikiCozCyM;o!s7~d0*+0TJ|KxJR{LUmD(0%Eq6=X@%nc?S891B+Yp`Cb2anyS&lKacLIi5wR$;E=VwMfIC__SmKx2_`{zB)s+2PmC^kTHv$eblHy@m_u#qic2OH78E6bP0XO($Jx8->XnwuLqFKTf+pf<pw^(thFm<L#EyIZtJKIXXXoPH!$BOFb*Ql7mHIS?hHWu9mgI;447zpY%a`VL+{_j&PMMV8+b`Os-OAb#*v{(F?~W1d5pDs6;t2GKs7QAO>J1b@r>7HzmiyJr9TShPOI^L5eEcrUP>#A`y{(u~4GPJ={~G_Q{KI21GbGJBlbG-dkxY!=q<bWRPvT}2*b?fj)(`<hMlnm-ulIhL)v$#${3qSlD8_1fHKw(VKW;T*sBr>|l@c6ZhaDLXH<9^%TV;*Clz0r}0<XFSRoQ^kB$x?a0T*ZpZj&0wC-&pWu+H`4v@n4K*AyRt^Bu~ikd|9=twhpe?-J`XFmSMzypi*%s&CBS;#Y_0V9xb$`Nfcb_QzUm&6fBDhdhcx4h@{3Qm3px6rc~&#zJ9tUZT0DQL3@=YQVt9G2_DpS~RrrN&7i5dDi!+5~3sl)El-f-CCTq-fV*PJN@n`r=$q_n<TEsHHMfhn_kwY9~t<YnuUDI6JF0~)RTBOcs_B$0Vw6eUekIsGmRQun?mZ3zSw+qqouIXHx+l-P7H{C;4Ck|aYfB&@&ElSVl7?w3LB40(+3X(0{Q|s0)wdiV*U9Qy9lTSItnTWP$#e6X%3RNCs7CXo`_4B5=(Iqbz?E&AD5Ax<7*ILW2H6Hj|mR=pbevj&)b!N~Mx2Y!j$OQOzI!bvAT1@d-;C3h{jPey(f0{7Ui@7t<+>}wyPRFyDPI6xL(JJ+`LjTlyD=4kV#{vth`-q>9;8Qso<Sw5pn`2g*aXpJFvyCt0HkR>3Iivmc+!&gV=o&QJP38@bL*{rpp1O%^G5oH#gRK^0?U5Ug+7k=^jwvT^NLiTyw_Jk<)Wc_kKXeb)ne;cuN-K8JHuGY=UbVGy>_?C#W&M<}UyARFmgAN)Ovv{OIhfVQ<$kA1o`;aF1s#T`|Cwq}2O*n+D~$!Aq{FPwM<!Rw{IgnpJ<bj1z1?w|2Wat7%&4^HC+x+^6EgwlEl#<-1_Pbg@q}`)A;a8&a;iruqr9VF8%``&XX%LYFHc1sN_=|BS}rSXa7BK6r9Vbh?`JKf^{#dgzRl@i4P5S3=Us<NEyaa8?&A3+O_g!<L*5GYR%_nF+oGPjTfvPai<ZQbH?zaV8uGGsLwWXx?^nbp6j@RDy>Fdteb-%PY5X?JX*=@%s3ThjcGWmquA7V2pl7p<Wjnl9bI+ix&ZWi9YDKI5Hqn<x=40hF8lMu#pMUa{WJ`GBR9E55+bkX#VkV_A>bL>qQB3)!n-+5@kCg8wlqcUG9Jw{7nUOng3{sc!+ac$8f8Fw^U0i(@SgpSlWIOEicIGF_YKGptCYuSI#h}U>q(RNTuJtQ0y7^pQ>TyEtq06y3H}>JIURBsXxsP7TPn_E`<@?lpt!H|X`VNrHSxZ?rUhN9o=X9HoODJcDmo|ejY^vE6z5=OB1_@~Ye4YE=1C0#wv%YEUx(!*$8omb_A)Og#Ih*x-7~$I$wPJZ|d8_F>K%XJ-FU=QEvON1|=&ECByVU)_@25j%x<{8L^b)T-(<9Y|OrZB5<<d!?av-A+x)O5m%7A<{s9hp6riQ3dioJ;U{fO!mnBnR?nCi^r5x@Qf9qv9$hohfEhZTMIE;=;HH(jppn6(k6+zaw$>ST+HSSk6|egI9LaAxnI$-&z+xqB~7&c6#yPOQy|Tc9Op-eM`<#iH5L8x4QAJ;&8On!#+$6E^@}>qk2t4<jJ=wx}@(Mjg)?#$G(tJ#&zHePBMy1^x_8CZDBA_LFEb{ChN+9P@ES8s#fzt&dxt6YZBbKa4J`GlMVE<>+m?Ox`Uk^%`AX>R&+qh=Xfa$KA2!{!GnSCdVU`=R#xJZpNM4n5X`3q~_B3Dt;B1rpT+7JR#>~ZzJfehoZ({r|e53o)qt$*CuDUq?&(R_&c(3Z)Hn<uGj0zD*l5EAFB1SO+F55(CyzPvZjITsmYxfjq;+5;Ci7^3vSEKTFd9Pdrdx$YI|YI;ieH~wVo)o7Oe#~R7NmWa`g|nU$e<?BYLXH9tdYGZnM5{HQ&}d_E*j6i0%E7#-Q!P@4CNb&R2=)m1oI(ukW|FAI8!@WM8Q^kMa{+Bpca}*-t~tbU~+bUw_zMX0gpf`JO*(A7$UDN`7Hf^eL+Nn%zY&%VD5eh<w~`o)_1qQ6x%^qLOQx$7^mb%o>+5ix1AnuJUfZ-n=3If&7`F^g+!!>%5nlLw!kQ?|}85V%D;+S#h6wuE)>jRq0O_{mROIYxDD%u<YR*txVD<-Bv@4DUTgfPVGVTO{0DZ!)~;O{>?DLv^ihqOxKpWKWv}tb2%D_Mp^2apX+$LpqyMgs_5c+d{o{SG&H1sf=S`?h!5ea<x^j($2Ikf4Vvsv8cQZ<tEf@P=ea|lZe<=G;k-`TfMY0Leh~2kiNVBPkZ*-rdjmJ^)b&5qV^ZWRXyvW(X%wRO=sBmn4>RTah&thV-1t=;uf(N`miw({zeAPJ8~gaF>uT;Va`wDThDGf3=9x9pSq1X~1M1Ij+HT6&C)#rn2TiMcUyG?W+ZLb0_gS8n80newgT<6sejPtneC`e7!MHVxxG~(h&iwyp@7<ac$FgnV|FU0C^l2oZc5x#1gE9BAM1zGudb1%72#NGgV*~p2-yCzTC9Ne1Y-hT<I=-mrsHm<?E@EBgb<8nR=F5oIHOCvKp$BdW%o_G~;0r))b=>J~!YF9E^C>3bZOlVcP7?(-W}Ye6_WYe21;?-?QT&TBX%+TF?VIk)qT}Z7zP6rrV{g_ywda0oHkpl_srP-Y+q97F8skt7%z3zNeqZ&i7jU5dYkRRiNzd!QNJ&nKzaDOjJxaNs2Hrxqjbz)!?8dhG_ZW3|t?rm}50>%tUuo|zuFXf|3AqRST{XYEsP*psZrq>D+!=b&AD9(bKi#&uMmn8MpJv_O?7s7T{pG)>yx01ispJ$b#t)F(g5N^Tu2)mI;3c>=A+b8hagz$S#8^)q*Tj<X)9=9oa;g4?_U#Or=3oz>*92a5t>G;2yAKi*gWi0em)|o!lxv5S6H;6Ptiw#h5zk(SpUDe9R^w(FKQY@><Z{X7oOJtV^b2wsCHVgrB{8INp8hGhN0{*fsyU6>pP74Tvon$-_WrNPJu-e;<_k1`pSzK~x`K;UJhwKV(pXOyA!fTE1#5)^$N-|()kN?AS@2HtYhN$fv3Klp|9-aeXS*5Zpu}@>-fev6>$1<1>mRepJGIt@m_d6c1E;*t=g)DT8NYd{H)Y1+=LdWGwqjlt%ap|W+Ot}~D>aXhI=hIO=(T|T`L1G;f8BNuclWs+o%o~K{VZ%xtjYUpJ~-y~+iJJ{?)o=Pg7E!boc-xNy=Z$Cr{}OEW%z8yamu=&IhzJ)N-f`(wl<{w$Lz?diQhoJ7u>6nocn-uH``F@Gj_=Tm^(MAu-$viS7h@T@7vepopmtY51hJ~-!riu`YhpR>pE@R*C)N6rAd%|W$#kSoxUxhJ8^3j>sgGKtg2^SJHzk$FZElP%eZzo*Xo2@OFdH+ZsnRE6Fj_=0;hvHbCltBknbo?>S~VjS)m4i`4CaR0ME7=Pj+92T~oJ5&aOPO-K{H3smM=QIyHghsN}=Vag?&Q$hI0>hGfTn+E!P@(C^G`emais{+V%f&ihtfGy1Z=z1;89-Q3*6syf+E+wMUYvx)EZx`)EKOGWO~{(abmeLnQ2z1C#nPlt52|BT<Yrt|WDE^=L~c~~huEY_cV^g!0tfsr?!f3_AgJ~3)QQ9eThDcUbM_t)d#ch>ahVqyGS$*V(`065CPQhki6(7DmLsEwI#=A9R^!*WK5Id^ht=pt|U$h?!7VW!w~B{?f}sYt1hR0IAUv%i#kOMI-O%V&!knNNE)mwqKyJ&`uqd7h=rYG-0@4VdmJ<`WKhHd#AmsoLf3&F@3TBXrjR&j>7Y`DZ1cjXm$T-j@38%RbW(Q@U}=<|e_y2QPFPYg=D^hwQJ8heIrk`CLPO5^KM}>ouOn9K);e?X&!}{!CenSHQ2z8RGTjUXICEE3mbB-dKg(Hn^k$8?x@*T8Q4W?Z<A%-Hag-=uH|SV<w!Y6FG=28{pRqq5!;&R^auvP6AH2pfT>W!POT7O95WRckyxy-UCQz>KHdQ)9{4&LtvpXlen^&FT^;{0$<Pb-eSfu({_M%h&X#UCWbcGe<<lRRbzy*+TppHo7kzsqF%$qgKOnSn4Hl6{a^5<FsEYvyrs3EGm02fatr%Uv?qoA)MqW*XNp~7lQ(5r)b=uFoFN68-{T@z(oO0{vlpG~%iu5Sbgl8Nsq<CEDdc)<O;)xz>vaRJP91|?;@)wh^|4w5v4HJ2xN_*(J0_=RzD{y|_Wmxk{o1wl`DV&9Hw=EJ^yX;#;cJ{$IX{lhTQ$ykXYzHvHp84)n{Pdx^M|nr29CPGO_Z9PO_k4KyI#d}T;r=MJ;&r+;?{`^&v|R=kw|Q;$?0@c;y?QcS5<j$yxH;k^UOZ*JZr1!c@+Ok#oTe}ImVsY)iVMf-U6S=8D~;|4V~j-X<p~O*}BsH&~LfA9>d1_>p^Q;UXLsee1A{6@9c^5fjwE~&oD7~!L#`#gR`!{;U8coX+U;P@Z5qo?()3@mz$w=SeQNXW(`vYzH;`+((FLR?9s618dB?}*(04>Y-`TG;Qc|FgG1-?($?p%m$IgKJ8mJap_spC73P~R;{OFt%;doD-&)%HOPr~O&qSZmz;l&(V2u71Fz_K_8v3(<*4ItLT^Nx~iiUO=O~7qmbJO-VNY^$vrok`m+RoASW)v%};=rTWA9EIcf9s^-ChSZT=UmMz&1)|8z;vz~%&F7aNb|Xoo2_F{>aMq;&mL{uBxq7h2JUR|d7s98f8(Y%jj;!wPxRb^CUE&7^Ky4Bhi4w9NstC-dY)bA#ap*epQ7t5fk$G#qTEB{{1oTG0(Y{TOle(aHhq3AjCKtt;qyUp;b`kb@iy=_k=qYWV-H;3l(k3B36m!jH`d&_%d;or`4G>09Cvn&YR%kGN|%r5`6l(yYsX=KXuI=aGmK_*&f;AVh4FZf@7&cW9<{>Gn(~QhGKOXVeP`I2Sz*$p2=u0jnFi)EPKI^JpKIR<9`z?RqbJVW<V;UnqxU!I`BHc8@91pP??KOUeRlid#)&317c%PUbVHFay$)&x>t;x{*|EF!cs@D1DY(c3^fIvq`fM2T<0ow<PReQz>mfh;jy^Ar>Fn)7$foz{&pXgTm^7UE#CFnl6n2*M9K&PSCmTxZGVY9a*nhXP+65lgYj%QOg02Nps0$SMX>Yb;vTqJ%h>{7dG4uu|HTqrKaeqR4x1{f&XGm`-FKBOh9eGa1#XQ`J?h36@d*^oWe7hr^e<4Y(&nlsQXK=?d?uP4k60b<>*-ZoJBX~2)DZn)y(D?$#_qsv01bafyv9syV>Fzo7dhA0OlP@9L?e8!TKsKGu`?@}!g9CeaRWDn7FJ@e3m|LOs#9Gr{cfjGlPF;_39}k?m(=BuCCg9f&j`W?7v8OXfd(!Ei=)BX~bsOV8_{HhmCzFDfk;)r|MpA~+U{3HM-Kp8pP3Ue#bg!cw&bj4^^`+kgtqkz%PijumwE{ZRbO*@ZPU*S8Yfm=Ep5gaXo;Ewt-fxZkgK{OuZ>bqesf`fRd8M2V_C56z2UzxbFQ)7SxgR*{$u7|u25&g61)XW!Rh$9a#k>Zcxd0mGSm!=;6X*=;Gjn+j1$=6e#4(+v-cmw#lKckUGH86zng(8Ahu-k$cEYU-+u{Xer@)OrqO%U0(WaY3`x?=Grgd@qU9z#urel*$>ci%4Hl{8}C4c=N6eIkP$>E&;-+w&Duiu`3Z1*LVdW|g?Oi}yCL@7$@O7$)B67de*)dizCtXO4Rb3-k(M-em-U0NnvW~0*?<KU?ef~BW0$+_1~)3!AEye%m(Zdq-VQDB9xU4h}Ik{yw!ub>G0%}^iI)<AgX;xw_I<>sGZc7J(&=>$slhS*R?D`nME&8WDx9Ld?3AQH;YLUkLJ-MCS)#^`!W#uafJ3o68#g=F=^eVG~a-!kP}K(!lQ`MqgYu3RyKQ(7Q%GF35V<9yRP)m6l0R%2-$$^J8&g<_Z4>WrB=lSPv|p@IE!35Bg#MD-4ZiFD|z>Tv}EKVx0EfTSEu-|+qwkPrRd4&5sH9k{C{b}RaRREaWHRg;aO{JXTOfA*{yTX|vnFI?~$r*j~>Vj5#_Nf{L^wGZdwGzuzXtz+o7#8hm)PKuT7d3kPEu%U8RtT9&sIU=gp$RJPw=d*V%s|A{h#sW>Mb?|4*qGMDd8L?u4-ArfPQH&Tl(<+^z0Xmzj?-dMcvXiQ+WR}6AhRi8rPeoVNj=}H*Hnb>MP)2}>**Yw}ILDvZLycL_dScdk@ms%OABWfXacBM}!7QV*gD|rn*bTme!4{olvfJ|ap0IX|;1Lyje|J|sUGW|xY*w+j!gQ;t`Z6ofvt)IDG*QuF9|EvX^_lgz`Hnx6Y_<~NhzbYoH9q4ZX>D<TaW2dbxsTtiu^pnDF4)mN%j5$lJJA&Yg9X^9!S<9f9+jD~45s1}CfG8YQS?6*EQ*ThEAwFn<Eg1an|A~D=xD}DaaHeHvJEHS7K`cUSwWHT%apJU1gT<+g`fDQIyF#5n2!X?C0Bxmdi+z4G|@h9K7CftW2iJQD(=(QD`0Okrrt}6$A!<+5l;H&2xN}0DSyA?>p!J@ZK^Hg?82^4kLyE;;#mFJ8H%&|wVzVFE~wdN?-?M2iiIlEPK&K{)_1`$%=V7XgP~F_x^k;0QxUs@E%?inuCwQXjX@_#C|TyQRZP#HsaK0V@}cC834t1HRQcI(j`<nimheXz+Ma$B`69IsW}Ky+5!`e5EF+d5bsx`QzyRZ6?+5&RZdV0Ug67+{)Bf*ktlf~=pfT<BqL@H4H57C`HH2!0a#eN{tWKz+f)Q&)zFo5Urox|Oe&qYNMf(k(Evisbl{fDsR>gQZ8<j6uLP~kdEs*Wq9NFG8m^{tz%or}#r)x;c2kyx0T~7KAw)?Y^y}!l=Nax|q2z+LVL-kgmvWBq7h%ZHaqtJHiD>nbNgj~qhu310~@_j?cJ{HPzC4Zh*#xyl#>?zRw<%++KiUC9E28>B!x~If)T!{7SxiY-;dm<LQsAPS-gs}Mvzp<{oqq%*rU^~-Lzw{hr5BT|us_qoqkuT*bWMSj2%$8(+$@pDg<3B`If8N{Uw}|g?pY+;6CG(q{Qj>mDpKPhJ^`G@4WtAUkpR0Y8Kqr97S|P5C{oVDRCUL7%K*s!}KhYWFn^1^K3;T%AL0!T0J5?$I*J6o8xA~(durA@>h3-n#Xa2fh$yEzz-QybH>wYVJ(Cip}&YO<<D|i1wpis9;X)9o6SgzP_t6!6;aug9hnw`-m0?Rf->)JP;jLvXu`fJ2HsIccTXkofqvG!W6yd!U*ueDBEH}9kwxfeR0NsP5N5Ij|i_2cCE5MD$G<2<&`thB6kmL*c&$m=vlYuL$*jdpHMU23fGg~_E|sbgFCdlP+8n6&C@U2r#h*23gu&Z1fTY!h`+_-vCIyZo6K?nJI0QU1ORt$fMnrz=)OsI=8uSEzMVwGN}UXW9#;0&o-z-OZXF6Bu3HUVi2(l-B6|!hX~Do`G~z>b`W2feL#znAl2Z&^Ky^f?=UWvH$R(DIyhAMKGy@JTqqxV;0=(_3gKC+jfJ+2-Wp{C|R<nih0~n%*|AQwBG?X?AgzLW<HUUvs#Na-TTjv1A#C{jg4%|o2KNlUD^H?EL@NF!CC@MN3r`O#T$kVGT1NkI0N4W^baHTO?A+(u|bKlDejZTt}4{&MeXaIyQZBJUDdss4eqyx#7YYL^cmY@Fu<awlCi$(@%2taEg49)Yc^+e3*QjdWxQ*=?|mCwZEHqd107?0CKM4|iib-!=!%VzDBnVCHqGP43UwNv?8K=um#nOT^eTH48jEYjLcGc1Zn6pb+QBC%#D-q)k#&E?;&K5UZLpkZU1Ch-Yiy4cgN~t~9Zl#?c2n+LM(FS}!{KJ!cPy7qpqsdn6Sd<oink7s0P`V~siB<K45OeCLgn3a&SNN{XR63%eN<Dz5xEO`S6l7O8L>gm&aO`|=rv;GO|TIZGo^TKF{jcP%XG!AA}g;{<`8#5NAnlzYV<w29V@GH$^CE(Xiq3=yg{8!pD6qsLwsc}_e%HVC95a*TFH`aZF66R(8lyYQB_s!f3Ds_G41gI$Zzf|mU?+Fl|9P3yCMI;wJeHTZKc$;F#KPk&jA!wzn4lh>kjo?iL%1Ixz-oCsN|6&r3E{vsCU%lbS!EbSwF~}U>sno!GEDY=k=>l(NStA8~P_#&0&R(yr0F0f7Ee4&A`#FKlGW+ozAR(<oz4S9*xQFUR5IyN*^5CA?H{2ZzNc1V~zDvLl02i_O{BVen!XD9BOp#CSxy}_fXG4U*$bj-b|@V@4*R%T;utHy5HzZK}zN1Zo##9y5FrmYV(0&i-f8p`G?hI^_gehlP{{}i@N4<EmT7^Kcd?qr3`FaBLCHVWq~C{pLY9&Y397QD$n}`=9ifMX~wJ!j43|Uobq}U&OECx{aP>6?DJ}9^jrz~{_^Xu^@a6&RFx~}YHC{VEuwo&cPfrpWyoaBQBzcv><k~;tIteEX1z{jZ{mYgVagRoc#o#2gDDit3)_DiuSIUzrh773<J{7@hJTAF=7~SJ2Rp>vk4cLslB%E0;usjYL^k!yF-<nna`iJV?1A|nHMRS(b(cNpyf3W#c2!5!*aggfbcIrlLL72`e~#&gQckLH1Lo8o*_@?01!=x^fEaS6ChtTqR@mpAs;?B@tJkhI=3%8W+BVcb%j`(3xTD8~WZ%{Ag`GnzGdlns^^KV@+d|a^eQ>+?Dr)*8)b1^w7#7oQ`JPNleN`h)Bb#k=ZI<riQr6Y-dPGr0Cu5*Al%+(?Me9f38j5oUt5vWt86|`|3a0DWeoNb>DZ*k6ihh-qS(>lRa$dSKx(x^R<3-f<^Z4+Bk_X3RnKDcks|{prpk(j#$<a3O1TpMeSoT2)lzJ$(dX|cT1vZ*I-lh1D@_mZk7w(~25#=-c!HV-LPL?_2gx5chAxfA5s0TBfqr?sDLilr_>=Q8o`O)?E6*_j1<uwwwv5JHF0WkxZL0BoSsJN>slU!bN<buFj>~Sty9QPO2{qV^6mFjz^#pmRkLey10ZpWa?%c{q&es9~W1bKmmGr^gv`#CGSz^uf|W@VTFOpNw2tcc8+je6TvKgsHS!Z&o4N|>&=A<uR`WueY|$rho;F6u{KIsQD-bHzG7p<oBKNq;wbthZUw6gjbh53IIH2I^j_y5ek9Dt_{my^Wqd6haRfQ;WcdXjqeiVi3jD{~KykVKRojq7Y5_!(u1;rkYZh8IK8-F0Lij!KBJ|%usTq9Q;l8NsD(s$BA(M(}vxX@wGfF5{qT1cJeby{1WdgGmt|4E22H)TyizoDQuUTz}<!dLxmg~_b;LS!o=%gwYbUrX@wt!YTOT<bp*DN&cq%#QatxVlGT^6kLhF8*{J*Io5@~+P{5FA<`T<W_KeKT<Nt47H`n?UIt#`1JNp(S&xX2(Z!k+2RkMUz5yx=4t%7p9*b6NN)@u#r->l)6aQBY5>(b`jA^+1<sLH){?jOt8c@F<h@epFuZSi?~0^7Ksuo8sm=>zM^_ou?{#ZV^Eb48u)=@a|5t5(%~@6PSs&5<`?{ZVV7@?KiwCg-xZZL(3Djld<wz&&ha{o?s?@4um*lB+U)YEQWCh<uarhrljopJQb;oUqTadhXBqM%+`1b?`fc3cHn})>695d*}T<LhWh6O826#UiM|y3cXkKDXi8JlR@G)4Xp~rE^X3y1SLAM)7&?DdYFe#LYY-egICs)-%;)^s+DL{IUM(kn$3_tH_nt6nOSH)!vsG2PN<;LTCyTD7#Fg&FDT;b%6(8xd#4tFUM|JUeCJi1`2sc8f-0U;OMEpjL2}|%tN*?NlSBTrscHo>?s{8pGZr77#Du?)wfszxS-n@-8U8b~KDp%{OR08vm)8vs1!YM+uFqAQg|fG-t4xZqR;CO|e=jjB@3Y7nHMoT0n?cNY1Z5vsJ<P-;Z1X<K^oeV&P^^{xJ<Vrd#Y5)jEVIi6TbMJoYJ1my>>t+|(}kV;PN-;NEks-f?9Pe4r<vDK23f4J)ARcR-YH`gf9S^)D>HVcc~PZCXPx^6hUg3Ib(*qy&R%KOv2(oFhwBP--k1B)MlyI9Ox@Xc48R;fXBrcT6z>Z5;sWl;#Da@hI_vL#fTgc`y)H2~eq_BQhDFD{H7l8ta#lm%#9?Xc`JpvSF5~U0zPCd0<fF`6KUd$n#3q&Dfq)~MRpXp8++A?`;F-HnPb6Ep7@Z}KTi-7u_PU^;xvgTlx#%NxT$45dPId(tcjcq6On@8fZ{Xkc9!Vi@S8CqC=$utO@dD1lz`++47)?b69e2+8BXSgGf2_cnT*-Te7Ze}#&$saGRiDfLNySjWxh(6Ib+cEkJ|P$y$}HZ@RwG}-cU6mRw^gdb>U&H5uRIP~m9bD}U-=jJRL{Zw-FvFlP0KaYPn@#~ym8hWXQuIo#dCb2cXfSV^4gQhhH!O%P#^7q84l-8V@CLyebRF(arUyB$%1RDV%Ac7o`O<o7RP8lC6%*)m)3Kqatnz$D6MNny+!%Q^&`c^D^?)p-jUG*{FS{_vmZgC@Xkuvepsah92e)bzz}y~uPbbes?%$>W%4;@6mwqoqW!r#U-YT{G(Y#VF~{0u-!<7m@AhrVLq1|>f60y)_VEL8^9R=H^4;paF6*mU<v#*Thj@5>%@3$EWAsT%ctD9=xMXv*dr)E_s$zutiE{<a7G{5A${&QS7xnxP>|s$^_i%A-t8$~C@WEgpRrmF{T0H;uSnhclb~yxYyXb#a{v-4B06912WUtz4U1{0R*cza$MYc%dV|G7hyZ7j6N~Uw}$uLd>`$D<$f8;(;E@uJX^85|;Dy_d$I^T4MS70S9V-~KSZG*ALz*N0AKcr^tPVq`GxC8gf7;@TkI@fKXHePqcyzI8j?w-vD{r}gtPVyP^uc#UPbWEM$l1nWAy6vXec)54W^+B7lH5Owd_dF|I?n5SrI9%Km>q7;W{|eu2GH59_Q`CXJ%X_2cO-j|w&GCS@!!+zHt#Q8>Im}WLgE8sorpu<=={CZ7x9)V-O(z;{9eN@++S%j&bm#PYaR9a9bkcPDVdO@mo!bY#aaarNP-l;n@m=%D=!tO+d)5R?P1uK8NJyVQO~BR@*zP9q+RQRCo{xZwtc6jxNv}!VXlaAB3ExQHZBdL7xgLE^gy#i|(t2Alld9En_&0+U1{lsp*zYzSdzu8EV+YZ$LC@cG@cX>>)=f7Xr$0Le=?qMSRycPPHwAlU9Mdz@+;nz?LigBnH(@lZYrk2W_jYr<;{f#tf3Kdw>GbG(W3cWVY0c{{lq5S)G>xHRP5S}`>*dkK@9(Tr%AGfE-`@rv{uwr$e)q_XP07rLBCpe#*ncxK{d<_1{u7vy{yK)DYK6dmgMtwEKSFx01#?KmiM&h4@tkY}*{5-T6uDq~vVDrR>Gwp#8t~Pw2UenCZ9I3NUY!OWYz6Iy7tp;AasIbX2aHL}1{m?ckZZCNshPISrWiFcsIvV+&G}<BRD~_OP>;KSyVhn8RWHHcRn9E#dA<^AX2*w;;$8ziBcbpvaH1RZN|yb#SueFUHcOpZa{W;T{hUSlGwK%=Ya@O~Ut$&&{_ggR*JdvjC2n=x%rC4D{CO`wbH#q1sPAU|Ebcjbl;hD|$Z;-R#o03ad1kHEkB6tj|4ml^_5c2Bcy8+|dw&2I>`9z9dR!B;@7F8z{d$FX`j6Y)A^x@ytfCa3RAY|Qmv=F<W34yI80v*DazgLL#28P$|3TiCo-?Z(|KayH0@J*wb-`Zt{RV#);=jS_dnj>P%PU+bUxE8&>=Cfnl-FX`EYxs5sL9@K+p|I)7k!)>_q-(=zQT9ovru;mWKUMl|Fzz(fteSdF*;np`0-k>VvzofjFG}@*$C@FcCmE^u6ju^Eb3&yt8kxG@CChS_$N7Q#q|T;3$6{E8*3l6-(*RjTZz3dVxJWL-@y4`E?LZ0gh|Lb=8<040|qjASZo9~ko*dAAl08O#M@cUCHrRzqav{Xi)oFSOMxT5&2n<36s)OjL4_d4-<x~|SX0D-n;h5D&uZ8C^T~bBY%V>M%p;`Q*fo4Qb8g}HLKO`B9r&*Iu=y|fUbkMkE+O!Nl)F+q%kxAN$vN@D=U?$Ih_lUj#gyOEM^AqQ&ZifF;Y97!rCe|JI_yb2Rd(<6*%x2(f#sZ2SU0*)Z(*HsJ@Ecu4Q$?%?@$Z4hDiWEcgS%#xW&vqI(-M(A4~Q6)m#Yq-UFY*0+vg|18JCIx(BciD>08LYHoF(V-(<Fn5#n6{ONZeZoq2%klvgY_wC2Y0QT?Y=)|@4yw+yEJ&Ma#+Usii>s()dU8ujVuD@>F(_a^Buj?MQ*PR^w^SsgOcKtmfJ3lJ07ymJR*M5<G6c`}b@H5wa_sD-%F>ukV0az*<nvK#hiF=8)BpV|32zCvaW9B@1!TUu&K-9<SJkYbRFa!1*+YsRW`0si@7>j%h3<sUZ#nj4cvCR$n<-NqXD_bP?s?W2r&jRNy)n0iPCc`r^ryb9PGPZU}`*`WzxxnwzXH3<-1}>b=^%V2DTT#!U?-pm5>jm)HkGfr4;12Tq2IFwQfnS6%{zt`Y5|e+6LtZyvhcE}ls#V3iP0!BrhmwOb?_Gom<qUSbWhIoJQJ>^H&2}mA;S*ws_Y$*snoqoT=W^e4lnPmFvo-}ECouG9V9DsS=CGH%_prY^VFPqOI!#CCHr;!Ae)>$rgm-hLo{Kuqvqk4k{?>+e{(Jg8IUD!Rs{L^rqZR=LCB0^f8e31+<bel>Q}ImLmlpO;;i9&*9+YGHubRCo?4^EIfN?s#eVePZ&F8SVZw8kho#$ql&#53@`9bSm$2mg}O5j|VChiJ033({j$xGP2-HLfH=snr&-DHomhQ8BdJ(e7P;Jg}HV!pQVI_&z52lj24m(yq4fKB@y&$r>a*}#95{5H0j(c8q*&sE}ahkfQqkvR9ZoXspfbIwJW-wol9F}uJs)8N%?1NTLC9NZL8(Zso$DZBFwJRrXpzU`LpBYrdLWY6COCQZNR+=~Q10CVsNA3^bTkL?TXw<S0>*xo=*?F{Zx;j`g?SDU4Ve`hS>J@CFRs{|GBZZ*UW!tPx4QN>vS%=nS5?(I}<bcpj>$DQ*rL(pXPy8fn)I%$YGhkIkD53zxH-nN>*G5m<H-y?fL@wAxp<h(6<<Tz+*2SU*Uzg6pl7iU`wG3!8|No=g|7m}M&%r3_|{_tb-yKT&*reYmgh3rMI(JIVikwdCHm#A#6&x%L#z1sP@92+VOGuLmyk&$C4QpQ{u+>v6h^RrW0FWh@5-#iBi+o)LJV9_6mkDU9@SqV&2ymCcugFB|#ZON%+C>mDJ|8z4yk=u1`Hb%vX1Ni6G9{yO((z256ys3Jk9D`D<6hjeexsS!XiFW^)SF{gxA^3zIX1(a_ppJjhcFKJ*^DM4sCr$Rzx9jJb?0<4CCFIzG?$@9Yd*Z(rlEdL%;qg}r4~qQ6lAMj4XVbYpt$?BHi`fyxcX?cs-38@WUzsmgo4*NJp_1}PrC6!;(Kr|3Sln0NZ*Z!qd}GRIQ@q|&JUr)i&WXY{1Tkkb)y^E0&t90DRp6Mj{72?5tdOa3geaWseLl02{|;Swv#8c4=4?z{oi=Y~#9vcGNki5W48<Dw1gw99@x}U@g-~^?oSm0=burhMYWserPv7|CcI!mLuEF2)2kS;;wUoAJ@ZWZQ<gnyp;%L|dXOa8kR?M@M?G@!&%RMVx$r;>f%z53yxmaHagdNrW=HZdg&ynx`a_=AI@0GEp5r6XB0M|q)4x`xbO`ltliqL8=$anXUv$3i*`)|P+gB-N?-aNP9+ZvYf-veh~8LtYQ3wU+j9z`t?_OvPU2zs^y+c*9^yM=on^Rtql(69&OXWBK9>vrFb3CsC5{?TSU&AdaOUs(GT!_c}G;-mPLIkP2axymt@nF4nUejYqlySv*`y@h9*(8s0cp);@)Sh)nbOg@7l<GW4BedPSR=<_n$YS_quoY&lfUwNqIHoT{(?Zjd>4s-w9UxxqB{nLf|kE%l$_Fv4vzcHUQY>TMB(Y{!*Jiq_V+>1H39?wR8=A>im;X7XGJy2&X^hOzr|EA&?^2bdx#?RKLE@~mhd6Kyfa?=p@?iqD^Bet>h*k+^0HccZ()?*+~&n3F&g{Udw?n^vvyKVAd^W7@mpT04RI(hak#4yZPL-Bd^aErC0_!_phoO`D-eiDkteX@%-_UIXV4Q#=4I1ke-F2tTLfcL|^emhwSj7Yg21>Vg?$a7GF?=MqplN>PQ<GN;kM*EKEeMM}57=X@y{K)pLmCAfm#h|L*%d-?R=Enc0-zM|M9A~8GQ>d++g>9aS8V&l4bVny<E~Ce|5$cI-<M~XB_(acNxgJkB5n>#!Y3)Z8=W{Jc%x?%)XvRCy-dfCc!yI+sA_VUM$1oY*4|8$g@P4$zq{<$!olf}f@YxicrJ|NfXS5HD6Q1*d*N%Q~o$W2|@x@s!<Z_QT=Rg~ACt{o%Eq=jo$E@ZH*MV_Q@of2>^yM7Y?`BP;-x56&%Ijo)liv;f4tZ1kZdm#qa`pO_x6)tN$nVeydD08=%;N9E9?S%10LKR4Xym^;KDXKTFWRx>RM7ZLgxwM65O!SpWXy-0+iLDi))_QE4!f?M2h<yxrw2+;i)TJ_dOcsx{++>Jna^0S*!Ivq$on;0ufWBL*gcy;C%+>55A3g#rkd5qpJBEcys{gPb<LS9;81L71Lcg9?6s>oSc*4Ra;}@s1@7v>tkWK|JXqAuen-9I91g%yev{W{^%*%ihYQX(@)@?kz3^-~YHO%XzhpL8-W9~YcenYBc{Uq45V2Aoe->hffvU-r=AN)-F{{SP^APCgL983%G#L+daqnM4(c8%}Iync?R?U1Z_Z(-!W^Q;-wup(aUn?VD3g+%v)cR1@@M*nQG3_hQJQ{a=kk1mso(YbK9>*$lKA)wpf6?kjz|ciJU#8u$v0kH%+S=V2>NVuEQA3XO8uGA~-?3@DR6N&(dv=@YdH4}H-$ngnv|lMb9IoGU{}5-2>lK3YrI4d++oN!MkwfS#?v5|w;ScjQRMmfuTAVsF>p+97-&BYxj-@&o{3&pnvQMHvYo?Qt%|K)tCGXD9s-6yP6MDv5SsyXJTlKgyE-RstA<u4At+cVe?{u>oE!F~9J9=%C?lNL%^q_vb-WRIm&{F-OPjYFA`}n~+2+lX|n_fTpE_!BqOe1O%$Ss+tofYq894N4N#&_v!NcV|z1-b4S&-*ybFYr0+cVV9pSJvLo3soH2&F2!tI)IlP@rKsd8R~xTZ1}xM_j|*J{yO81r)|}TspPNZ9M$|gPv-Wj9+#;P4hQ5jN_I(bK-2GIZb-TR;4g?}58GUey(8)#g|jQ-vy1f^<wLUj$sDV&wR|oF7n9I$K|R%3JKLk>bZ*M`ljFsk(_Lq2J4UaU^Ljmhi|BlD&jeauGQP#E2krAt^ne!*#jK(y&T~n1nTx8mDCe(geJDq1O3f+enR@459L;m7<@X`)RjVmu{O_o#b8nSvl*XN>wc`3U@^#eO@EiA89|*mwehe-bp2KI1E6*@de6!E&--s~{_KET)&H*E#z}m*lxz6FpxDmvHp|GX4n3v}ox$J53tfG!V5POUs1N%DEU)(%q>+{_axOU2ok>dfsio8^=X<@$qsBAIfCH4HWXK!Uaajjmno-p6{a1G6|$3dLs1N56QH~5_8=7N_=)r=AQg0r|5-dj<io?qk4SC|T^HjZ^byz?xvTB<IV<lG3Tw@#76syds<g$Mo)_s`qjw4f8^L^sFcOju?^`%)WC-d~>o&1Qi(CS;pQx!fD~r<gB7XbEY0QLo`#_0E*<nHgtM@Mo@Kj+M6MT8{8T1w0DhgUz$74RMaD@h0kPv(~tJ1%9I6+lgn@>b3)e?;_W*SgSZC+@LQixcjm?=SI!}h}Vz}lsZrRxqhZxsO%t}6Xu!bdzL?=Sj$iQIrJnR^Jh@H9nT>>`?AjcIj+mWRvNjXx?kq^iO=U6aIwbaOB>VWT$gMcFg@g}YuWu3coIk8WHN4x!d`CM8P|p6AW-&wBe)?=z7CG3*^Wq^B{64>`V?y=Jc5g%D}V2{&HWJeEv!rEa-HCD&NXz3XGh%IUunKwJhNWk$nqc9B3U<bH_L&lM|>teRPi;R`4<_-8$EmBQ&G$1UI1$p@?L0XO~$~_tP^qh>|BU#W#3BlQ}R8!Z)5g}^-J=#;@k#(gcrW6oi6uDxu2(es@zX{Hp!>VIf+?=<T^uBX%2ADtPsO${b`-gZY6rPY!BHcv2CHdpN99!9;rTozyt(IFBQ5eT93^1Ws(DFs_d-DV=Hp2f}hiCfC>{JV_>eUNX*2nDo@Nf=(zrx#Nb2{eN1Ib&h3tvQ)|5#cI7DgLvltLIjdpEGW*TnALBXUBa!1;sJqg0)dM=4Du*@eJMpWk9Z%S9!tSjkCuP=u;nxiZF=}RN&B#tXV<s@=zV8-2@sQ$~){)nk<1F}iO*4sYb=h9cl<mmkgZ%7q?R1a(E^5T|p55JodlQHsqRQ`3{V*9%(Hh$i3vfi~{kWnXWgA21cmmr|7262CIAvGmouOwGy^zW^&1we!3(Q{Tt2G~I)b_MqhN=e%9wWRa)aMzC^$zXs=s8p+W~1mwmA#=DCGV}x^4^;8QM$Gf#~Md**X}DZjfWi5$oLaFH^U+iE3h=c5$c?Ss)j6e3ix%he=-t$$dp@<-9Hp+l;E-1i@VVHG{<koWpg1HMV-K`$;f)A`Fmt9T0c7$&#SNc;=C}<E&)cG)@cE*tWl1e%&?f8FETb*>!+J_`C{GCYCW%RDQ*M4rN7xM?A`j0GwhAE4g0+(`nw;DZ6iN@PkAk4p~ZWC0Q>Ps-#hHGUXc7V_)yB(y7C-nf9@aYx4vL@<Y6&+5xsiguJZ5Y_?h)_-ov`8zGv?c(3&hLF45l0_6l+4H?H;iNtkd9qH;Al6Zo?@dJy&;=YNyOk+1_F;MNvrDW7GZ7i-@_>+iA_tl*Tc#z+@qXYqXk@1mV8aGx#&7h9m&-@5`<SoNzio+g14)_7*Q_l5op#R8PWfm@97(dAz0e==W1O~zlF)ooR+AG4kQi^Q`<wD%Tc!WmmULYyIM@72EzYpH*p%olKebq)ZDMdum|<`Ov`)A)ZBc3Q_XyhwcRbIxnfOe;An^7?ZL$FbsGSC2UrvN{#!RbgWXxPK@116XU3Z;JiZ`rPCjF7aeo@Rt_iYlY*`Fx45xL&smMTAiwmhpd66&1w#EKbLbJ_p*8v_lgv@LG~2zoQzq)J)-9q^=H<7VV<QtW)}ELp-D?V*u<3!d`Di_lK5ni`-r+6zs{(SRrsZ6f%Q;x!lHgJIfd4%j0;=fqf|aBa*Rx$iq^cFzqVpc$lmV+53IrO!@Mu(eZbC&GmSntY(MKi(Af~R{k&%0Obxs(<)5hA%bF7Va2Y>tB<7-UHn>+`L%l})ev5o^ynh&o7{4$ttz(}OiciuKA0TsKtz;jib(HVNxrhYbmE$gTANY*t`+GG<x0V9eyG2bw&SU8qD8#X>?E(%oJX64P5%H_2&tx-IRdsU{2W;B355=J(-dM#C^VN5Ct{?lTKO*0+t>IrqydDCl!m-ICI0>^Fit*ke4)GN;Ch)g+WM}ZYfOCKNUevA_mo0n~&+MImjeHj8tM{@pYtgXD2fmltyjG5l625-={Eg#hGfpL2-DWL7iW}q^!Tzawjh1Ih&QF}zc^MaIuA%Uk^g87)t8|CamsC0Yf$m4joHldrDZbKY=RSjNJ~-g<{5enI#affXIjXoj<6NKO8B)Cm%z0A(B=B}wzeL1=2G@w%OU4PCw$I?->GLdGP1kaldDS}84LW}ReRy9x47;a)O=^eUwAX6S;^}C*>vjCj_qEd7y)*dT8VA<E-8ShwS+ozwwbyNR?rVN`VYS<Scm12FDKZ!Hf%SK6+JhRt<K^H)H)l7x!Cddb>D-*|>L1a0xH;T;jX(Z%+dbUfw^_qyI-5RC{L$=w7PcqW<hP7Z{}M;ruRf>!&gb9O4*#O{z50xU?6->ko7X)Q^rO?e#7$S*_V3!BOeX$xINs*`(|2>F&(gY}XO!t_zDZ8J)7{+EkyxIY6LEcaU;96|(Q!lnUQfHRH|w6-bH6p4%tp@C)6al-cIVzwe8@+M&wUN*t}TB5v(Sn{&3}s;pZ2<Yf%g?SbXVobqCV9Z^BY>-@LAQL4Sb{Q5#by^-L~giZHLy&eUo+=pR4L;ze76<cjNBNxMESm!&#s;zTF@3`w#eU{oiA(KmDFN`u$Hg&%c{knGeha;`7V3y<%Mpb-NAx`_t`B?JgP~@jeH8c`Kgnl1@AQ_S>qu)ZOjPY1pY1UVC%Ai@J^CXB)MR!I7~U@DHnb3s|Tod;<OZ_hF}N(fiBKR;W?XGj%vWX5Bu<#mk(9=iee_N1t$)@A-4j=oyLit*$TNGZk(JvHyi03qI3ww#Sq|kJf-|^@HOdp3u7fjdCQ>H}7=y7?U~E$qydD9Vg<hg4T-Qn^*o`*2EPyKR>VBtD8^sSdx8|$Z-q)M${Li-JOnRR@<5Q@sr=}-Fn@bZX@2chrYyoI$Ol6M(%CIO(K`L)K^xut54O`|KKw)V9nKtYoa*wvJT>idzW!@(>}U<&u?#VH~tW3peD~k?YE2f?$WFlUhmz!;yey-*L1$gPT%hM^PJnpaZKmnj}HBPXLkJKo<9?>X*#zz-|_cuXZ9?fqkTj^#B*af-}HA*C%ZEzob@4p&cv3lAM5uZJHy(UtFWd0``OB$?Pl-$C}BhUl82Mlv9X?-uLE{?6WYx;K9lE+vlC}(Gp{L48MeQ@Li}H?KjYWFzcZ)*e5={@EC#B;jtl&|(78~xy?}Gb{64I*UXM|mtm?xR<LghJ(c>j-cBv=3G;NuR+p6mgT%Yn&$$O~#!L`EGkdOPGVfWb&9l5Wd$I`{VYM^HJRP9gKSSe{E>GLNPv#h^swt(~adL9oOd{gh(h$1(VnEN*4&tksGb(Rr*p1R{FHS3^h3i3RU5sTh_UaO3?`Oq`|Ts`w8*E(xxbw!cKDm#LGVS7*hl%5MUHegl7+=;LO@-;UHk@txAOPit2%q#q_v=8~LqF>`W9cmmI{zr1B^X!<4LvQoAM{&_`jZmMz$Z_-qZ9c*6hV@&CUX9F6de5@=^t_b%UzqcHV4GdU4ZBC?BiCxK@Z%yMn`rns<pWE#2g>=GmtNB;6nqD$m1K3DYqLq@gHdyX{z<5<$EvJ{qiSHa59nc4=zo~A$r@$|T4}G3sEO?T7m<5TgdHnuNforFME!*QW2|D1p~79Nds%<r`3O;SdfY1;I$`WG&(aop?55sR&l3Gv_XRlADb8r_YgN8nIs0GEeK9}Db(Lzpse9o3GoSh*`r5^s{V=-+t|wn}Yl$ASc)#?eY96n#{@1<qm&R;w@wa4H4b-B}vi5aY**^N%zy5o?5B#3a?85K4skz&$zb9SX>v&hn#qX`{w|h(Cc5<yEy-uR*66&~BSzDpA2Ao2p$a%ptt%zmCtdtKPEwVd8Qzt}Ub*|4S(s{T2%>%HIrE`|sMz&KW+<~ay3g6Ir&E|Pno31?HD&CXvO>?btX<KhRAJ_*@X^46JtdCZz8`Iu!T@ZMrB=-XsY$NK8s29Hi_nO(dU;NBlBOYsKJc5}myB?p3-UPJ2ByKL-?`(!p^jUOGF{vrK*EmEtKGWuQ#7qg-p?HQw_$@Kp!E?`ahW}g6IZ^(Ld3DV5kPRKQQ=a=oJzy{9|2b~bu-+1*rg)K<>xK29$ZveR&$u>}M#om@<{7oP2;5o<e@5RSw52h(sqG2<zI#5mgXtS|K2Xb2vBUM)@{)$7x|8^x71?l?>jv8Tsa!P9W?d_0YUy0;)qH5)56jPK+3p<kJ0*Huucf-3#L{N{DubtC#5kmqUUNa~PvoCn%?CJDTss%<V^(+MygcKqNrnEKnxQmw)Bf-cJtWN5x>jhf_<7}QjoH_{&Mg7|{T-UOAHrd0bx;FORK%C7`m)e>nP=QNWsV{dcU8@21ABwlzoL$#;rh$?mU@OOEn>Eqhe^dA8Rky(qt2^D%}UOA{u8y9Z03aadxd!`#t`ZJrv<H75o1D&VIyXuvpv+YI$2%YuQ=N#zm1RIh#ny0aL{kl<D&3m+%bsbYucPH>t?L%9^)F(7Ygk)uLpRnG#(j>M_ucYb0#^P#(Y0KlYS7hq)pa6f!}xp*D~Wpi#W6_@8NTxbm>v+5q;k5JS#t@^Sp76x)MEEjq{*9-(N9<DrSdl@IEl-4DUtOQ^;p!*}lUz!ahliYayRwn-1+r#pOk|%illT7H2#WudL#5(H3@Ea1%-1C-8Z&=Gu47?v`U>_&;82%7x|pP+^uGvz_|gskn0--(s)HU-o`5&)P)|$~N;XYIFI@K1p4&R!z(*q8^a(axk7g^UaxF-cZL%M>!|ZsY;VC<1NG5;JrEq6fs@_GxN6Oyr(!9VHy2e-5#^AC}<F?UQE$vXt9;HUvl<v9=@>M8L-Y&s%f)u&z}7j+5X4O4hYU0p$CxXNIDiva5TJ7Oq8vu;_+pUiq%~FX5c*^dG3FTe)6;A5D>rhGTyyv_Mm7FGi-shuld|_0aq-srz&UUyk=JSfqPQtKt3<xmz&IfhIOCr_L_g|l43BP>Eh3E&nwh$1qTby)jh%|lO4We-lkd!OMO}EEIaFFzAd?P1lLeOUoO{;WUf0yqZoR1-FJN-=Dc|(zUceZ%rC_eTQ!f5+8(X1$XPi@;Lj8}I{Q2B3um#4K6`~bPUrb8OoA72u6*Xbk?Wvo{BfS~9QIYdtk>d|Z@s27jXq2>)i_2fu_uhN=`%MF>igpR#96ykFDlO=n){dKVTFCr{lkl#BQr60qGy{3tts7haU8@Nt!2M}+=KlpV}vOeYl_|i;%|kYQalr`!n&Hg8H|nLd9R$G2Qle9%LO;G$NvIs`GdjFc9BE!w<0H(;3uk;{5*59?DM$+or8&EfCbkSVB4$WqZi;}Rb2-Df?mIoHi+|cX)|>n!MQuQu=L(lDEwFY4zJQy%~cd;@EM<;V>mLqUf>_07^bf7?em-RcfZJ4By(NnPUCt{!IpB)p3f7D`CP^G@Hzavx_bsEmA<xF{GjLXVxB}hbJ6#!T&b*)Y^(VcHB0#uT&cwxb2ihK&%WJdS^%QISLSk*b;wJzC^By@X;|g4)<%n+ci>l%dg*HB@L8T8W4*5AS_Yq+8CMkM(+%E{i!+^S_S~r771tM9-Vbv>L2fgZ94aQi8*|E#Uq-AsQE_fj`-SJ^SCYT=6S0=SCFb+GpNz9)&ecahC=~pJMXd65F1(Gz3u*eM#vN1kD675GIcu!=4*N&OHw{D$M8im4&FT0v>}D+S)jUT*YkHQky5eo9@pFJX8vS|Ww;Q~C63d?DJ6Zmzavr+(XNhkp^Ft<L28DSYa$Jw7vtZ`r_}pGGzIOOB>;|vH+x6M$43B@nUL=?spg5LoK%C_Uz$6Ph-T1@gm45ynZ(lb5`0?%e`;Wu_jb6U*|Lgz#m!L==f#TZYCGWK~h^qgjLM)bEL`pqyr40Ef%G_|=dRxY=tYo*aGw3>`FA|i_l>{n<Z?7ytYPDcGe!%2HdXifl?CNz1m(h2?q(Har+~)EIbUi_#eahtrEVQt#M^KJ;ZvM!nct%KLYYeluT7p*C7S!UIv`E7A0XX(gpqON8Pz&wV9*&(ZV*z(%!Bo(*OWKaODATlMcwO9zrPQiCg8AQTzrTI&11j7~LqA^&rXbI#$J=jAec7YWOI8T+O(~IuUwgD#`G`TUCCx%Fl2Q{w;?e*8<Y>=G?(s;+>Y5zQ)|4r28DaC?9Ai&m?Jlu)iZWf3vF9=d!c0j2f$E&0b-Wgud;#tCDrx-?vN+QxKm&zr0>hvVPG@p(()P^pZhmu8`lr)=&?GJxawKIvAzi6`E}8H_+gepf3Tl+|=I^nM7S16=IK7`xSTHeY;|ptY1O$jumxF?%+$GOxF2kiuOuIiAhRsy<OwsWYEQWvsi#D?%vF!d>*t|B%R6IS*1!X+O5tfjHI9u6w1J-6rB*-(<XDJ=+cR`w$LXKM@)!;-M$eBmMyi1{Fx8WxAKW`Mf_KZ@G+1X8IwIJH1PBO8aPLM*5A%wiie3;UIC1G@9g?)Dy*g?aM==GiUPX3O99I}vz$jhvmY<*EK$JmnvV9K_TARv?1fMhAT&5dJ23L}g{`p(c>#ctxqP87y&f7o<VNKD+=4*dqFA8y^Kw{_^hC@ng=^JzrSn~Xbw<wTQXc>5t*{{MY_h_{Ec&dD$TsAxdLfymF8PndPp$u=)mPjZ$Uvugz%pwkNspXejN`1GKW%X2|oJN8@93>LGBB`t&zxTc;m9FzsEp)g)xqoKo6A3Yhh9IHh>%e7dOL0|k_XPsg|F@LZCe-Cp_O-h$WaUdAlN_$mvGBh1vkh#tf6!bGH>RAP?Uo~@E&|&S>uIjJrdfb{my|L!tPr-VE|A6(~$!Ejqg(@czpLg%o+#YbBez)~B-Noa{?DRD8U2i(GZoQtS|B@&Th|?3a+~ozg;261YoL_9Aam#xyaqjfm@onQ=cy4H0?Bv>;j<e4*r;H_0pJD2qjWAOvjDN57%pBrY%g~a<-oh}WpG5IRQ$0ied-6OAuNCv|$Uop%*RM`~{z}?|ba@(gk>+G_jrinYF_C}Y%^jtl$Hy)7>vz!76t8pgy{7ztVy~x6S3*5Y9uTOz2FJ@aPps35gAaVxB>${E>!%9+KJnXYnvu2w&gYukyXCdY^l+O`ns$l!{&Q}$g`Qvhl<Ck}t%8ode9w($s1vOpqwA*9pMUGAV1<mlsjs|+F<-Hs3ZJ<~S(k6bypv=<VBmkq&(?z?b&sE94-D%H9VNMrOY{2_7X>s_feoSnv4{hzuuqYgGax5asVnYhwu|d3SKsf(f@7+8{^qw>k7HqHwxMLt9wi^^!p`(peq#;7JgBYwOzp1f=SgXfPu+V>|0vhDQF8%@$BYMd_+dMx0)U0x13s>1XmTbz>;JU0xduqVRQ$x6!#4Q&IMDq!26W*Y0%v;8+5&tbXQiDswC}u|+MVYd{Z7{!Q}8y9ZjN&;;5ELtCp7V-HWzfFHbQ5P_QPA-6iir7GOLGP7>C}_4!!Ai>^bMKGdsGG8@mzN#3(og5&aj`syaReAmrGiwe5Ptn$y<;HkB0k6ksnn2&sM318p;@$OFnff}+M}1Ij#)D+H6d-D>{tlFppzJF^<!o4G$${(04V@_u4tCL83Vr+eHr)}CiRD8pZKj!d>|gG31RWDek^_NEa8Ur%uGS^E&2w@3tQz0sl$Zaz0gFbZv&Wv1n+2gsv%#deJnPSm-;S6fOr`E{5fqR(QE;3tjir06eMck}^sz2g1~%s$=syM+vpa}BEP3V|`(?C?$5Gz!9Z;yf@vee8JaEMUJ|@ENHHzSVwG@JnmWHD}{aV|I0fy4w!x5-?wnTh=7a;))}k*A>qeNzR92EVa`)STg(z&bM*ST=b#@KR);N^Zpn5QM6Z$>U;m^BvLC;yC~fi`R6&lR3=oW##mPCc+>trt&>l&&gAuh5{klkg#H1r|8F7B^8#Ohxx>bRo?F(ytL`RZ^HcsT%-MTD9RJ3?tDn`=-cJBOob1jh(Y=!F(w%%<_%Doo(PPWS^j-U(+o6K(&-)BjYxfbmcA&djj?wMIGZJ%7T$zvOv{`PgocHsSN$*&<i98=Q)MFaPTakTFIQQZA_)m_<8q2li-jDOw<(TY6UFiu{`Co9vwqCgw-)k`j^<pfe=9O=&;t`%JL>~CEnp?2f8`x}G59<-Vv~uht_yX`6VQVw(){r@fGc9KAcX8q``5~t$#&NHneiw>sZ>xIM>m`0HZlQ;TIP?kp<Mgcb9-f7%d`}3Sg2AYntsTD>XU~1&B3|6e^!)JK$ZovQ{%Pkz%zu#|!VKxvwbSNJpA@&m!fu`Utn|4@`9kZI>jIb8QuTU_<lZ<pGEdhq0fi#llxxAz8C{|leQU;E$WH{f9{ZVBt~Kj+dM|npWo_!-PI8dSd{p*OOkH-7*Vz;cqK^by%=~OU`JCeWF?+j2A#e^(8T9eXy4vc@X7}n`t2ybU5hmT#g{E$_Za5T21nHFGs?9D)*SY5QAk*BgT04%Db<U>Z8is?+UdCC?1I5a^+;@FFr7aa2lpCDI*9Wpum9>kC_&Q(rDYQ4}_cm=&N8vp4IUG=Y1B}GNk1NiLMLv&tC26g3rk-I>RNVkR8^u=gwb|V;;`!YF=Cv8!x10OF7kPFQ*dl4`{8-pXxvpDFXkD0knT6cD`GmPwp3U19&Y0BXl(8?xK)`5lE?UsNX0EX(tml${+l^h&8J8R;e8xM)-jmWWA>V-cYo#Z~v6MMe*V_t?SU1C0==F)aZTZ|vd>yY(kZVU4b<k7MUt<hfAx07FP}0iL`iiR8Tdjw~9E^<n7Z?EU2kSlaVjr0K&PCsQSmIVSFhH5spS5|g)hvR+!LR0wB>p193l;Ht&?twkdzE;3+0$%n^>r{b*ZKZr7+8*3B?leXO|-jjXtfFr!Av{Vy`MGzHH%yKQ$HNdYVp53Gk!?KY-@8b?!jSY)cSa~=#tiJW+xbnDB>T9t2|p;Z@eX%9QQSf5nAb;H%Z;j23q14<&*Zfv&Q;IZa+AV`_qVClkuccOoQ0)EgU!p9WP#tS94tX^hxI0Rr>Tl6AR;goZpB0QVuBoT${@&$7dX;JZJhvw$Pxu%QQYMii>Y9ybtvX;ILaNK0W{o^SHI3X~g}<iuhaFec(D(LEkzepJXnKdNF2}dw473>$Uov_NsDy$!;qDH1oQJJ%};C@x+`Z^QlpLD*DTibt<yiw!C(D)dpJ6>?0`-Dt<@B*)7_{u5QPG{S56Mb9Yf(iheR{Imo#-aOSDrH2*i>zy7INwts??A2DOt7Z?_K2A@Jhx2KRlW;XGZbK)oQ#?1NiwGRbek^ASWCV$m#h`mS=hb?T%9n9Kc$@Wrw_mXQPk<DE=g)=2<0Ey6&l>8Us^=s{Qy;}AhPo}LPTRoG_MpcK?ZG>Ty#2N5gHl9h;oU>R(`R2?|ajZ!(*22~?_01<;vn#0YiuLbL*3+|EtBG|f*5}3ZXFAl-LC@;Zh0pq6eLc$^xJFaYazXjJo8oy?xc0N`C7{u3iF)Mv)x9m8lWX;M6`$*VOZLAWnS+)49M%%NJNwCn=a#)Ezm@T7$lPGBa6s~Vj~D#e)!Z|@tu=ylv~{?V7&OT@*yH&ub-i%o*rRRO2~@7%Qoqa4oF|+3xSu}JUL9n9!1^k%i)tP37M1<8zhk_=W4ym(yswDy>gs-3#h&Hgao&GKoHzVC&igyg`*fVAxCFSLVax*l9qaua>-|)$S9j-r>?C0vc7`W+J~=tIb8<Rv;-q2Xro%6Y^=J)~7%|-6vEJXY-hX1OH<|5Po#_nxiqn5BYT?M+^_)em=gn%qJK3E=qeprP!z3{Zm=CG$&HuY%KXu<MiANm%9rOK1#C*=*G2h=Y-=||f^ogNMc{c~vV_Nj1f5&=%$9f-(^{mKErsPAqmP=>CNk@_EtxrMPtx>dRla>C0SZ|1U??=cp>`np0WS$4QXK#Yjz3R-8-Iw@J-JciMoApQ-+lM%U*2diy&W+$v<=;Q4oT+5IGwTG&SWeC#D4iU^<CS5|GY&-ERy8W(I5)@EYxi$hcs{}RFZFIp{+IrVB^N*VhwM{<1ICwJ_!;L5`8M3=(_2^<8p1rsD`GO9@4UuwBREWip8Pv=%Zf*d;)8?IV<^nIGMAC!rF#KC6VF5<cD-eu4yo^_bGpnFFG$fw7USuRyAQZ1W40jMhx`neXCvq=%-qh@Z_j=*t~2pLCH#gM;88IE+3k!o<*qJpm3LmZaYylq+i_}R+CL}tqc92@;|^k3rxr#xjj-=D?y^}K=S`m>0ajnTXMe|c{}J)s<nQ?I@A&T1@!gesZJsCggZ|SBdJu9xu7sKU)mbR{Ioe<}#V{MGbulZ>GpYMrtVN0#uHft5nT^V8ICF(>MqCPQiI$4D(!z79LE;P}tKy^b{r}Lcl-irqg1&dj+SC_fL6eK@$>5`iTRHDl^>cr2cB;akUB&Jvz*SFbPP(>(Xu1iarA<C&7e;X$c6RkJnVr-b&CcZKF?!c#fc~!U{axStPpa>=CpEV>>zV#JOqf&iHLMqB2}KUcc-S&NTg4NowLL8n$B0=Q<xg}>-J8Vm9~^J}_5tkiTaKS?RopM0IVe1bxQ`**`?gh{RpB^6kL!vt+m8H2Lh;U_jGq=m?B&^s;&6M#97$<rh2#1Iz0LwZ5Hul{x7F{<=2dJJ?^$oaSY!U^L1>><$A`Z>yHd<G-kpi$*KnNFYZYR+MpYdK+;O{X-QwJDne)+w9CjY3OF__4j1w#J6nszfjdMfzf}O#Miu=At+zSq?06cyJ5wD4S?*uIa8T0UeKVuIc2fNZ9<?&Q+7cwWbE6!kS#v7G6E$S?SZ;Cmv9_GEY@cC-(g(jH6PdU_H*Dl7lVlTieFo(a1Yrx%$+WMayZ%(TH^ap2V|E}ZxUB~-W9na~s6Sp&soTPgUqwYEMZcah8t2^`AIiF!^xA5;pHmA|Dc-9n}L6+(-VcxU}G8sioBJbv3NTj08eoG#B(G%l2X7K5+H6N$n5so>NjGvb6pVgaoW8X7vcFqfOJDLf7L0@rS8ze_s4X}_eW2T;CA>hCSpIRN-Q<#}y?nZNFmEO0S`+2S4-V*q-ZSClEikR;n-D#}<s9907nL6j(2AVNTKJO}j`^ek1?h7-q@X3~pkuirJFQIAKL!8*$3N1M%q|#@fq@5ipO>1!$q>s^N2eZ14K3h19dQsrbEVr{eIjM7YqV;*~?V9xeY44#wusnx}V}&01kdD&~J8lw0>thfNPfjw8#`96+rtZc`Tsm|9ChUadyL6H&QA478nUm@)ZUl)=KRCN7omKjL*9*5!gwJ#6&a5aO3Qlf+y5rgVXcLb+-IGK45ycPm`NI>%XEn#0(OKWo8D7@hbX|AnL(9=-s6~xziWxv?7sN|Rs1x?Pbf#~PV{by=zqA8;*a*F8<a)arNPFm>(0X)FLAq=N^ghR%H0d@qTyK*E$?Q1pJ9UZ~>*M~=qW9XgW(}Q-LB&W5o3%ur@|j-VSNd(Urqg%mZU*Nt^1(CEaME3qes4s7UZa1SLF#W^^pm5Trt2-~UhW#S=62W*>0Hd3Zra|u^cs9OG${4iT!T;c-@|KQ*rMXhw0MS~9(cVit(on3H_b2_o?Y5YCmC(&yJCmV6Mj#S&T9N!>Czg{gCjj7t<m!AbZEW3cuRTnDWv@f?1}BBfi_#05tGUIU+ndm;u9yD&{>)_#~#Jv-Xx{pUw6}PZQQ5Wp7vqv4O3_`jypc>@6aB5z1W@8{ztTCo+JAC9-aL;Ix+PA?a-VJ)N6w>b``%l+>ARDdpw_<!id)14(NAp5+_~J@1CSiO1~>28=N|Hp1U<Vf2o^>Sn+7w?`<49UrvYa9lbVys^WY^mVBbmab}#1@WX-&TCKN3_j6b$TYsddrU-VkA)9aGj?ib2U2}JChwfTJ=WRZzk*~6Xq-)dJr0<+2?tDhi=Nw&-dqp6)n$fz?Os)`_FDzu;Tzqf0p?n263`5rbJ%L*Q`x7zuNzM<%9Pui?UO=~MYt$AHU%w)bLcL4XZ}J+%GJjnHyT-gQboSH?^$7i<j9a6?IfK_C-me*4DEk^X3V(cij<?H)!}k0BAI}fV-NX9ZKb;$Q*z4YV1)8k{>G#Ev%DvHYFw-3H`Jt?P-*P9j=4iU}J^!|H>|Yxt$xWGAe%#P8pV{K4xIM2MKFxN1f9j8VUOXL5X2+}TLo-#rP>#1oy~%9qPVdX9F6dfCd29L>$ndq2N=tvvs7q!QCZ!$GRiLXL*kLE$vYG3Qb^(PYffq;QcE}V{c<+UY+jr>NkCGsD=ryaYo6u(@Grqp`-*m)>U+_Dpy_q#R(E3e0YcylJlkFwQr!Q%Wgvq)5TbJZ=;_VpWmq#H}v?P~0Ba^nG-?Adtb7PG?a(8fP-j05+Pv*kkhTf9QWk{yjr|a5F#$MN^b)hR7@8D*C{kMj_*)Hzi&)l}(1&rRhpZe{8&EiQ#+bT<!3auo~?3v-r_rN1_!)2Z!B<r?tInF%Xx&0Bjn^gpJ4x>sYt`W}t1g6qSZ%*XyDb(nmDKtsRM5b<MN$z1nZg~y2O`)n!A?;>+wN(1CyBC4V;*P$PTi)~O6R6jM`{w<nJ%{98aeV6mA%z!6mlKft4mYk%t}P)~m9EH~I`qu5W7xso(mHrf8qCSPCf!q*bnD>%BhyTKPoI<GP9Q9yKlj{?+ZmpM`z+*psR*qNxZ0&Mi+Jwek51g$uIBLz#>u55;_GaC={`gLc6Q}luXgmyQo5Jqq9_#embD-ux99l@xs;|ut~3M<Q=e{ZGOUd$)Cmwu*>n#2v^MiDg?D~Jub~i*_B`qBD7^Ufb8Yi;zmc00X?GoELQ2i+x*YJ&?{SFVLasgFySY12C`WEJq_BzHv_0LqiN7J+R0AB4)(1kyjR0XwdQ*2P?4(ePLR&X>D3l`?xTW<tkH2t_-Cm2S>dB?D?AfpUR;M$wgLGIAJIlJ$8Exn{(*0~BC`5Wmzi~<_;{>7FiPoR?aud1pkiye7?I(rtUYEk_9sNV;frs`v{r>H*|5lXNA!oaqHx8gNyhA!KWHDY>gH7$y?+q!90xvKq|Eu8n`fsQ6*`!d&qJ5(fc}Ah4n~eKpqvsSVB@|+LD@u7dY-~`PKzmCzZBF*7v#SN^ghIA}{w$!7@`lofa2I;(rgQ#+-(L4?%Yk3x7Ws#z#x*K*+b4VL%9fy|{8ts-j%Ev_Jb14q>3y#GyIo3WBx24}n`~i+>^%8C@>>zz1qyZBv76qU!#<yr<G3?C1LQ>Zg6_W`jXO((+;)IFMLwVIQH|2hFR%-eI_<Xg8QF6whwEeAY{WKn)@rNyw0XC0BOU*O^`dlOjubl}n;B9%-96J8qq{@tC#AMdr?&|cN=xS$@mwX8l2Ggv)44+|G(#+ugp^j1|E#$-rPa}_MtlDsuwF_!*aFQF%fNiQXNmYrv4sfP$q%bDekG<jy9s}HgHrmYV*@@%XC>M-#`7Vi*odc)Ceu38ouzf6IAUlajiWS+;>?)V7Jdh11iIJcYbpJye?d&4_WLbsA)hVzyC!d5x7E2n*O;o%=}gG(bD8NagCtR^MDhJ0Tx?>Br8DS@D3!mHA4nUp$oB1;U0<gZUu>Od*`(C-gm{|L`!mJh@wh{2YKQ!o7c|CRNPj-5(>bK|qqLjsJjW?GYbnLt$#h5ewMlzme}xbGDce@h<jn;o=&hBXSK95>m)NwmMQLzz%;ksP&Ox~*-Ow6QS{?10h<)f;$iLyt&6;j!N_W<2P;5)_9r=HoVj+}aJW4dlW4g$BD8~Ma?x>J9TsUv0<e|m1Vt2`=_E@0y`^h^>aZj6b7Z))PO3EI}JH1_iGt~*sDEEZ(S)FWFJ?u}&&)!(HzqHmnvWX~<%xLXsB`K0}JG&!FSAW$VmGo+<em1dwkg!7B5g^k0g1hN@)7YhaDVWdFAaUsYpxil3DF!*Yoq*zy9^JV%{3@*z`GzQ<IAw~M%%*$Uq;nYs_7LYR#(KN7_u=+0znkLBdEJ94!|8wB9i^BQT<ih)N+-hoL*9&>+M#%&y(9lh`84I-kjIGJ-Pl`F+~(BDk5bNsl3Yx-ZkLh|CEG@4)Em)jy1#x$--9y#C)RuL%nScn$&XPEQTsNySQDUlI;7XOq;%1h+$maGK?GO@O8J!crcRUc-#YwGh_gz5-1X?sI+P#VUE0TC>X1zhy`V|^N3ZLqlusgeCVRF_-DDKIUvRcn$=t{(_PQ2AVf16~bLmn*HLlbHaK5+{JmP!k^t<&j?sqz)KZm~<QS3o6-h7CbLk+DIH^JHK!XDOKu7!+fO(sXgHRHY;X?K}hKv&9^-(L^UuZMsB`1bM|A71_ue_!stt^Rp8zWw7LcFq2+*05XusMV~0KI|Xj^UL<-pWja3maqH~)w(QbBY#`C&r79AVp6{E0L#eQqAa6S&|0`1>KY~@KJ;}x5zqv$Ah}a>be$3@!MU(c8%Pu_xZU1NAM>`>5qnz+15Z}_CFG?#BS6%epvWw@<BRVBJusdLZF4_Cn+386I*sn*-hX+#)o3#9CXYP?pxXltVxl1Ypvq?2&9st&Qu(EY`vjRdhO-#-yE2cj`v*{N7pPhGVZHtGSf8A$XqlBH7S@f{*uvcwc4N5x0QKgRD)Y<wF6|@v!GtLyA(46j<V8vjmSg+9D#ZiB9KT9iA!4*amakX5{wMaB?9VsAI|uPgi1z+G)S<D61#%gqbIX2MJcG)-CR)OJePks5PM(uuo)-2gkL^<|(|0LOo>Kfw|Mp_?$MCxpTSdreH&K|7t>PBtXcKxnikDr~^(@!x+D=M$o?@a9(6YI{UdC@wa*DDR(cC-^AhYb~wyOL)bo%Fn;fjfXrC1wC!J<v1x2}ybqMWYxNwe)j23XLSWBf+eNR2a?+gN!<By{@u@xCP_y>1a-v6RH?GAT-SKz0x^WO-|Sm}vD1WoHM@8~F{uRW}q5FirklT%_v|@fb@4R6_(!e>9(+DMqhRUP$(N6Oq3;l3hN!bL8Q@7<o3?T^l*3+waofwRb@>X<{6o_J-^=a?4HZ(0!nomF}0*46o-wIem4nrNuddLKf6CEZbI+0Wf1*u?MWz6bUH*<V~Itz|#+k*7j~cD#DrY9+m{8HQY)$g50j3TPik7@6wwy?T1A+3=##KM~W4~a&25t@b)u_mhuRWaffbF%DpKTqr1~VF21(h`HbR#WqpjClwvT-87M#6QLKxcYP4}FUkW=ji~gMaX?sKO-J#wQ&MBYw+VQx5Jx2S=bDh!KBIcDfH9&&z7DjFP91aR20-)s`_z_bR?{`=3^zTQ<YALB?NJKp4_LgGhUp()WGf;f%Q(TK$2;$r&+W)a*k0>S^(b=XrrSCM{l+H)r-=Z}gq?GeUlzVtLloR!K3=2wcn&VEF@}l+8J^#dc-}C6oE9a3JC3WxRvAAw|tg4?;DaA^AFc-e@4z$?)Q(8sQ{+YG^K<)f<=bds3w?8DGK^|c~Yq+RQd6OpheC*&n?yO?UJ(`q@SYt1+(C>8nKG_}0CX?=&;yu*%PGQI0jQi-TIOJ1?KXcx5$Xh+9&Awz`KA-D;#)bo)P4P%9>oo(X)Ps`sLY7>qrs^{443^uU0U|-Z*4<JZP3t;2!8en?t+^596Z1)fV(;3xGi#8oPTXi`h1io6YrabnR|nAW;yUZZ1_b7vQH<QT*7g2EO!-9fjh_8EIA5?O`%l%YK4Y&j=7@Wh#hbrsFR)&&w`;l`Nc>EWAs{pT3C^lL_IBvY9swC~`op?_Q1xg{Hx%0d-m;<h_+(Rh8`s0yI(4!er;MKeQ~r_Vz@ChHRV-@?_wTN=L9-8t`@_8P`Y@Ot9&i7H)|%prumiZzDgxAw)}GF&a|-)IveP%V!_Z8!4RmH*?lY3#^oI1$nqp7%P8^Hv1%rsl#?b$Fe<~Kq@-nS%f5|V(*ODDoIU4F4%D()kooB@7sOydU)6Lj(cRccuP+kpu2G@uX<1JCQjGew?Iq8IAcVG16>2;y!ATF`!Gg8!w0`z{*zqH1TA-Wjn$u;HC+61)~i`LcOQLc4-OqTySe(o>mVO{WZkf#v7MnJ?rY9l^VpZrVDZ~%C2;%+IwJj33GSTl+doD^qviaHamJDuUg-#RwsD(Ra3ZnX^n1@Dmko}=dE)VZ%SpVD5Dt+=m*6;m9Fo<MUaa&b`ysLUN%x)39IycYKv1hxNjd0bFmiIGW@!h!NN$Yw*{V<PYK&Dq`7j_z&kJod@wcfKF_pZL4^zQyKQjLZt@8t1n9zFmyTS^ly|u?^<|#drm^u(N>X_i806ohTN%u_Y-T0sE%&c3#H#{H5v@?5n<$>@aj|&v(h`t<ZO-@1LSRjy2t@x_MZySZDq|$ci`l`>x)vPw(l7?2iBZ*r)rb^3N~cSGV`Y`}#f}>JxkGetd5$zW3+$w_?rz)II(LrYdpk;&X>)k0W7OmJh6F_)vIX;{mc#0<)ycv=m~JFL?I7psxAQne@LGBxA)s0#g{CRnK$<Uy#Z%DELyu12(91WH0t7_y6i|lJA?m^82plGxS_@)ClDm%wF|2+CS~re)X=8{ja_2@5el!*mLW{dtP2AWf!*MeilCmeb$eEPWhheqh(hme5HhyDfg<dVJu6k?#`95E)gGyp2A3tGOvHqkFs<iWTk{&ye{cEZ2A<NL(Y@_InN94`-YKHf&0Y19ZiWy(YF>F-kZ22eRZ4FQ)NvsKHN$9E5=gHAz>wIdVhM&xJXB$<UT9M$3IwWzeJT&U0c)d_&d1hDjC&fJ-}FtH{CkGJp-$r4r}zgDW{@1zfUo4v_$Q;4y+%oQO)V>D94yl9v0ZZ1qOCN_l(vj^?|pnVf3VMN03u}<eVJmWnZ4juPy6-#I@Y(`P=8u`1>)%N6&ffPdeux?Hh=ZQk(ML{-j1{oO0eJFg&r-S=K49XgI0UL@z!_mrcgNc4+^Ai?%0}>*4J0=uFaG>CcYixxYoNKlC;m?M$|+e#5dn7XI01zc7mVH8Eku=q;_!68M~Ykka}@!P$w>=N}${g?8soEl8ZRi!rWrlwjV0;++O?P;R=j0}pvHYL~blzyMH|=Pm7@^-oUOKjqSNkQT>yY2En?W5Yis2F#>KE5~3ZMuGDn$N=*ipx@q-_762%%Z$kqLC-dfCJl`4g&p*AeafSk7_Y0L-W*22GNZ0B1$G&<T5-T5tWIr=u~hB@qlO<?PP9CZJ<7*BHx0T&+Y4jn>UUI8!+rkwf8PFIjaT2l6Qg(xD&(}=8253`(O;U>9S@_%v$HdwHQmS|n*w`5|DEpYPJf2cPx2R&Gy3LqKj>bqHW=L;_sQDKyVe)R>Hmg1@oul<qrRZ|)xN;6e@rpbq_bqHo<sx;)KX!N|HNKaf#Tskygl1mC+$UK|7|f7H`+K+Z{r}o@X))wIbn30{L~ibEsWNUG4Nvv-BFC2<Igb4?ZrE{vr5SBSY)@4CAyou_9~xgR_=ib+hqrgd)({-Z<mHl8yRlto;TtD$akL5AL05wdfT2;b1?dCV_im=3rxlQ$juqDPLAD6TyI%imkhHj;{W3z$F2(8&7at>Dbi?sq_6Vl;eQMJ^r2oQ?-T4bFzY?^yU8vM8*ZmdYd#|zJ+aCD(Aiuc18>q``rSF!jGm7>D(IOz^ep6?$yZZMYB8R)A6(og@m#ah9k5l>PJl*G->*Nlmiwt(LbqS4H$OS3vnG4<7wDa|^Pu{eS9?G=KhZb3`DEYp<|q1ph3BHZdfZPA<R`3fuzOwhoBPXWPkfhiZ<+lE@{@f2e%=Sa-#?INOW1lD+a{opa5rv3=gS^##@?(BI%&{ojQf<EkxdG5*D;%ne|tM%Ysu%5ZS*Mb@}|2nom)D47Sm&p4|i^Vwl2DQxI%S8Hq7OCKC4fGvZ+_BM{vJa!-?vW*naKN;<E?rW%R%`qNb#U7IfH5spJ3N&~Sc&mJJftsy|n{7sj4w|KH*|QfW5atUDgV`8$}2>N@2C64CH`EGJZjXHm04`b^&fa_bhT@8ZXMlOk8cgEB3pm_z8%x$<kl`NR3MkdBvl?{A<Yf_%324BFaeak$o_E5@=${85~Dx{QzitgRV+XdX?*d@GGoglR2YtM#3!u*e53K-oB`zzXl(9}g5O$v854=(k>i#qc11-)~y)@j5-I{Lb;MrPi0{Rxn3l;ySe)NYGX0cj4o8H$&$9lezH6-un)Y&4^h)hZVy2>vSHVJ_cQ!HYZ}9w+r(RB9{^rVDxM?ii0V(Cx6F1GqP<J_(`*dG+-JQ%shN-2H{;CVTQ9TV+f6WC6|8x;H<~z^Tx|I8<faQnflRLtWV_{U--SB$FY6g_l5kOOz()C@%eGv{J!d2FJJk6AIeca^L>Wzt;7N8^B&P-opJWNg`K_jIV}6peioDFG@km|{M^j&p8N}JOP%i>*@CWa3&>udkQaZaxZ%e|Zk|N^y~LJDy7uK-<y6DLC5)uGet{mhRQJ^?zenxcpZz`gU2CV1jrj0)=;t8!h5N_iypKueJMhj1J=P{1#803sRy0wIbY0;;IbHx|6Xvm=BsDKy_ey*5V$e>BzpHDMa@>1R`(2>D<3FpO2~vMI&1PImHD}Eyi5R>Phk^dsx`>g>Vt7Fp3HgqatTOK3lOFqMw5Zo#NB87guT}0J4lpBS#LVX~n;$RVK~UI&PC8IEB3+umJRg&Z?|McYLh&=jV%a?1!mxSGCuIvS`QaS*-FjKgt=FoWzbEp~wR2y{({`eVJM5I|N3QTGHy^2cetr&`?i2ZKo{7|PsT4mnRu_4(K8#(>XdDd+zn{lZbFA{f)Nn2^a`mb;o>3mhoL#ie4@qka>UGpX3+pOr+gmRsD&E~inr87E3-f&{kEK25*|ch#!!v13I_Gc8xTW&9W&sPn)oA+P_fedafr7Z4i_B7!>T{M33;*p@<p@6+XQ1!C!nwB|1yx~c*f`9Va@~CzW9HU~@9h@%xK!T#fgDb+8v}b`KP*OXkBJq_??w#Kpt$lJGEF^Z8r$^;#H+om*Le`%i+heU+s=EUWN(;~Pmfji6kAF<RmeQuEf8Z&4*B<JKElrK1D%iXO<`ld4M5{MTkAFt-zD<GcJf#st~u{NTY27p+XnUZbEu?|^7S@q6`##}SM>WH1kLx3)(&~b+fw3d?|2qBi#^_<VJ-U;?pN5T{cbividm<i8TL^ZUDn6m<TUR48#ldajJ@GGh`<F9G*M>`JMB$4?^=%M)W+Tva|~xO7Zq>aK7ESz{CVu{VlFkN`-inSNSeyXvAeY(nt{{m<aXBdd6=yNuO4dY>r>bV7M)%f&Cv5A3v|;6qV5^B$<T9-F8It+)QY>HkWF3hW?Pll(QnRc6u><%HX5F32HbGs_GhPYXO+12C?0p#XUy`Cu{H_L6zWjZD2OHv`tOK)&FRh21s$zDJcrS)=5kGWaz>rY?acHuDeWdxkZ1K3u?Eu}y`P?Yk~*EPg?Vktx#{2QG>E|G1}fG`&7DtDHvuObeZSY+I-O0#zdW7p+|Kam^oO*5tF7yS3r(l$6n00m2O=kmHkfVOjyv7@xIb%*fd>K4)SNzZKBQ*>#>6=>ryBj+iFS-T3Fhb>bS>}(I!TxIXi4j^qwgQ>#<#|KtYO|0wsFO0trEkdNt=p#oSZvFjEcL?b%W(uNJ-FdIIZR}FyZUmZ?`wNt6DB>P&&(A+041Wl1I~hc?XA4d`>NQZL8YE8uxD4Z<6hNCY%5JTKGKi?66Zy%yHjBCL<Q|7yYXG70#`!$;6ZMuf^rL#F*mL%lfI1vK#0<@-}F+VaHg4Z6;#fwF|qZa`XE()0V=%vG1&Y=JacyInO5`NwAvpI=_aH6QMuL<Hyo-A0D{o4%ri~dx(5wTYWy<+b=yIOu7B-zMahq4hLM56=#Ij{jnbx*8jqDeeJo;pQo?5VA@*jLT8!Q@)6Pth|BIN#z=b4kD`}kQkP2~>vw`{b)t>l)7G(pSRbC>zt!XW=hp4|fBxqe`6PaPd)t0H{`2|!%i$k7r3C)8Kq(=VX8f#F$jUWlyLyDt&bJkptrep<Lb_2YjAJDsI&x53q$7{CSA;U=HAz_sCjmuLn?i^J1O2(J+&t14e0Ni*J4$t~{baoY3;k_5okFS`V7vPq!d-n<lmJ)Btf0gRwKBh8idGg~^$n{~EvmxMjH+cPRVQ8^p@fi>lq<K7_9&%v(3TV(V8=(h>Nza57-+3G4^Ux1nUZNdnt(>E1<N$lCTH1m=%FjZMU*iEk=Cj3R+f3+QTMh+KIm(_ng2Aa^~U%9RH=Jkhp|#vDU?Q~i8Ig5Qy?gWnAQTXtu6=T>9nB`Sw+V-r`IyXa#?JLZZ-FqKj*|qnN=ypIPY{;Hp~5}iSx6v>Du3#Da->@GWq;(niK*<rHsS5s#NB_(=DG7#l)}RJTNJHISQPx(uyj()XU?xB@;Fg3KciF7kF+^a;)=bZ>ztrO9hLApghs3V6t$6se|DnxJ^EwyV^IO5lRnG*J1^*L8d5@nR8YstGhZSaVpipq>5F$U|Y1ap5XaTPo?LJTiKddtcOyW5@)LKAL-eiV73MAS~kL^hhidy^)^qsdCpS<pF$G~Pb^B6DeV_2tT6_5p`2FLj)J|Rut+K%%(^{qb~eJobFf%t^lidE6=-@Y&tBFVFP3-TgY1;-WVTkl7C%c>sp!Mdj_UT{C5S-zS+3eFZ4`0<8lAFA<At+Pr9g(UaL`Si?#Q06&X%GyI}}wD%+@l89Q#bI2>;*fJyB}?WGaSfDXZz)J6_jsdwNPsJ`f65dfEO_q$!z-0RJw-c2$;SPEK)TaWD6(C*kzms+v}wt&6^2FH!A!_9I%P1GKIXvTIaE`rhv(%x2DIb;ECw&q4_`QyMPY$LTYt27Rd#sY+8q9RP}RpekC+lE(#~=&O+JmBP7=P||DYX<!YML}7jU9ZE%t{)q4BVDv1go!T*|0}xWv=O7l*OL!s{86aGQAD#Vo>32ejQ2OpWeZO&s`^{$o<B8FVeR-&)QDVjG^QzCbw^@A7iLUx{-<JCeWiLl4T9*|FpUKwKzKtyUU9SxD800F^N{!eoD@z-1{W9F6`3rClqXl17r7I|Ye$GaHeq`Q&2BD2p@%oZoLz&}I*w_vIZfn(ds^PJogpBK>l}tG%sk5ZbTG-7uQ+Y~Pfsv`q_4Uo|V4v<-0p^g!T-P8k*XeN&VMR>Nev@K5K<_g8&4DO|38nj&4?{Ynoz~CQRYfovQ#F+`<2OMiYAUJ7-?p&Lv|B41)=;hkv>Lu85D+iTKjD6b&lzo`PzZf7%gtnW22Me_j#AM&sKJbOksKkaf(yIf={aoywRWMJx5-Kb`wUiqG8YtGI94yItY&J*3i9GmY&bhR9@K460t7T|Mr(8fddIWd?>6;O5j~A9t{<K&Z--xO`))AS&#JfekyereMIXu-qMSby;|W~mD!>5OCdG>^*}(P-H8RzPUu!mCty2oHy{obZex_vEFO<s4el#|Hrtnifln^(Zzs`GmItQR%jD~&HQa`RyjwkzDgCC=K=j~CH?cN^kph!ciY;dJg&cB-m!u-BWdFZETGV<6be&rT!rVuP_K(#_&e#XRmE{;Tgv{s>N4ai-f7Q7MVz|}K;Q{mp=b)c3+D;r9~m)dR7gWviN)jWLHop<w!Qn*=Ph*5H{XMgYQ8s>;?p5N2D9-Q08$uVmu43&cI%oXMId`;NBdrdig$mKTtt_{Tk)_1Z+X*l1!J@zMht%j98R~QXm3}vpzIX!ALtlDc*iSoKxkF3VtdR-P&{e+SfoxQ?%P_RdA62d2HHJ*mFoBkfpQLM=<G4?V)S#sQn*7PPVwuBjC@tMz*ZA+tWAw~_46id{?lKhVJ5%tR4&V(IsDLhv+tQwIkl!s+oRDNcm6^fB$@)4Y$im~g)(NONh=nN}ZH*3Pj(z$0lUr>Qdpj@jIEVX#sjCC+p`~5Ky`Iv}Pr&3|myq}fhIpnh+>#Vx0atqk6ZB^SFu`=26v&wn!-fyy2z;rCItC#QN^W#Fr;r@#ew`a8O*Y79R(ec*Bzo+M4W_Qm`jlb7&1Du!I@h-Y)m?h!--l<qbjpPB+Amih%gs5-HUzo8uw@<XaNsuq>D7KHGY`$4;+gr+4^?WKeRo6$n*A6J>Z;jCdw0h60q_p>V9xY!oVJ{dVd>r_4+@EZbIm($)2<rPN&KliEoIN^^MZYF<Q=^Qpx79!H2i+&X7SHZ`t&tZ`d$YKGKlP_VN-J)4yjs)qd!zRKtT`*(Hv#d?{k;yuRIRKksF8ZT=agU`hz$|vNmy-kW0~*wIgY0|0+dEi<(iqWSDZVZ|GNA5ZtY&aj%*Q~L)weM^lgZJ9B>T>et~>+ynjHPl`KEuCvV>Ilgsz~<Z*oec|SRoabZAl82x7YyIAHlt5~Yvmg)@wet+FRG8BUEjJT6@zhJv|s9XFS?<B?Pf${gMz4eLDR5d!IHp;D1+!H<v!z%Unr^*)ASKqbsyLYYT-v9OfurgkiROE<>169AT%!_(^p*l{n!d%K5%3Swu-n1U)`2TL9FGbJHF*u-<$O)%Ul*>n#MuFVUtW19;sm-%|Fj*Z}w>9f7D#c4&f6-(9tR^te^X5BQ7pFVhysN*TTMB6gx<><tYqPZesj3BQ<CTXC=MR+W>YN0HobCT(@7=l+SCVbv|I)AD*JmRE=Pb?``@xutVOwH>g@p8GpbY5ZaxZKH`t>Jfq%N6~xVc=ewR_j-QKMFuF^J5_$hgdyQ=+=%81IGiMV<1FyiQcCBOM<Ni2$GK1%d|B3?P{Wi2##jL6$z0WY5r*miCuyFI=$vSMpsp+J1?8vie;qrZsm-j(Y)oYOGbzZirfZFI%f;K+4RAhE}?pu@}9TBH18nJDSvkN)^&;<a1l`Jye>ZwC;Q1$O4q99b%8k_Ue!Uq1U7}dDQ46UuqU*04iiJ^K+EO$4+N(Oa?=VrAobmLZ4!xzdnf?UDk6-*C)7#a=RZ;%x3J34xm=Zp%-<}>NY*Uw|37^PI`dh^bpf(i4CUpCr!#R_&!l7mdO6mw?Kd9Y~8T)y=Gd4x}gN?P1nn-x5+-HZ)VBoAMKO8^51=??|)BfXyi+R_r*brJPYdMuI^!+xj)!>kTmL$4+hPQ6}+dug2yP6T!^VdY|)SK(C@jsbgzwLdwuG?uR7N(@#=JA6BNZh#_K_q0t(lGZbaSPwdXqb+xvG<5B+~<pIx2r?AH{V#TC-MY47-uJ$tx1DiwL^y{|gULit=9VZ_^^tid0yjR+FIQ2ib^+-mC0+%G>LuQes-y!LI@&SV78j}{bb&4eDpZp?IHC&jwsJmMa<N&)tT=Tqrz^`w!`<9m0a4~-t6yFUv1KUu>|{)EQ9m~RxI;HxAiJVGy2X=D4NGD1gV4mAcm)no8(HS!+`oq`S@LiS}XG^Rh-je`P%Jqr7}z{k`l%|(7T0<sULE+M~{jH0fe(371Pq_91<N&1tlcX7S`ws-!qenRrPiQhezUuI_)W3!0yE5|O>I@_w8*RwswXYKj#7n{gyQQ1E@T{Bp+O)c-jT_)8*c1G*?#&zI?0`eQhCtewD9Kkk$Cn}9IeN`Tj)L6x+b?=Gq5odXLoK2elW_~R`>eo)J!F6{hq?UVYBepr`G5DO5uZ+<fB0qQgKik$m82|itw6(uOoOZFTskInUtDIx>Pivv>ihC#<A(X~d-{+ABImR*uDx}q-IAL(N3|;4ya&<uMdvAlDv9G52DD{icugIkypG(+`heQTE>AmHcC#lw%)E*~vmo%S~KHa*6@99f8hVrwWs-vT3-nY78$L^U=lWu5@Yx_T^HM?8D2PyYC`XQ9tHjYx$JClDcorzj|3zxm|^tES&Mgf1#V{YW9OvZuX?#^w{I27ouv;C4|qZEH7#+@>}vr-Rnou-!4_JkQ_V*Y%h_X$jaJ4^TEC>DElq?Z-b&oMecwll<-!B*g}GW^(EQNl;;dH7VSffhy}Jb`DaeUl{p77_QQPS+*+FPhg^dk$009#6Zi2fKIGUc{H|g<Mmg)$^J<aBYh_w)aBqLc&urelZ=@$!gdZau)A_&tEOUe5{vu6Wnc#W1{_k@$@zNfGg$f9~5jKM&W?nz_?P@tGX}AOeFG+^)o$M;BIHbq%O>3-EXK*AMr<^cYboCp8u$&aW#E6fz?jVSY9`m>lzhQGdx;c(Ql{y+iNW06t;jDea7c5dNOUppqBR|Kq+Kymoqc%S!ScL@_W*Hq0fU{G3jYcrJlwR)Jf#$Y~b8O#{TE;qbsjV#*z}Bd<yG*8vpW~*c9+&O7Eii&SO2Zp7zMH9%5uw8iD=j*r-JF#5Gvmjm<UX*&0SS4N%v00#NOS7)=~?77fFh_@2L_*U@WY5As1fy65(W@9GAq2RrmfH)1nh>>*Wd#8Zh1aVTN*c!Zr}8c{C_=>6Ni(f2l{?m>=vPxs~l@tLU)=+111pmX-{^LVx6_)Rx`!-7<i4XV_gXBoN+nd(0Mt-F-Rt*Yc<)zR+T!NH8UR@DH-wxLfV7w_W-4M^mIHqWpi!@gc4c5>rsY<3`b2f0CS<N6`34c+N6Xj#o@WSMKvpVno(T%}anS5OH4x=~SWF88CP9>uZRlZ<nryY+y3Bbx!~wYYa%oHr@>?CQSQGh&?WwSKufKeWl`jaMS}s{u>&;xQHym}xvi>&-i;u}Z<;mhbyYY6ANWb(*=p7g$JXzNlj6sX9*lamnV_$9ec|EB?~{x%{?W{Iz*`-MoL>{;$RM{U87LA9gO&yB+JTK#XCw4zw1iHHG(Gjn=ubx<9mc9;j3>w?QUy8}tJ7t`<7eOReZTYU%!fBEp-kc}^gmwYl%o`OL7A;%9vK>E`#j-rDl#rk~jvzZw3`mV41Rwf{OoJ+U1G$io;9&oxSXKKair-7%{_AKL$#>x0$2-@@qS7Pyen?T&2zX4e_NbRPTRmi#R+%lO{FjlC@$x_b`orst5I9(H^4p|Lme-?5f6>{GC^^`7oM>^qD<z}P?PlDF-;3mi$G>sW|g$p0E!W7E*2_ZY~yHu}!!v(OqdjRV=M{l1)G^t6TfK3bQ3fcHa;LwAj4_{J`OukXjkFXex$)aUl+eH(lr7?gND2^Ncz#5|wlRW5gl>u<MohFgHg1pm4gfs?1;ED>a-jqEhx_vd$Z)xaJfv~OsR_iYXyvIYt{ge7Y&AQ%D2zzk)e@5v#+60b%6U3iXtRs}|v5~7W^a~<<96a+ZI76X->q%9838hAL$LnD0fS-*`h=7f)}0!*H9;?TN8a{=~y7~IkRJo7+GGFX!7(Mxmo_&($~Q=Sa~Li*l2C4k^hsHGfIimtuNNpYk|F=YOQWDslnnCL=F$tVZ3+^`1MP&%BY$-sIkkWAiN-Y+_!$>5l*Lu~?#a7cB?<>Z$O)6OZ*NcjTF)*nSyrFfhUVWgjbPf6sswteLWrhikT%aJ)175+>a1kX)zP7aRn-KP6w7n&nS>?s{OxRn|lPV(%xEyJpr_xBbDG&>4Zn)hg!JhVPCj8fK=q=3Wd8#^x=)V&D$r(MmX&!Qkf=ydd_b?E-$=Ob{^`-7N5l0CSWO$YoR?GRknUNo(_U~2a#n^B1mI^*K1)?m77Z3}?ddizBIRLVU0g#m@k-qeCy(on&`E^~psTisUY;ZS4n0szt@F_iIs^&pSnlA_P-JuBb+xo{q5*|~mChc4yMIBTc%5AZ90g+6X^Eh>QdA6nA_2yD?0!)&mpz-e93c1ZTP*tER(%$?;}FPydPj2CQfH_wY4ubGWJq}-(A_Yc`+qFcrMxMD4<*H0P9SZTDU&5<>3l062L9Qj7PrUWdYJq((L1&#Han&%^7nl{bOWbH*p!-Gx(C4=-kq1UHipOO^=Nld)h85M&)8E;tyx7vkkSp?+n9v!;tDs^H$`5vf$fG7NG?tp9g>Ap%+_`LuB2>1Fg^!-=!sD732*FVCOulW9-Tr9b0DC_by{dK<o9EriNIR95Zld|t$qLK20!+5{g@25bM77xPSJH<Ga!A`$22l(i~bXoVjvx*Ih{S1H6q`QCbb(S02^Mlt3!%=4)86EQdmP<B3u|Bj!;uZM;iu0oB-mvI>FpwFe@Hq)aokf#;i9WjM9{7<p{yXFXXLLP&Z9Z^?W_i&+3@Hv=>8?H`A26uF7f_s_(RYt=4?v5@^t&3}3meZF#2$1*=x3%r+@Me|bpKq65th(Gqj;iAwiN8I%L%Sr+jDorxYTUsea;HHLG^kTIE}M&UF3<(YZVx_x8-8*L252>J*e2gFWglZ*@iXkjUJ|6Z>k;3m2(gT3gnNphl~37q#u~pY-19(9wvC-z#iG%ux(v-zh3mr^q%cWSL>C)Cn^{%pnbtm$=kBT)moLqbepD+CRUqlmhumPOFJROCIk9=7`T?ZbFI*a-k2M=eV2Je4IMg*Zfszvd}BuR9uYWADc9+cAM*zn`H_o!yEefdz0!9dTiS4X=DRZ|=PU*B+@8F{DF>sx4KbKM1utx!fhloNhc*|*YCC9nd7UoKE#>frM$Z(w%+U(q6vc5I`v-ga{<;ZXSMpC6-L20T<+IMj9u6l#*cscCp;c>Kx(3{=mI%A@#^OmkKoenb@GSB-Xl_M=rl}h-`6b<ry~yjVL(icY20pCQZ5R~07!>zV4s$R&2Hjs>aKhF`og2z?-95dQa+^=I1EIzDZghH2tRK>A3C)eL1b&jZ!G(U`=^PFmwB8!Nm*O(|Z}Pd&)`gZT`CK>dZ47YmI_}<$y0kXkI&1Pd6i?vpj&XJt<m>6*p$XL)?A?dYJM%(|^Ag=u)n_Fdo+s^}a#lL?6CWD1CI+7Rbf&F9^L%Jp(RX#md()!$C8o9MP)^ey=+GfF<90A|dbDP)Mz*rY9W`>iwbz**KGFUe9C)2h=Cx};-`7V|-xCdBs~1xKMQ3|T{*7{aXy!SH@3F^j?8eYvUaz75XLJ@6vk!e}X}bC}_N*|Z^HcY%LGvf9!8x6>tL@(COaWRT8(5%5y`~6ZKkBq2@_jLV=bB5oEXAsHA51BiF>(HV(_ydy<uTCB>oz<qpg;DSa-JH!_TX+l&+frpjrzvYX}kh(bwA6<vfh?=>)NN?e^HNY-45x@@8}NGj5vrre;tBM1(g{(<8{{=YslTm7a~`$Lt~Ndx+XMeP3TF+Q`Gx*qYgB<rxfQKpXm3#w7((QP?rCtb=6<d3;8^I`qBE(1$u>&4QBO{^m9+&y+4Q8=NH@Hb-F`8Xn%(9ZIEY<`V%_OCfOO~QxwCDD3%>r?SSHzo$D{4nHrLv(m5YPn^D}|^g8lkxW_2gqkPN{aNld@;TPNA57khl{3YuZr~7y^E+9W<Fy}wT!rBOcGJQxkH>5kCd|RLPxKC%+CmSUDqcx)#(SSC9PPy{lusANJ470bP`;*Rfh#cZG@5Ha^^L+R$|D2xCFFwm3>6Lu^F8Miqm0x_8KhkIZ@EQI&J?X#88NRl*_0h8&A^)YwA910Nb7}{a<5J#dKx;f;fT=aDkNU&V1#yJ6puCvkooGn+3f<{(xWQdQcQV;+kNhC{P^<fSXSrUq(G%LP>N;RZ;>E+-pR}W)HJR@FGi}(L1op#Z+MGU2d&Vc)K?dUHc%6Llnb@9UFz*FmQ-1yFXQvZoZ%n$c42N=*&P|<S`-9n81^{rAP1n7?i+F!$`aPfg?ZNPkgF$;qu@%Ml%YgQ>;rYFdYhl0|VCt#<iQhffp{@@#+Sm2Gzk7qm^ie<hOs@-DWrEo1c)Sj+9o*Y=l6Q30>mzFta{hukoeynuiY=YNp8P}2h|G-{!A85#il_U$+w?lLhSqq8UMBp3x2dQHs|5UOkhL!;C-N|ir~>U#uimm2A=j(dG03h#N{H79lK7mE9sZ7ows8)6wEs@;uZ7l%m~8b3hOwH&z1yhJHIw$F`Q$mx=SQbmz|4hjOyDlz>q>)TRsArK_(oxbI%E~u?uT@lBYF)zFZcZV>le39pI2{(WHXdQg<{aL;<E&%G^vx#(tgj6=vNy%n{wbY`qh1Vx;L)Xt3K@`6#sVu<94c!JnW696La!#gvb~m^ZqUwum!jpgnU}z{jSrRrdaQ__`S+K5!Hv!bcr1L&feg6?;Y0ndG(&5A2-N<?{4_+-DSk;iM~-4Vf+MO>zW|*V?6L76DdhPD-{E|aDXWt7D)8}5(534d_L1K=X#~^b8=6oChPnqJs}K^N$;BuGL5A@O7*YL^nb3yjioiVJrh=^YxK~3DBVNJdRGqi=I2ceh(_V-eH}s^lxsNrz7$^z-D&yvl;K>tr>BGXLp(boLy9{<_(8tfC4Wpg1$s8tdTm->;6^sxbs@zd3yRfD^5NvOEs8BIL#OBkbr*_9y1P+-8k>&W@Nf@2T!}MPv@y@t;2DGNW*F#gK`i5fIQ(OKc$n!!?a|r8mQt<nkM84+&VmnY6=KpVqSr*fTzYS1pu0SLb}O(Wv`>4=m+Nk9hm>bg+<|+U@|T!$YR9O#k#R5`#4p3hbL_}~CZ10@bsPX|LNPjGdfHzfceWdopV2Sr4PU84U$l=V+4cHcFB#}NlnGAG#YER(I?{fRnUSn6c>q<`6#M+WU1ozllxKWse}^FxOi|o1>SND_0Wd%mOVU15jOkF$?;EIaMy^i(KMv|ff2xffw}xJVX9Wl7A-evOa<?(%VMc5?UG0bVHy1?GAV#Eo$G^|ny`;y1eGAAAsz_ssVh$Nu=Dm~De1ynHTwVLVQE`=*=IFN{!s4y2$MD{K4EK3^EoMyloO2kMYtIJoE}EgEr@W#(x!W{Bu*mn-qTzwis?&oODcyO%NurjEJdAQO^c@|yY4*oW@(UW}b{K4>bG6$2$k{M^!cJyMU9i%p)Im7gYsfn2Dk()uFvc<E6~o73o=d^r_-@na7)?{B__5>Gc(@o!sO0BSi$#BNWKHXyKMBZ#pgz+yJCvKoz@Ngipw76a*BNzqm{ET~ua(YGnoDS{cM!24=6ZCPY)s$_DJLFTZQs!8-ich=1M*|^Jd`^Iz<-#Xwm$+E!bdDI*x^|Woqpa27IuO>DWttbt({&oARp+35^2$<sK=h*G;l9Ajd-=A&xpwPMHuomEZmPb=*c7g*?AW5DfAisqG5Da<WDKHjk|lVGu2>E2I89t!@m>XjOc&;K|{(zwirBIB=dUop7b5**?{w)&o!cHjdEnl@lms#Hfhb9+~>8{6l<ZLHm(_+Kr{R$`hYvvnyfvCPPWB0p}l8O3?}D8$OpBSTxY>|+|%!e^xY043m9Sgeh%%Uzk<IHa1Jo&?RDr*@0$UWy7_I2=Wb{{-G&j3>6yAUQ=hE)JXqbPYptV_n3dIg%EVOIrf$%)tz)2?VhhdlZ|WXuB3$zr@9BLt%Krn#!^A7Pf6TSPJ*L$jSwHRThH=i;O~Z`Wp^4hHAE-hr`I+O~C&3n_SZ0VM#minw99Gud2FA)$MFNlA7xbE?Tr+v49Q;)XJc(JtDh=@y?>C*;=Jehk_LwN+Rw1M<)b<w#6a6G-dN8e!_HChgsQ+1HuVhac1jjjH;sguW5fI$i8?sxSi70*8N-q+aVOKLcVc<G4;lWvPxf6s5CvZQC&(YS4yS5+=&vL9){(UdPWC7n6_8+FEAY|WY4->on=QJFvgl}q1I;I?VL+7k+I9_1(hno?6e@r$O(MgQP4aB-5hwPDZu@Tpwx(C;q#$=Z<FeYX^1`z}KoUv}uYfWptk!)X^SAMsfW5R8D>`K1-DIE+xGa3H){1_g#o9%zd%BvN_!g(N~F%zQ*nDYcVK=UqR8)W90f=b}+po*<QQtcvVsxQf?TQx%#p-(P*N@nR2x3@D^Cuqj=j48dhL&2e1sdM?ffWk^=h)b!N05N4ozlz_XMdxS2FsmJTVA{Sjm7?053m4f&z0r5Z<T@0_m_eJI?uL@Km*riU1%FjV!R*k^%%>$e87>6ML14n3nmYugIP~mMfH|*^4;96)oDD{o6!7?vN&6sF`oOw^i;h_dARY`x-qZn##F+~=?|Gm-ePzQFst@JncM@>X`n^%G`Q}N?Kl8g>C9eGX5A5-?_wo%Ye0Skiuz$em<N*NvcjTcU52d+7OMjfb(08+InDqCQ;Akj*me@%V&_F@j0hbv42}hmD2F)i7Jd8SHy6A6qXxP(bf;6b^!D0GnRt1#!nrO;vbh+t9jK*^h;3IOB@_H%XAr)0W5$IKX54i{z$wSn60rx2DRbI$^lA04q;YSOhVzo@!iwg|@d2vP9NW!r8GJi<b!88_yr@ecl%OEbYNRdrwE*EJN)|8JGX*Ows;xU6xNfEWwQ1F~7vz|}@98iFXpooH!o1N(Zu+l@*gq-(4#~_s12iT&G#J6dZL#Mr|k>jV}ZcPDCj{>NG&X>_V$7q$Q-St{hGg+uV%pDs_Ts7K%{(gmZ$_HkyE9Mj!qC~PuYq&|+xD>U(tbub$;VD%*6>J{mb6E;DZerJ`AOmNogMqP?W;zH~7xfVaPU3LmQlM_e0e~wt2JuCn&%v<O2Iyr?zZ(D;grv)}+Tp0*J<ZtoiFVC?T?bGAO%Y+EVB)=>DFqxZh$?H47H~jTkTUfAcwysed#6AnHg&KHArVCbccG(jYUslVKsGlTQV;{+8retRrhvFxb7KI?r+W$n4|M+MoKT<`-!zdhP(Zyi4<E31Nr@+Ae-}!lg>}mVw~rP<u3G!EiSxDg9u0j;*yzpxWBasWVt~@3y8>Wq-8}$!>`{V3$t4BZ04W%I6Ce<u5}T-dV8DlUL&=l59`%vD8g!=&K4S0H3{^+`%k?VC*Z6P@T<$?Slf(i=!1FK#)Zq@VU|9QFV8{`M>-=u5=YSSf>G6m!Ij=bVQGb1|*m$+Sz<QZhz(oVs8SlKlL2EUJt?DDNwZ~)f0h7q+59$~!G5bAQ(>2953rfP*^gA~Bl-}C3u(n1WL!?=w@~ZohnGc^7pjMa^@*d8v^M!@QU%b{o6CifgT352@9k~~;Rwn+XYy49IwI5q!9{xKT=Ut&v`b+P*p9=QA>Yh`<bN0nP;)=o8Uu(l|Oz~M{ZcylizxA+Y6eAcIHt0_Pi~_rUgL3GNp;N9BujpsXjf>)Ohy1q#kd#s9p>1cfMgi8SRulmv9g4ky$i+n+pfYz%i=84?dq{0<(EnH-=hl}3bh0Uce^{jipqueAg(0C#9;ymM-faDnGP4U6y6W?GG$x12Cgrb!tgc&(S5ON(EEBb>W6C&2=ccTT^Gy2=)xR(=5{n_B@@GO-6)JM~(f-{lE6f3qgf)Fm!O32|Vx9T(TH5lq$)9)fd|kb#L-ITJ%e+5%%JR=o-dD5t$@_X1Byi2%nwRfw#pix(e=FAfr|$6;z=g=Hi}xKAfqzg+xL`fKf{K*gc$_85F%L=+ybzOo!m~4x#ISaeP1@f}>c`ke0I$453eaB0=Y~E%w*M!;Q}TP`H~zho`3yamgBoGdq)EYWx9tz#Yd?C{NA~BQ_46^$6??8-yyxY0O8vq{oX_I>0K|X!`;^bQ%-nvG0F@O<hbl>Dln!G_z{TT?&RKjQdJ4l7#J&39J<94(tRi@OOf8Z@x`%>VWcaNgCdy?~iAgzWS|>vh0(`g@Ae+Kq!lfX`pI$RAfRF}JG8l7L0sOkO)_zQxrMk8zpYhY+(Ht;~=J@xdnJfllp+W<~0W^cr@Yko5Q(=%80KWxlw*VRVv_=3RP>unRgR6u6-PK(>XS6=C9gX^6PcN$NPLNYwVkbpaQH3~aQMY}r<(|&puD9{?F~y~JUi(RQerex;2PZ+KfZ++UamslY4HE#C&Z16vMMIGKkd4O+)HUm7hxQMk038F+u>F8+lFkY%RN5QV`T_8*23O|ap-TPiqX1S_Dd=-z!W8`dr2yC~?kA&sKjmO7s7>o8E4lu<*zl*sfZ0$+B`__)C~zKBN4=U!wlN?oD}1XlSu{xiY-6(ZW$1O#%e65eTsI^5Cd$KoC|01ZF@Zt_+2tg3k%RY*+6cfv?gOKS?`np>*o`d8$3Yg*SyT_r<=>+?Q1Y?o|G59Zf~2JCOnd=o_{ZY(FE|rtdmWeF1<lXC3l#r{XN;O;OIq5Kz@XYT8?5??y{rPj_8fubml0K71b`O4OLuuNdL6h{5PN-!17i^HteUw0=<eL3Kf?8W^tLUdX82H9!MY3qyo>qnM1NIxn+C{NtP<(vSzz@~?AH{ACNAo$V4qM&XK<jYn*n_{#0~+7W^nJZ`fLY+4<H|#)|r?Hsx$tLMsaZr5)~t+xKXDk(G49cMYLw6p@EBfm0zL6Q`jf*T+{tMuvLklfMS=tUq7{$dsQwW`>(V&KYmSZE$Pi4A?5hMfI;*TlHzOnrXL(Eh^`~Yxp;X0<9G1+{z0Y+m=D*%UQ7_TMPy$(h|fUq#JLvvAt;27_a4qVz`yw03hDr+(mh)T=o^6F5!o%-p2om)y2A^~saMoRmyhK;J0oc&A7*kqU#XlFN#ro0j1!fB)-$^{*Vy)ez4RZsM%09YR0@g}1E2OEGH{-9eL4$t?`HkE(z#IfMEY-y>qsTSLbdL=^PDr7iRwD#t4tzViDyYkd}T3`nXK~mBg4=~^JjS&Iva$YNzZWYaP)_U#;^7@!;1);N<ux!u(PSPz9aXa(;YOUXPMsxRboAVJwo6}#F74EzqNH|gV*Hy{coxFc+r6Ms6g6W8m^XeATbbFR9L*E?xujqugrxn``t4*HYH}g4l9Jumj?*KZ+B1@o=9Xos=diEyySC5E~N|X<)c%hIGAF4y6?DWM!u~AKdIJ`AfzNzo=??~uD}syILk7IP{~(v@u*YzO6j{^lQ$ms*-%c7S&jHqPvKat<y@}uiJyBtj_vb4&*RTzu`c9{FY`_F`?9ZXKlAgh9@0GbdCJ{;L`^fF_eh8mBz17R_2QN9(S8<_%H$NeZC*#J_e}STCJ)1OWnV!4dS6S28kIVt+V9GT9wY6A_bFPe(wqtcY1J4>b^Tm9ZmI68RenyoZ$JBU^0U@vrOJyxLs75H?!xDJao#6atHyiWS<+BsHF3?V;{N1#fntdvhUv-QBaY=5?+wC%%0Qm@S$$T|h#k21AP=!h0&)Cr)iXiq&nDT7OR46ps_0S-UWmhl;`K3%To%Jat(&o16w?%ObhJiK#o<vwj(FyE5ZFrw3kw)9%-hH@^8vV`<ULDgaPEXL)TQ0DMwE&DmFz<vEKBV|qgX5_c~N{`^C|U($L`@A_ubkq9qp~E=5LAob7d5XJp$3g9dt_dBU9WdH<#2suO$H7;5^a2%_5I7E|ubkhDzKu{0Me67sX2Jia&;<=2+#CRo|fy+^Sct@exJU;<|Q3PSx5jiXt*WBd=rklsdNfj)nQYG>@e{=h?JspTje0O^|6V!d9BUH7iK3L=8;4;Eu`^(aX6=Q5}664+{U^sLByO7-yjGt|<S;ijRA?-$dPg5@PVTI8=-tSDJTUki*G!;|kGJjv*3-@iuxUTd3DUiFwe=dY!N0b8*gLv+cYmnu?6dvFbC$mWk^8JZjbMXNWPzuac6vG>Dv?2eJ?EJ;la;yPF`ES;;<6h?XKR6w2tF_aC%8@4s#9bWUEp5<#|FtGG7rT|(6t^NU(50I4748Skmec0oAx8dY|_Pq<&9qxQRAyD?^+T!=Ot&|e){<Nc^_ug&<TF|q~+*Ei~h?>3nTq0?S_PFFK5qc*Z8m}5AIxu|es_UT=u=g(tr6LYB{oj<I_tEky{zM*$(t`Cs|klwH8{V-bv;S1E#S9`AyEIPf;pQ7hQ9_Xgw`rQL+lb&VlOb7|Ys1<h)hQEqU>t<7x*C|T$z&+2_5}s)a+;C*}r~6T78JYSp9CcO)kW`MaHW6$Jb*PCCa(nv!KKGjAo1N(onAq3z0}%EeK(2{8m)V)hHktTMvn0|o@FxNNK0WssA`lt~1}W#JzgMyALr4L{5aXKZjAJu`7y^C1)!P`Iwa?!?o&;uRurvAtTEFGSv;x$V{|*Z6EF1#gxMW+a#PA?CAb;HSliE%?ce-K`<cBub4HgIBVaAfkFjUjid%L~HS(S2O`3`tVdSz4N;Y1!y=j99zqxhUs?%Gak6Dyp%LBC19^M!o=A1iU^iD!qOT40X*wyn*hur}zoBDrs;*5*=0_wnJ!;&RmLCOmhXiWuZd^fviVxkuhk$nM&;NBS;P5$mo@__Z`Qe`qsN0xPS}3OPgm%<<<wbDmEuY0Z}ouX8E_zRKgr(sRE)a?Kqo@?7^2`N*c)KFr%swGYfoKn*^d6&&1gO;*?lt^2$m7S{jBbA7Je=FihlNsrr7>_WCoYe{QLcHG0AyrwmOnTuYM5|cb8cdXrUPt}Rma!*^v238YCytHmt|9KH<#9!auH{W*u@$!B9`cIiR0{>bTnWyhyXZ1kD!!@-hJ;eOx`;u$ZCf$u;B1S(f#cGc;V+9+Y>n6A+klTuQMLi3&ey~pvfVU}5Q1_N>HNDFd!pMDd(C4$sbB7cgt(JO-JfV~`A)j@zr+tpoPChH@e9K7PH_DeZ#69ZsE;TyOYs7r0>6T;7Okf^0T*|r4?YwSs&7}C5bA1?7&ZlQ&n73{8q+Yy2AA#0-{ixfA0cw%V)zJk0VdZhYpwW4qX3rtVr-%trt8_)~md3D2Ew@w?7*B&%XEL?BGi~zcOdHx(I2l?~`)OM1jUMcYmy+q6#Hv#4Nb!5_$5gv{as?SXb64QC)j5BjGbfx7qK{H<Q@%s-soaBb=(UWaEC~^8q&qNwPL(h?t(PeFPPVdMJP(_&pQTP``&P|Un1GP&f8C@ww}$u;F<Vu>^3ds)Z6r!;F~#h_Z#*aSzU1F{PAaLNlxJ#7erha8Qg3iB@Z8|tSmn>&PJdocNK{`1uZhg}lEn;6*n@k3d*OF<R{QER4*ICU|FK&3*IX0hdWD|*Y!}3}bO%X9K=6-m^c=#sa84ro7RlBlJm3DQ^n76}Tl0$bNJyO~!lwH64kXZmJn&VX(~{#Yk*8W~h5Rg!|80stC<f6eAEw-1<f+Q6*O8i8RnO@xsnWrnEi*!R;hzdzJe9VW^}mZX+;g~`lAp}hs@LLYsj3HEjNhp40UpBvl%M6K&ywaH@4%HK-2;)?JYgFJ($7SAmG<7#r~7;I=gWhZiUPbQ<YhUrz0yBUNY0WNJS9A%{P_uZvt^1YkVw1=_jkwY+HFhDTj>s5I^ZwLYx8rFi-`O<{a$00xVfV4vNtLTm}#$i31*)AQIksBI(qlZb*P}H&(R0HLw^c!xx`l_?|qP9X&kPdEB6-NS*VlxWH;!!RQSiq3&;QB?C13-K{|GL6nsRhq^@z~PPEgw?2Tf!HDf#;8gi~z1MiSmpM0nLD&sifGkQ0C5&TVUkXPfsYxF*dMdUi2h(+!Y6XG77{-4tKr1&SjyYCh9Zu;*1=8M4Ugy^?!A1k?%z>8!bmVNfU&Ej*8_12r0-39Gre?d%dtQPwEeR)9sWYWJ)crU-<H5=^PP^0hl##j#a+p@oIycG$;*~e=?jOl3p0H)(o5wYui)b(@m3jPPZnu^z#{2FQ*bKzsx^u4uZ->AmGS_v*(o}Y{)Quf4W&GhCwb45MdWkH4%KX!V3KPo_dIv&e<7)OZiac@#=2Yg*7CUYn1T|C3Wguj>JHZqdQ+^#6@WKrO^Wz@=u2-Ey4iK&|RGjYd$6T&W=f`|iux0$Zy)>3V-hMFAk)3{q)f#Z_yC!8;c2v5_x>Vf>nR;?+M-?>xpARLoGWUJ5<O6G*BFu~?`dQM&7smbP$lcaTk=L|c5T9!{|g=6(1L2in(%W*9R#fH;^VGSdb>wLhUO=*p8c4lXBF#BCaNK4LDi|fZ^|5?xbXm59o*?sI0J)=~20}mf+6{2Q86*CB2%PL^~Rw|E6QkQ}6r`VNzV%lq8Nj_jD^9HcLtMUivj|>0RFVw@z_h_iznc|+ZW7GsVe|37#WC!3_^auU4Z@ych=1%^%hI@?So%gw@&Arcc_pQkBkoe#e1e{;T^`L%Une6x)E{r_(3E#L+%Xxky^8r=$5ZT7W?;M?bytG!4)*6tz(3xhQF^VmgFZfP{bA#7`KN9_F%7gwm)>HEz?G~NUCF6<it(!O0yVd$ah`M?``?(b~)H&Kbzo&J5HEtVwL#>@K9tys5nQ<@5`I_*14`S{RF&E|^V)4D!6boqI$rr_*vwolV$8xO(d$58yjyD@5xgO{AsL{Njo}%)F^15lrmGBHoPKP=N<G{%F3Nt|NGh!1DccN6|X(WEre#UbYYcdPWwm5q&nJJ<*y@`u`U&c{f^PWj>QmI>rdBPpV619Tw%<qVLWp1Zp3%K5GXLnH599*FWob*1E_bl`~F?URN1m~w>wz@&FgYx^D`^-M2Chl0Wd-n5rJ|k+yb_21C=(S1lwi@eTcJ})`68V^jQ)&GqY~{%r9J;gT^`#)h6}bic*QTnsjaZp{`611D@VnoVS^;yez^@)Zk1z9C8i(6kC2p6+3s0O+tfOJAia)34Uu0*`jFq2DxdH5@w!8Ol8fx7)KX+*?lFr=$w~)lg-2{ieq5DFO&ACS+?M;MyA)weke5H73z1Xxjl&{M9RCurMAMdpRLB(5Tz5xB)!!j!EJ)TF(msD&E<^<<=b~4jXzDS+d%y<IjeH6Av=MlC?_E@~vlH63O)yuu}%kM$+$*zUdhhA%Fg_GViY(Grwi6Dp$TOF&`wCvun{V;7#3+GMXIP?2n##*NRswzBD`g+SKVL1>RBF;;&v;K{y{=Us|JjD^<EqW@~%!I$<-0|@1&g0qIeeyc;MP!Gx7k88Q0rv5ZYdE+U=#CDb9}#Coi!1KQn=|+1;@myC8$DcqPfn7!(4{zxzBBzSOmdoKi02bAftusH`2KZ!$9M-mGvZ9r`GW5XP`CKPGf8o}tNc9eVO{Z_X^l=5hCn|Q=Y(yc_<H1#%csgd)n}iz!`ZV|Gar8aeOMW<CVb<FiQTk*Uzr#6o;~hEP^{pHJTlF7@0}*Z<sqn6=u6Qva|{l=Byz&Z6Xo*$v3Vb}Gc9vmCH&=CJ{T=`%iEfE@0a2wuD=unc0^6U$@Av>q%KZpws~JapIhFif*f}S*Jf$`<Fpnm%}~A`u|M#lr*`5NayE(2mSemZ&KGscJMubFv5s_n{v!fLsuu{ZM>8081_uaNlC{SkL<Rh@c7~I*w7+C~;UW{&UgE#^OVpFq?@BSPxl3}~3oue+t%6%a)Z%;DT0H|dW<E5u(%p=`=(QA4Vo}@Cq#jf%(pMv&+lucU$}Row!SlUvWC5?#4zb5%dv%D|jvi7G4i+Aje5qOF`d7sq3g;+|kDX4Dqc7*tm1C(=ub|MUSm>`$qDGhXoYM6P?wxMK^aG07jJ?qTo(ehiqV8GUrswz8?ipT54_KQXVp=V+!L<IQNjV1JCj|k`Fh<`3{h70M!_N1bX%*^*5_UITFR$Jv`<T9&C7*w^Px8ut_nD*rJ*lCQFA3fk2QBif!QO}<z8*jzaOXj=y92@6LCv*-_taPLtYnf4B_fbqNAb|_xw~|)jbnR#>b<Wz*DRFcbYl}d#6D)|!G{8#)`4zB-QBh4I``ZAcTW%fe`lXvo$u_|6r07R8O-ObcYMg6JzUiaugUnDPrdh5XW8m)M*V>{!W_3lS%W`Z8xe$Zx^#ZV4Y!(KGxy8S$7@Z=Ij?=2wKJ^%^rHojS~KB*up2X7*h#VOIFGo8t@3<*;rUd0TRmxR^Z4GK=tH9i=<bhV`%l*Jl0TubFXkHsy!R@J36F3HRodA8n2jBeIn)^NRFA>C)yRJ&oC!L72-%ml(3s;~Hx3Hc^^_>kIUiG>G#B~V2*^H|pM?BgGH<$mLQfXCjdG{3P12uay^HJhx4rX^^%IiUP5kb${4zVcn2kk@UpZT$*4b9&yq@hbK5Nf^zt}`xi^~4N>6*ckZEATJ?lL_NvNMSHaUD3}dHhE4iC4xHN3c!ciApm|UzJBBHC8cC-FxDD#91C5XOrf?nO}>K`n3~laNXV6)hX{;8?ntfkHP1hd}WN@5c#>=|Jk<o!T9IDqpkfN;<SrxO|8X<TIC$`eOe23SKLF{oS-z5`aX|52oRPrP$8`r#R-GEW#~Gul&b?z-+LSMjD0niN2y<oenl>B_*}wfJS0MuN$)MkJV~|Ar1m(WyQKM?^y$_md{1A(F_fR}R2>~P^S;#$J9f`}nsh^JT-*OSt=ZiIK1jLG(GQ{AwsDky-kJPs=}gqxTe$3vr>{LLGz$1@o@FCHWik#7cXw`s#-YGro$Z$#8>RRwG1HXcot1is>om2Tn<vb85%cF0y-#2Y+*!ION3qzeBfYGcevbJ7vYjDj3AO@%mEp(UiaI@F&%>uu4YV-l;0ZiS?VF_Aw}`keb-FImf6=_Y+H;s{_Lzl8dspp6e92zOHT79Nuc-sqwzw0*tZMB-!c#JSF`dWBYS<QX7Vm-2UoF9Wte1Ba+-;0wqWypI^fmf`E9LAT6l@>n-GJS|Oj6dXx-V%-BpQwNGd)`1ZfC=!F3hvrZ>Ucn@kiiresZH81bdUXn!cOBYA0tbubaztjS4;)o*%C0x6}UZHP&egTfmDx<8v2^Q0btS_and?WNw!;GwoSs^RM!I(t4rKgIqD`X-uV_#t{5S<mYVQ+(X9x=kKE{uS;f+5}$ku>wOyk@|@Td@MKEwqWR9VJF}kl$l4uZE>)Uy{pf6{#O1^_Slx}yHRah5ime&or|See7Fv$oc+^=m3}@oAsCG=Ri9Kip?dYD{8@{U>;1}%BAKi$}ctQU*Xc+NS;yWBl7(G>Bci;!~{%zmrdmB^t)(~>0d-H(!%+v>TXSPFdHhcJayxMX62ElF%dPFw(P<NhX=x*de*j#sYm-4t(l?JRjzkLhgZLU={z@u&GlgP#U_z;*LG{KE$SZ!!+t`R%A@iaC&(6oc5pto`Tkk*Fo^cdW$W;C+QwdYUkGG4Ay5A7>>0)O2+s5Y1TQBsfMSnWy1xzOEuz`c>pfb?42yDiR}6nu7dU+ft%&h}cr+?^lV<nzWW5&PAEC3^7~3kl3Lo}u;T9n@H*;BU+KeI@^Z{f0WtT;B^Uq%>btG4oU%CqCEy>ykOT*T;GIZ7crL{<-|NUHr9qdELB!+y1Y`_Wd9K_aAmHxVs(etw0P^whr`#QBVr+yBaNKV|9OM?>vyAU^s*9;5O(5XizP5CW>0o7tzv90NH~#Tk|kLI#6@pr9+qjBE`@6g450KbG^0Y&rLtGGk!Dtn=Ln-Z)*Q_ghXOH2#{<s=$#9Z_<VAbTe?VAe?GMTHP;8LdB24r$}PYjquU)B_RX#{e(5~+!!0>g0F&{(0S<dxI&{Gt+D*?PV?6Bk=0js|<iBGrXV{EjW$QiNd)RjvWPkyF6d!Nfbr)cfJ{PMHppcU_w#KHRN$)X`!E5xL(M+K=W<mxsO8b2|!w_i;LwvL@`vC8UK!z?9&G3y~{$5q;+tK6m=IPtED6Q=S!hD)eaZr>HIyo{2*<^%|fOB&zK%{{Z1RBy3C^<^<%+gpLT?g;%A}G{dL}qf#Sq7>m)78!5u9ONwev4&QX}3km^C<jUhM(s&9{f!5Sj?jyZUvp}5Tmj02zBqB9)&l5ybAiN-T{za87@o~g|H_LZ4Ikt-rrlio|Iw_n)fJIr{S(R+T04OhP7WJ=T@ZLsR%p8GZi68J4&?+G?Ll#DCN?0?10|~v~iR+jceOiZrS-aHM$O%Do~+?lwsf82Il9gpm8lo5z-ZA^o^Yt4eDM5+03ry(fZM~Bjg?W(>mm0@$(U=%>4oF4P8kNX#YVQ(GEd@>_yX>3xaQdvKieTp}MK2Ks`B{@l)ha#k!Z^DT{tsgr=~Ka(P5)n<Q-wC)vN-))BjF$+SaBE8qm(SqXmq(`k$=;nx?9z<jP`s_;)m_-wuXQiRT?XQEJsOV>8pukpLpZFL?FHHI_*Ha!xf8t>V6OQeCAf>eCRDhfSWdKPP}jjW(Hq8rBRv;$B&dmT{QyUh{c8z}4bUC2t(>kzJa{;2N-v~Qq9Uy~hCnuYKU@c0Gb^M#ULMs;?LgzV3hSpE8axtvZ>*_)qEKYn^|PSH;P3|ZDM+m{c}PRjf8lT*7R`*PVx-seiWe%+mNZan*hBs`^*WDBMr>><-Y`?Pm0@<-7WrG*{jvT;waG(4RlIve`Pp?$!8Vv!%yz0l|cO|Ju~g@JD34my9=Up7vDouoYOkW1(kzwDe`IMP@}dn=!p-H7%G6jx>(&>hmFH6KPJioZtAv@xQ)#q3ku<*%A%G=ww_?VABAEb?dFJ>?A=_QuqEbk|Z$5Ql+lxy|!_EPcKfj}YEF#aNPIB55r7fpeqEBFqvB{a+oEos(@i8ka>z44O1hmI0pNMRcY*<fAMDvL6A*S=O{Z>JLK~@J?&dpr6(0Tv2>Hj*U3nKvJ5{82L83qb%BAt9wOUc9{f$O7RQH$1vhNu`b)(5L9yEs6VI~k+~)xy`ksYn^yPW(S7P#YdZV1I`rgjJlJ`T+jRW_`Ez?iUOGY+JVM;rA5$DOjSYWIIYlo@^VVvbi|(OB@0fnyN*SB~k!8!Oao+SS3J7Os6&sehG5kf-w2%ud$*xwkZ?vDCb!2oV^c~5MTa=$64vJUw3}c=AJ^2c{7ciC?Bfppgv<^-B9{T7(p}(o7+`J{*p}dgJ(HgQ?6w4k!Daa5di@uX@G!4KX`^YD!4cseq=V%_}gks1A(Vq1wYW5*LgYi*%CchoYCEF$7_KrsOZ^CZV))al$VQA3jx{*<%{D;oaU<WEb`VNujkWZ%g+|}uBf*ej~S~F<9A;&{GEZHwTS>HgMPI3E<MsazQ;`RN>&$U~xNo|4bI;a~MV|B=%ID<N*AU)2l26Ug&ooU^~W=v-&UX#zJv(~4(mF(8**c;D+tjl!o^<BC@0fTUN<R@xsD->e}%h0e-jp?2#K{8X<<MU&9*lxD}eEI8J^!=~bZ&9HJwPp#dJEqa!qOF*YwHzO{-oMP9uvUbtS)FbXF8ub0YForKnmj(j&lxCG1FQLrY>QheqD}3dprT-!j($oTlF4^bY)83)pfimYQSX&$htyifA*04ha!~7;X;1Uk-OK>39ha1uB7l50R}ID3y%;&8Ty}7$QfY|xeFEKpe8A>(OO>AOeX*&8h9<EGuh$Dx0|+{d_xYVymWijk)TKB!iFveBw9BqCLbs;19A}h$quZRa$#ufRpfBI~%6H*0q(`a6o5w{8o!!=D8uqqjJnUA}c(CQlb<ZfmiZpqgb&}It9f9=7-(m8;)SIFX`q1`WvLRHVVPoW@Q9Vv<#iM6g6xy|Cz7s~fK$%KwqSPtSnunbgMn>rShgoYO7$45mL*&*5C^}c5<6dCTb<zF@o#p~GbmZTccfrby?1=6-vOUycJ*Lzux5y_i()+4y&_f$7SWu|~B9O{F0eS%264mUJ`(j)#Gpx6m#>mtEP+H4gKd0*9_pbdRQ~X!a5H+f(m_Ttw_b_bYuQZmx>*hGqH?nL>2nbP5QPk-s|9+GnEUkSU@qJ9gr=@h~@Kwm8XdR#Uvu{iEUMx@WjeHxR9^C59Y^4AnPM!&|EJh4dD!mjckWil$AvvhGgQ@~loNuU$5AFmFs-QCDvF9j*?exX?BF4=UyVwFk!?FSDC@Ekjuk?Ozup^JYn+#{5&y75cwcUZ1sHO49zi5%sxmz;)VVO{xsvV~WYT0#`E~d{+T6!h83cViE<YfPovfrzq<jkqiN<KBCXA|_Lt;pLH;>lb_Ce2SvZQAQ<ALpfMu92Ts$9S%i!&Sz;en<-D!%}g>tLxrZ*Z;1m@yL{(S+{fYl+!j8U;)=jPi@G?FoG^%CnX4F?w2`UK&@G!fmNYoIgM^g^K!v!CI8M)uL_F39G)gRzo#U+u8?s*CS`Y+k-wsND&RO;$Q(UfAc=ORwD47O3F(?BG>&8gugE1mM|+~!^O@GONY_L$QR^x1Kd$-tK-H7dc8HM~`^l6fQRscn%A$cri2Taiz0PrOO`!~&G0Xxm>q=?3{CCqn218Bas@KYUEB*JYplB|Q!(Kv9cHRaYSqkMdWa<W|Wa^}StbLfqOj#R=KL3N#d`HHNPkc_9inih$zrM`-y9Accaol>b(ULuQ2@C!7U4e@Kh2z?&5*l|2^;up0j+OLh7f1n}q+H$Nem$1cD6zTLIwhZ-Qb%z<4;os}@euR92r8J08sx2-2P|&2lq#qi+8%in$Lu+FU|Y078D#oExv=Dufd1~t2Y|{ed7gIqJfIl@tPr^<o`qt})d~<<z<nWwlRpb+b19di-&xKW-BM#HaI|=<9J%guF1gKM@gk;tNbj;D^jLi6l5*wt_axqIFYb68jO?*ppx|m(^$7v%{VRuB4T@CyA;yzXqr}Jv-M66pOx7op`l!?W2`c160>hQ)C1eWk24Yr<Wx3v2qH{xBEbh-#7VI>J;0k*x=2wRV(p_ms$LT-RwaBUAf5659_%@cld1E;3tpZ^dF*;&(x<~1`bJ{H0+azX9X}Eljmvy@crBlu;>J>8N+j6jPEl5XXYjp1<G62Xg^c31BY7SGWexOo`LSCYW{Brkrd(ysY7u#3Bv?DBAk<$WA5xX+I9?L}>->U+(X*0e*-TzRi`f_^8im{sK%8`uXSWWTl$&^tAIb)eNM@wmQc#oyu`2icFy9sqJC(i+yHqy~{$q35I>;I8Z67rp<GpwF`-TlnN7=n<MaGJ9H#gC|c)r}AOvE=Mk<;a)YlJ*f>n#SGjpl2NJlRDZoMhz!?rgfm4S%Xh`!Jd(i+9uCerqa!8oNuS=N93C*)<Zvl;rR*Gchwkbb#3m5^!3B3*U0t2HcKtuJBjpOfB)_se#Dj(8Ag#$M<Hq%b^2~Vg1%xb3e?c3TVOrq+HsLyo9&H!KYU$+;uMq^5ABqadnJvyUt?=2^?gIFk4klG)Ej$AEsEk)dKQh*qt2A<q4y?y{83rJqAfPBvPIg*MO5QE5Pqa20V(XRlEO5XHeh)$9y!WoecBs}mEPIT^LlZ%uIwi_Cut6zr1dV)Jx`Ep0rrh`_ql&7jf8;SNXQWhiYbce$rg61Bq*)9+8<2oM_HWv<+QgWNLqDnv=Q)KeMqaf*QRd79{Qr49D05U?QNca%jf%OuDxg6Ez{<qP9*2ZAI;B?{$8Ao006EJDov?=G_8~(Q|k$4PxORlN#4pi{YsSs%*I;9n3NieDdVWhh<zsAS4Hy*I`_goys_opl_LK%oJurd^t!S9I!%6^DP-ZwG#???>wtI3?5ny*BSw~Ky<gK@)^qGbh8Y3%`>dzACAyF6s9%iu<}0aR>KJ`KcP7-)XQrM|Xyh-U^qCg=j}i{Jf@by_8jf1cjez4YfOm>bXVCO4;5;T2{|sW+nqD-DesW*&ot>75Q7B$4)^4w(>N0j;N!4YNU%0md-Sfvg(+bz7H3>|8x^qEarcZ(qB=$BEZHKOfwBCpdUImp+8UrlF=*~s-J~xMBW8-tjUL!9Q_Zh9b+F!elnynMAf#)@1qhb2%wc+$a!(Y`6pZ+Bp2A@F91}W|rjCB40T~}P9`TwbOU5od{q1H4bw`O#vO|t)**I9-}zgu@>Gw?b=&4>pw9Z+g}>WJ25`y3zNXYu_`^mfmk>$=eg4yPBHaeD(S_Xt>SI*W!s@kjmckDqHgL!MKL_5RJyb0sAzQ>0%=u{bu5$|#?D@2jYke9vD-hBH1G)_Cvwz$mT#krgxyobim>`6%6HeD2=<Al1lMoWF|u@A$rWJcfCsR>Am9%567Q@2RnD0qxgwR_8C&!mj95<UPy6eQ`fy8Qo$`AoV!&KG8ksAriU2N{sr|J&{tc2~uUJaqvfDU=8;UYzNZ96}{6N1&@oK^Tk+VRa%AedsUJJ<LXQ!_<`SDfM%=;2YeCT%T19o?Pa0AR@GP^O7ichB_E})`MOx|S5mHhMf`mxemY63mh?KS_A`~EtcvennZ_PdyY(aIAon}z>{CL&cFfN(P6GH9t~JqjLhY3E%~ITvzh08u)fCCya<8-C2h`r*G5>UBKlNx|`&E{+KH@ubNhZ2G&*1nk_c_NUGB5I1MJcFrG<$N4P@u-=dRZm?o^KS_;=#N<>Z5*5-k|uvW3rBCX@EaQ5BfDZo~S1%6pg=q$8X>9i+so7Qr|Hx`;HQI=b(N;98#I{UPoKE*txzPx{ixHwdv~JhS8s_z5euI_KmA(>wW@7;+NztmGWr7-OqmelHb1M*Z30i_EKL`l9zfIJ)Dn2K8^Mg^JTib_d0{U+39V-7cuG^&5^a*Q6A9rZa+$U86x&c`^Dj6b5wdn-~$9LUurWIHH8mgH%q-{<+IAYqO?bJ6!##_eWo)eLH=9<SKCNum4H159)F8k2G3Fmti8ay3n}_nV9Y$G{LF9{Z{BSYyV-h$d{;gjOTHyc`(on#h0jp-swmsuK|j_NbaaVdQs!}L^FurJd#ePqy|S!sL9P<BU*WTi=NUVbAZ3P{Q=a=cL!WyO?4Y1I?WZ^Z$j!HaBamwah4*jO=aGGo=QRfYqTs{Xwo)5@C`qrJn)^_t>q5o`py!_QTtMbd?WxPN;IF_)VZOnWYJt`Frr6ix{n-!pJuBh~<+F~{@*b^=6y!-$N$L#OSoSpyF$0I$H>RZBrnZfK!~y;P1ZT(iIz<M%WY1+RvuY2jEbbssIRUC9uyb5PK^D>hW@}l%1_@losd=t^wo0xuhoF<I##MgAhBu#P!>|{DH9T&|Z**VebA;#e$jD3QRI=WFh2Q)r2H*>QbxLuV&aSp&%%pe^0;@vLwRWR$D=;`3#pA$00td)A<M6a!R_o8FZMg8-<ldlt1En}{O*;F}KITE&>72-UKg`cbXHm$zgPjj^tgA%?j3%AQJK&%&|B=_efpb>r6bomjj(+R#DT&VoFUa8}CaKhmBR?O`bj%RHO7GKtTRQvgX&PJ9IEO`?<EBWpI*$a$1An*Eb=4n?HO|bM{Fr~<U*n&xwC*HqMa$=sJ;sP)1{4(C660dQekSi?R!W@(P3Cq~J6Et-Hyep{a>aFRAr*=kf@ku0F07wp_C&4vy!}p}?YI2*mdWg*f@O>ojGBU1PAQj5GQii{ZtdUKc7IBoye-8TCF+0USl%Rak)-!=uQX@hPihUfZN`<#44f4)^hsIhg1=6%Ode(#Ugqp;PsYy=Dqc8QmmaA3*(NQ6XJsirJ|A~vvA9IFzXf%^!gq9g25+v+_5QH!Yrk#(3fsRzs;4r(R;l6hIT9)ENc+Ve=WHizS&>9APWtX?mSeQ#zOumbf~l9~btT-dj@*sx^KjOt2f%zY_XVGcgv$ZE7t&qep@#7wa^Pz0`48K%{@ad!R{YEo0rI|)?+I4yv+3X2X3y{g6y}5i@`K<$6zh%LrpIyt%ttU6u?2AU*<AJMxH{)LVO%}9P9RYdO%UVrexLN2Wt+B<%U;Yi)6W>KX?;vz#4pH2mm2Emh3^h-k}%`25Ijls3fx1ET`lF17f3mr=9f9jmEiL8w>f5=V@58mt#5v6t_aKmX49V%++KVi4vxhS%4eODS-T?s=%gGmOP+h@`1+Nl#`}URoBUcLn=P@Wr+B3kww=^wpEBw0)3v%`8K2UYa8vCUX)bS_#NWlUmDQ?pSs6P{cyRD<U`uD3etO1Nm9^ab?&7>MM^E#4>GYnxANR|Re_y}c!;Isa>`-9K!okU2%2m7vr??h0_LHy+4V>1?EHAU;E1uz}oVg#7Hmr)5CQ@%Ejggo~<F@_cZSwfx(SgtJp~jrgmYz75MNUwcd2UJ=;o|v}=DhfRdG{iB#TZ`^KP9tL<HEe!r7=`Gi=0cyNL(PC6Qmp_`1g#9q;Jw^_R@K)AG~XVPrGX*d8niJ%{(Gsnn`Ias(VVOIUjTTmU-lSGcdu`>=*~v@}iM5i46ayZpJ~)uxRhC#ctFI4n{PH>9*EK7Wf&*JJ+$-rqzwjPEcc(=V)B>`qQTCPkb+u&Q?YJ8vL;-7e_W<<FGW#!L-`+`3r5->DEjgQZ9yOvZVX8X3|-7V{j{);QglGAFfUMWBA}~ziFEE{GR0=T;?a0_;3ofM{%B$dnd9tCU60<vGaWJy>{s{r;zI0nCS8K4Z7zBkde_w^o*v{-FyC`F|t;%XAOODCK{HZx%zO!IHi71_VYQuKC5ftuCsk38g5L-4o%uG&tI;M_-0SvvFSPBon87KeIIZyjx73)RxhCE&_;ci{>|N+@iGKws2STnJsUksJCNtLkgF7UE~CfU8b0_r(Og(V62}F<V`N5j4#`{FksEb2HyV>I(0A}xu|ex>>Vu{ck86fMZ7`ds?#A@l2QTW0847=@89HzXQhyv+1G`n^7*)77z0QKUDveH1A32ad?t;HD9+7RCdRH5<T+g^}L>~D&Bc^p-d-Qpu4y}2gxgW_smw`w2;`-s*v({^=7hAOk%IA-)F}+uho@2ckVRoV4Z5V!+zTKMEdr$+PEIrSG)`V<2j12UC!8z;G=k|L6WTjjyq_eXQ&CWQc&sm%D=co6Oz_+D&q=*ChV_HM9>yEKAEbzX9Pt)GOu1!BAo1%Z~jL8<U;&cu=z`hM&i(uTOwZMMd>|7sbge4jG%4Z9Cx&p`Oa5L(ICv(s+tVP4KR!!P}Ix_~@I<2*D(3zq9Af`3JcaFP<5x6)zleOpAzH4ExrsN}5<Qs<m$fD0DTajk>^1cOTlqI}{usOF*XP3U8N$*d-#wWY>Aya%)Goyh<XP5pzIB&_WB5=;r83CthME(eTs~tM~)`Dz5ptU1^72jy-Y)LxviTIB^0C*?1Tmzyzc<E@b=`$SRKY>q(b56u-`)%bp{t8SC_uVK@`i@!!^SeFUJlDUN*)PZ!1s4guwvPWsY?g789FH;kHexDi4l2QEoy0VSJ*&I_(>|QzUC?+|I*l)+*h#7JpIx8uR4;|&bf_c!CAbv-5K@lW{P(z6KNlRE`CPUf-w7_0<lGhR_buJ~LB?sW3%;)M{F{m)ooK_}WO|nGM75t>8W1@-;u=4d6g^#c5}b1)jzOGerad_3N06}t6q}_oq&ZJn`ulwmFGFpL<L@LMO6GM7d$mVA_mt1)43Zhp!6|(H-88U!*5*3<QSL$g=v+Z5j?8%*MLk;7%QDQ!c5t_RS@u^&Dao`asKlDEFPGvpjt`%K{}sK=3vDGnWh>6qHmq)Ic8+%fIFv;4^nWKY-kaBFNjS<?hfviz-CHW`dx}G0?!a5Qzr=EpNo_R6PlD@#&oSO_CAb{-qV5P>$DQC#Eavc~xcr#kIVEi#EFUIQdvxXcT-A583LLQXT|)29DB~4GP3joGOU&nahWZ@$mox5$3Y^DhoF{Jr`fzP=rJuQ?rcIfo;MFi#-gaKc&!-Z%Q@Lk&<UC#YeT`4|9}B^E`jqyvD2I6Y7EMooZ~mQukpHEamu!Q3vV8Z7yiDQ>vX$O~yw?&ot-v|+3FqR2_c6G==zZRSDJI)xUUk%*AMI9()p#jkX-lz7^L^0W{(pa36tmogyLo-`-Q)TPc!;$ZaKNZ|q4vw1rM2OMDek$OfCuH5*#!9t=GP)0@k+6N{@u=DOLWvE!g#LK?~*#^9dJNFiqFG$<{BW`Mw&wgLN1ffMN(@Jwng_Yb4`PD<y*g^o^ixJ%-f$3uL=Iwr?d`|=DcU`7O7s7-JPOl!#$0o95{k+=n|frAHHip7MGz`l+}V#oNs_NNHG>C@0REf(F4rBZ;~7ICwTU?6wjjnLH8{bLv2>LO!)V><}w%dlh#HrJUiV_KRdF26B;t8?U~<C$MXC=6nXZ{XQmw94{f?jdw&Uj#k3!$+$Ahei+!ipL|mVvSPYWf9{mjQDsX4ZSzG89US=<~t75aCC0EN@5ij4jumAkE|F(F0-F$!kr})>RWGRnd*jag+uai=_uD^e0+MZ-oe^$rW8kT5pIkluPX|9_uJa&<~EM+U<vJvV5rUxjqvaB#$i4qd>4*O=3t}#5Fp{jfZR!~4w=;$JBr{i+&S>YO&g=?EaSF~0Nt;?kbxFM^n&oT)8Ql`02QfE*pgHC=sud{nDeI|vzF>RZkNmtxvFmCl&>Gt{&CRKpU%5;M1bI4@}l;S~8NLNOc$poN0ltS9^G-!1w6z<Nn$)7WAXj|cAXie>>X{|SUuqWOn619N#C^B5C-6&?9z<?@bWa$d;fue1pjzCvQZXF*L*+?l?{+wf3hDD_Frl#6E*~*$yo@S<st<Z}NGu8Q-zHU<Z2P#tv%gv`pr%e6)kjq}=HWDSaSWww!dUCj0$eboLycP7l$66XV7kKU$hV*C8-cEmBPu$*XNfu#~ON79+CA6N9jrpFHMp7kkhEgZxkh`41OTelOru+wFM5fYAu4ds|9@+)pBH8+J*@kS*tK=e1Pz=lR0ty{?DjOiT9&;*i`#@L2VWG7`K+?EOsY(<ap+64FwtRH_H+z<YJ6mQ{kHSAGWr!oTm(k)EX|6Am;gkGiwpJ7Z;#pFP{-P~kBo|v4VY*1tRDPC|K1=x5v~8B0A8`*vX7hw?RE;qr?S_=h{vIvqgO*ZAz7}aG)loh!jXWo3PyDylV>uK>?OrN-7s8^B)wSE!M*cZ{AE&p?_S8mco}oV(1c1Mn;=3y4RQ5(uP9v3>?p2Ii7HsS2-7mL^gH)ag6p9okNiZ2@?}G$}<Z!D~9rbWDgm;-#OxZt9aDV#A*;h*C6xw8Tx?DOqdM9S>WQkr{@-^(!C`F~zat7$Bc+Yf%22j?6O2f+`G`Bt<`7=xri`;Q(i|*0s|EU^jN$>7^dB1Un`^^_2s}VjWu>T6*p-NE|pL2Wy-n7uy@5@64744=-pIf9pZoH{dWr>f6FN~JtV~aGOc5N<TUX+HCf8w#?Chm*W-c#F@C{Krig6K3||Habb$K*vW@==$`i(D(4Q1WYHjPvz8-JA7&SE74k$a6w5m-wui-h7|w3SI7p<q#I2?7c0~04XE1m68ajB~U@FRF*Y}xYV%a)GnjVHlIXW6tUs9;v4`9wBIIe3_3fltvef}ep<GxOQa2&_X6e+eXEu=;P0lCZB&_%8cVm`L6){n&$}wzPdH!ROGY~)<mI-q^dQ~!Z=To>ITfywf&6lMTQ8a(3~Lyf(X?q;lMN&-4al8$76-H6ZC*ofo69O48zH86^-k;&J)<Pc6yh$eC2PBxMod|75TmN941g*%4_GVH?!`%IqmmN208@Ia^apk};@2;<Evsn@q&riB?5#O}m8jx#xu0D^p$;j?W<c@I`y9_ncgS3K-zupSwNrAD74o%^pmog9>j0kNt&OOAFr4n*w7k%WSCFM&3t7(L#_KGjQD@aO{V;MP$ktDF{2SmNBgltB4%463O#kMre61v>RiL$R?f?-|OGatz6TS&3N(vnlKHwy6U*%Yq3TwTvR*}{kkh{>CM%fHG4Y%-$=cd>iJ_fn-AMMt6wEOW{_twoDWTe&lLI~(fJ^Q&8G}KaGp5N2Dz8bfUy`k1ls^}A?d`<Yh2dSh+F;OhO*P3DhO&QCPYBgd!i>b>7Nv_8^J(t=mAg(9JcM@s7gOSsJGqf#}2k5nA*^k6;+B{-btjR1ehAO05KqpRXdJ`)@Pg?@lyk{m4R*(-*>E(}5kqBEV<#q~G&UN@bvOB0s&aE)+i+C)D^TpjFRF-U6<fpJ3vI&YEl;77}mX~dc@+s_|{k#Ml5m2jSq&BHjrSW!wPLH1D`#ci)n21v+37l6wpVg!E`|Z5Wl#^+00spnBf}V0KtdCkv0?(n}{g%`Uc$9|6ZI7PEm-#G>!+CTekK40x|I_Ca>u6Z3;?L>%7une}W98?v+y>c8ZFleADCf7D>O(+OFangs$K3?ZzJW}GD*xEyG0JRjBIFAg?Lm7Ka!~Efl3^EFK2;o5;Jr2=jee_)xhHM((%$okd7dvR@3q6&?EKCSll9sg3dKp<`UgFIzK;o{JC~L$Qk99^R2^Z+<Xi0E@_W#HvTNb=q1PH(;iNYW+Yb|a(zd(dpH|rFShc2Q_lE6<X>(dQZz(J$z3*k&#N_-I;pz-yOJ84rNTViz*bs5vK*Warji&y-GHUZwu9+pRGUSejUw0nQ*6x$nrEL_7x!zUyLOX>oNYLO*?#Y`o_vGT-J-Hh_Tz^kalDLqm1CB}ssX4xj@1Kr_2nj1blaNA!^f1#pechP^yjb~p+S<F~J<}T9lRB2ck~mwBZK0A{_^FaE^|Q~~;p|zfnGe7IK0HD*{UrKKHr;PY{l1!7sYETG=DPPzQ=2>Z?*iT2l`;`#XZn>g5lzt4p35y|n%aesDvQ%va6Y<t5#_jBq83Ui#|53r3+Ib^4-}SZo#;9W(5M%f@r`cq2*BXrTHQKXd+dQS(;sV}ARVw@qMm&FBh>O^?JKF}M-Q#|-T`#Fd+>ZO99i9(>$gMfG1*?-@F#0}O->`K(1#`z9jK!L-cS!Nk_B-J5H^XTQHiBWy@IQ#*18ST4=83c_6FrKrjHzYQTMDa#xd6JWpu7|=C#BI)B2Mp<ro!kx$9&iYNqv-G7-W1;-E#IHP{=Gt9w?kH~WK~XJN0&2gewl2xPj)EEi%LL|gPDygH8uUbxrBvAsU^-dCM#!}226>BgorZWunDDe_Sx$Mj7fBPre8wdXqb+xvG<5B+~<pM8qj@G?1&RqdD@$fwaJTD{Gv&!Z^^)1j=vAFhqaUh_DMH3seKDY>%{Fz92orXQkhjy%w_qK7SNQ(EoI&!^Jc>PeF5$M^0;9~wPCcYmBp_f!q<ra}TN9Z?;WM^q2jNEEF0$879)%yE?z3HcAY>pJei(BVVKzO02taYAV7#(~c8FO?YZ*e2;uvfjn@`rF?5$NCA$>n48pEY0iB9DV*9$0om$MjEtu0q{g(&0m*ao<}4#Rxzg0d*XY<Su*Y7znNb<Dy4O54X(R8F{asD8?ntfkHP1hd}WN@5c#>=|Jk<o!T9IDqpkfN;<OLaTT75{t%bTP?jb?vsr30-c6a;8^mK*$0(5y8HDL<fSIX5fdeVCv^l~c5d<`r6#pqXTv;Nt037e78+a}|bRTAP!?Gcdv=5x}gTbJ-XeF?`<ezsF}bkxlIRyXX}J@aYO4Xtr)|L3%3cMJF+<vvG0gmT-)aXGcgzn0EKt-XcI-gx@jvqGbQzeXRR2Ra(Yf#L4XZLmODDD9UV8>RTGSv~C!m1=s**nsFmOC!YmS)%s|Oo2N~_v9!Rdv&Cj6*J{9eIJa%E^kpwW%=?HKUV1Zr+Xegm1>{`I*t>x9jEIO{TB_fr$Xha+2d)q^<ej|+Kc#-y^w3_vwB`r2d-^#$M#;RT}XIJ#xKev+F~t`v#|U;{heSw<Z;2*lwwp+x+vowGPV!0K)`Nb#69a(73%i8bmTXoWjo%ZEzur@Z>Ucn@ki(BS){tTT-Q)=cv)YW&S1IU4jL<s>HI^cX?w=!E^wdLZPAD93~G5lVi<lCW4dY2GR5J>@_W*Hq0fU{G3jYcrJe>;m64ybfpZTT`=7s$uDmW8rA>VDDXjNt{L6D<Q^1oID5aLSIVBIq#ArX5hLm1&5a%SrW5={62UoYBuosX0A~rmyk`g{8ks=q=JUZw%D9_f+&Z=h6J!N)+-N>=&gt+mjvuGI3#P|Fay^dZJd!ZS-JG$rghVSZzGo|&VKe`c{@q+$s&@kfZPQs2AsY^Jf5%r>g-oNb|eQ#sx-kLstPxs~l@tLU)=+11@XWdY)Nk5NQJC5IU(>JVMU|P0M&$ja{Lw6&3ralv@P#!1s+H+h~fxcsKFe9#2H9U%k41E&0cppD#jGRH!=uZN}YSU+~*NC0mcp94>$g-LdegBQ?hqN|yr_=YO961_U=Gyb8br~<0)**O4BBe~??>wz})^bf}Cp7e-Pu{cv84N=wtFXqjioxFNfP#ni!CLKI$JIxc9e9!Fn?A*`meFu^b7O)|#F}behxVZF${1lj=Mr{I_%VOIHY0B{>U8U)KB#~wR<Wk>$Z<i(6NAFWW11MI4x)Vw4qgOW8#|=<MKi4%&4?&(BQNB}!OrLpgVC*GgW6o~M@c=3W3?w4=R$Yu0ry5W1JY}8@3uH^Qt;W;eX(bj3AolTcjt#T`MmK;#C|nkiC#R$LIN|5XJ}!pPL&KU^wCTA{nw1i{q^nKlw3~0ueFY39Y9<z4-gyXTf2`gt(hQNhfI1@J$cdtk*50ov$Z_MB2Bl24IpN{Lt(0+EW|_av3do`QVGo~O{?KK#N>@K<)V-iT`wG(S+qnp6bjGE(afOcb<7QUxf+P3Oou$EMcI`@o=+d>bb27tSu;C!V8otJC%HE2clWM;({R~O8ua^P@^bABop_KSHBGCVW+z9cbQT4Kao)kEEZ`YL{_37kM2N{8I!Qpixm6j#bs|k46pX!A*y%^aur3tat;}}3cQK)Ksylhps1Uvu-Ks=voA&NWCHc$9MLv#nze=R)gJ<fa0=qIw9v-Z}OR6^}$UWDKjmFiF9APg{l$_{lrBjZj-~U^o--S<9{Ehtc3L%s_I%aJq9};3}c?ILCfc`-?z!iN=B09VBdn5YphoL~<^kN8wy7`19*<y=Hfq59631;n*xEm&gIlIiO7%|y<!=$K#;-Q^^4opl@iaw@D0pgkzAxc#jzSYvdi_<rJo-%=jw9C1s?@m#(7K&Rg&j#|!P}NkC{GKWSS(51;1p1}ikybOPGAU%%Jt~U{Cd3078ATD*+GGMRC*%$n&{`#8D)F5`a2w3~VdW&F67@?}psMKvOzbKCMIXKc@tjVYWi~IZSM`Kp)?L_qdnn!uCi!wkAy)`Q9w*9CJ5jq*CztjiSUToQCVEp44EpAv+S_~KYUdrQ0nH*>NK}GzqNR#ScICX~ovA9@EO&JfX<<_7w_RRomw6>>vi8&o`rOuTD<_h(_i#B=QSLxY0dYmDVvSCSn5t;05<=*1`0m|Nw(bn8gg7WJ2~o9JKib?;L}mD`@Yx(^%ydEaE)zaWF@=H-u9~2hJA75-<q84IY>n>|&ve9un2a7`Y8;5zL#18vR6*8tKSsv9=jk;@KSSiRKn8u<w$JR(Nndfs#xL2Y3w_2ZTQ7AD65oNCBrFq+=EO}WE0jW%<<1n-VRbsEAjWZ!sSc~o09Wa<&h=5!?;)KJo7MqmO?1Wzq}ylC(iy*g(jT2UQ<wPn%ly*GvsLOOCH@K3Z-H#Ugik9aXw3<NP9hWR23JWmt}tTaYePOPWORE}b$4>Sn04bmfh_&^zWt5%tx^c{w@<vrCsrcRQWOiSc|Z>_^TO|V^~!j)LRd%Xlq=|;Obo4R0yQD9m3_^|mWk2AvDB#?PNfM3dfixlohHA|6!o(oLm*1i@{9_5$m$)hsA;H7N?(CWbRiPI8+Gi+^v%fVbeo2SD)=%m;t*o-4YOm&sKkN~IFA1Rpm5FUxb2jPM@V;tL-B1dMK(_%>a_h7LCOoC;To~wFGh>d8JnQPTD2F`vH;<@BtU3)N<MvR-j;q(EB~H*2@+6S2(rxe+&)!1yt=kqv^D9!HQuXxM+3=c1jIl^?eMs*I`aMA{8x!YwP+{U<AWx3>ze+e?v`SWkJpHAa#8b5#_*INEUTYSoH0pA_(4+$`O7uz)c1Ga#qVkmB?H?<D1_5Bpf~85A>5vP<`oFdvDH0>&^(ndpFsfE8b${_i^ajv?a0u(4G1E*KE-v`pzigJPe%YBuMzWPuu^~i3RJMUX<bnJJcbH3PNIN6BFb)Hl3VWu30e0Qe)?>#_#*<^+fNq{JQw49jsUFeM{6u5P_Y+wr-Z1UmJ!wCxa_~jWxrp(FZ4_9x#f(-*Fw6VpJ?qNo`FvJx%i;$vy14>f~`sa{mOf_sqjk|-Rb9gfF(Nt>*8sKt3;TKh3@pSh{*jc7d<+1A7yt$LhApT#1F^r1oqc?o<4n5#WJezA?`Pd^Z81?eT^QB$K=4{*EtJOdgL3%YR~Kvv}({j97RSSuN$BB@m|M>U2C`=b&S1db?Zid&@lSLwb_BMU;Os*B_FTWPfjADe~bB@67&1oiI(adH}%8&vi}~G{r;ikziZ{+o0k3lMfaS&L!3%+;p<6^##x_T%q`Ex{#AbIk~<y9NM>fG7_)gv4sagpp~T`93{9FOLV7GVPwxnkOVYi-@x!q@;UauUb^I@W*HOjqs`8?9_AgERw~fPP6aUvuA=shUneN^ArcSXSeNVTEsXjMe2VQ?rGd_R1Dt2|SarF-O4yHw?ITIr@94Q!-ub6_-F$H6ER+{I#vFG3HN4V=EqfYl<)3e%i|BYj1;;N$F_uJS1_VvGg{cm6YS-!p?Oe6XFvzUZ)alP(!x)i%Y-Jq)(mL0h9^x*pB>m74r6zUSc<9ZR-SM_gx`~2TN|F_To?ejm)=bvEoI@>=!8|ROkm~8i)sc!f;F$Bg(5YFwGYr`kM_wYN;FUI+0+{5qQ?C;*}@80b1-t1@fX5C}G*)l%vIu;YnjBlDFit*jZt$F?K!Nf#p+>2cFYd^{?kuu@yz`Cr%lKNR{H=6JZVuIBS%y`;x9pm6yUNmwh5#2v^GY)FFgIsH|8+C$%5e;H99_S+rQ?}!s>)314>c(a#sCkj08_}4)$F%AC6W@y@pP)`FC-G+%(+K=t)T3{|3`XSpjea+FecLzub>MX<_V15lH!{gKT+NN?Z)>ul`=I7wvY0;0wT!*dH^l5-Y(uCKjANRNaZ2t9)i!!9$u`7%m>U~=&+lzaf3P#-G2KJxmG^w3W3N5b;j97OLsPnsy735;y7~kYyfv@W4#f2Ds%H8Vu=njo&Ui=bBjc&cF%x4Q)0iopQ6n3$Li+yG9X=mZ!)9k0jxa@S(Y;7(WOf!ivyabR(c1LZX5Zep7XG0BL!WI;buXegA{yvMXDr1?8S`cy)87t#4|^YBB6_OB{!G0a8=Y>$v_jhd?%veR(C7qoACH?xL^-L0`s1|W`IMLWU5di&jp48Areg-KziQH+$#}EON0srRKXvvppWrP{ZAXI!Y@ME!Y-WwMUAumu8F3gHagUzorbcV(8_rPd1?{^Ld4bvQg%lH!-A`$6(RW)QK563fX)mOi*8IK(ldlxBiX7ix`evW@Mu*D9a6@aVn_&5&y`t}+nfU*mKsOw+Ny>R?e|DG>r!%lOqhVllCTlb9)<+g5$Jb<^(}Xopn%+j<t+%#fp3G!63TB%HW;0=$Nf;20)DT`;x2ymB&wu>?|JXi0eS1CphxqHC+t<g}w{1zZ6C@7mNFA=5_xW@9`Z#+LP<fRMBFrH49U~`n==Ziva-BaOYn#H2lG(EP7Jl|dp=z+uTJo6iP8!dIIO3u3I}BT0p!6U_9OR{=<4IwbMpvtzK$r2m2eDL-{qXs**8&O2Uz8R~gWt-KH^_CElz~Z8Z<X=W#yuTVyK}>%r}*<<vG_Y387B8cR~cOQYx+!YbFGzJIVvn#8JB);zhe|phy`YDpTgsPO&Uy(D<HYb`pzH<27T~KVaz5S0YQY25aEkaaS<*SUdtm`2ZRnxARxxPW0YP5BotR|^JU4Rf2p|YR3Wm?#*=iqB4#W=R)*N7qt-e|Otm$OVn}+v#-;&M?u|;WAxdAK&<baw5N^+iarYYQLMJ5~Xbl&MIV8Ag_WHqHmdZdQeYc!t1P2mK9-@KicxrxDlF&yGHAUeorA2gIQ;O_x`a$QUd8im!^*Q{~Gq}AE9c{LaA{oxJAZAp=c_KR$Zq4@TswI~Svf06ouDb}Z0?%@ro*!;Z3b97kWR0JBAd0Za9Xn=dc7`Ecy$#Rmt>N}fr{|BHg6=%ZI+U8_Wlj-Bro=Rte(y@bpA<?0I5&SE5eg;*U@!BBRJ=-K=oQ&Bo!3cmyzHI!&i8Cp0AgI*_r~_HH|cy|m2BkD-YqFSeRPZhfr~swlzq2sbeBH=y-IxL{&^Uvp_&k;LRf(EO+tPTedj|_2nK25QV`R{j|d|vWM!MDYn4K|0EDZC?$$@0speS->lTes$B0MHkoME4gDjImogJ<qFET;If_<hdyhpz~0l8jC;TY}nv`Bas2*Rmm9^Q)ZCMAJN$~T!180}@NifsSXp8SmW{PKNP%C$dXuT2UADFmZ)i4e}E{aol2CWDYBGCH(o6f#h_*f3*SFA5b+Ktba%h3eD2Y26^?3`~D|;FP4(rSreqnTJo^YXx@riTi!&`+nA*p9rzw)9rLb;lG~7-#K)m0AjP<ZoWVNNB*DxTpw1OZ_nR~G1OyD&UawKX85pZp~h5ENOlyyd-dUZ(O);20E+IMWc<D~&g>zyLwjXr0!F$8(fdr_zlhXJ5zej(8(&hf61G`2PV!M6S)LRDFm`sQtBrg^6#<CS7$%{KsCyvA%f_GO?>l!wP#S=SCMVD8Wh0mhdEuFHT}ABn5jJC2zmGir36V0lo{)L<MH#tjEXbXCYX~A$ju%BJ3)?Y1kK#tUqg$MY7VqfC#7+~)VWpt@8R2s#Cq~JY;=Hw|^C*}c3uZ)TV)WR4liCC?WrAa=r2Cw{=Skt`n9fe}8LhW_T@p4`MHAl^{mL<GvQ-cXvgqv3{G4;++$e1$9!C7C3RKFZ_;Gt`SRhR69-NIvsrJo26R59li6)duh*QnK<``Ei2)he%LXO3mcB#A%Lx@BpHeDw|rSq9g*AaQ|i%5e|!!rvyL^+XGPN6b+ck8QCEIHS?T$WO{ptSYwLU34FYen$&6+%+U8GRS+t(({Rb-xpkZ*Ls&+pk{nu8UWiLGcI(<UHS|^I%Y(hWG~MsmW$!Ed#GZxq@ZrW{k4Iv_`QE-FZ_c4mKU6+9*@dd*I&m$2<3-OxIAh4fW1n^e2(BrU^kMN?W4LH=yre9`0FCwzs|4$(L_99;NTgf=$vIv=jo+`<bb^Q9`w%a|wBM@BDGq@9^{eH(OKkuZ`1dI{dQr<7fHrv3|1O`u@#XzTn)aK4wv*?;s!lNbyy2pDXkr<lCRzhhl8{`ZljG>5it@pig<PZr3VWHV>n_5)^>`ZBX%VM#aA!6-ay)BE#gzKtg*rd|xmrX6gA)eYev3O*D%Arj1g&v@pJVHx2BbC5_;Ib8N1Q%=Gn(sCC`!<hwb^J5la_;u?-4VuJ;0E2_}_?h#@MxF29o6!)dA%*UB%i5WMtPk({!@%u8gC}K(z#C`AcJG;uiL)3-hn(&DQ(P>REM#eEm;e5$L#1H~Z#LGd0wO=}6I{qMtwL#b#@xAz-h$a{5Y*-v>-tRSMx+#QjXDs5@%;>nD?N^s$(n<PRF~yH>9_~99O12AQ*LHxom`kbkN%-w9|Gi3DfSe>0&*6*b$M{kUWWdd&T_1u-*yVdv#O?G95vUO8Gm<uIvDMAbhIL^fXc0q6qUgH46LF-S#ZXyJpbF+Pgev<Strb!1MYc1cn66Pt{X+f^<N9P<>lzEgrF*OQcKAMX#Py1h9}@`!Qqx%G>w4+yYp#fmeRp<)=XqN?`)z@W<_&^Qw7whsE${ExZr#pm#nF6-6YkTt%l7}Z_jS#QBiXk9WnOR0JxIVr`$n7xV?Y+;6a$u!r8fg*Ku9j1Ha4J$``_<cnfjK%xT;(|H)5irquVw}%2ejg{jv61xIRk|gqD%QPJQp8Cq-)bb44sku15-0GlnU>#|YQqeoW?)g7nMkd_SjahovVgeTMxUF_70za!|N0h3qA4BfMJs&+@-TU-ZN^M^f-)5y|)@%S|_}+0s2Kf_}+-GmrHu*KON+DG-_BI`Bhh$$M$aKajH1pg*|d`drI0C!eEWyNaKIU(!GcTCp<;^q|>hgs>SI)f}N|0qjtmP$cF#Xjy(a$oy_jd|W0zhwb~0d1FpE5lZeR>uR3}VluZvUv#pvVN)NCt8Ha(GVdaD_PB;RqigV%bX@y?JVsj7C;)ql_!#REdlBnMW8C+i<XbB-vOFiUXT`pUos<*<4Z;b-jS||mYEU!^VkZ!FWxp$bpO6kvUn;7?Dy(5E^PDT`s}J&Lt)8nXX>s-1)8hN9meaQ+PEU!qJN0Xx+7pCUq;|P_zdWWqMN2~R_18vQU09Rzb}uEfm$Zw`_F^3}kCx{}lAMa#OB=k4KmE3%*~`~llP{3cNY0*QY>Zesu{o>>NRs|SnX$eGXIHQd%a?gngV_ELYY5C?l?kSYnlDAB;lrfotnzvPnSI{4itxVIi)ZG%mZ3>IeA6>LlKK~E<BB<)c3~XRaF^_jAGl^AmsToSk0i`Vk}!u7&b%fiX<=+_-yIP)`~HY?fVrZCzO!V5O0^#5oD^J3^U8kH+Iv<$kFV(5zE}O&q7Npo)8MBqj1X&w6fQgyQ=w<4O39n}540ijJdpLkGR;ky_?Zw-><hkU=I-i#9BFM_c`d?6C5<Lw81PqWG=-&cDDj2#+{}H%n_5|4eWp%7Ybp56bs4_3Rj@F#A`)e*7TcA$kVddTe*eCRc9HUtU)GCg$@8Jvr_F`53lQ+~yXILrmo$VkoY&U(%9yh~mlEtV?@{narLe&~n#R@h3pRTv#duxX{HyIZNhm**b-v$5%j!A@&t7zWLRcbG^IXJ@?&K(#yYDZfjDqPjEo&hUgmYif+f@9uQOtTM>unzEwE9%qMfexeck$dwCAXXtmos;RbFG2EoO6OWO!_@)51s#P4)uI!f4UXmC~mGUn5$ANKq$%K;e(J)mDJm5+$gEI;k%dH0!I0Lu?`B5-Vd*H;u;^eZF}~5<J+Q*=WkoO6MMlnwscds`cBJ=3UPE)%$rqex51)gvEE}ZI)c!sXc`D+5#kl+rG;y@ePeR)BPX_kh35B#X7zh(FYq)g^4Fd{TU&u2_y(^r>4?~C31d(`Lu&7;lp}f1_mSAieRR)uk*iozJYhdo=D7&3%psM@e)wFD(QLLy+vWY#nT?C^pQL31=P8AjGiY}6T9xB#YL7WT&Kw`ma3-{8&%Q2e;L2Cd#7?e1A^1VRHw+{_o-uoq_=(Ktyq3_ovE2(K)l1}QzB^!zw>!3{TQBYfc<;g36`B_~gi{e7))qScZcsRba5XC&+l#%2J9vTF85@4+72$J;Z+H&*##Qi5y|0k)D+y1xMHg$WD}v$H3zk?{)^_aT`h5y`Ot9t%>l^T1UD2OyePRnJ3JCjQ*?87~kiIam;;`VCXZiP6#^@<baE#Aec8LG3x0a2y>kf3!^(0K(4|=c-v#sX}tbM07#@X!!taW0a7|g}3LrW*Ta=N8ZB%U=Ct{)X3{n<FH@I;F?#tuWv9Yxqr2aZi(?Gkb(Yo-)W=?`>2xIPkwhbO}r!wudi=9Qm!j+Whvd}AtMeWE{Hi(}J$({Wz!tw6Md?r@GVR`X!>3Aq!oF#IjX772S0kBt%W7TE8DBlfU1rr=8-_l}2ai})f!>HFb&+#iM3rhdOPhiyiKy(I-Soud~Gx`Ov~CkJ7hxS!eP+7SJ4Bl;9%F}r>r^KA@t+-r^d9)&)_I~QHN4?MGkD7MB$pF&c&asMF}P9zruMI-yyZ4pdx9kYwId=&OFvT!ZSp1>9^H=Z4?iS5E?vD!>RE{`I>-{W3H$_rs{b*%Bgv$wd8zbV<8LYxBo{UZIy8&e}>kg&cnY@sjlD&D~g%meHq1!H1AAcQr<zS)vqL-*}#tT6|3zreT_3M12BV2&KTZ`jyi7?f>XK~ybF&!uD?QE;X2b(sqmI(*9@jK+os+wUAn<zeC47R7gB%q`z1&IpUpT3vJqDfPH^blDQJ!HLUOaNWOY77oh&0V&j-;g^bb7Jk*6tPz&|t_^9Y=51-GVdsXVO$k1%!LeoJ;d-TTQN7f6e?9qmciqLk;TJfoJXbncF(1El%?j=zOoaS8t787mG*phep}v<3okv4$Y5c*~mYA3dPhVBe6D`Y`m#G?yXI=M6;sr}ST)oasp(HW<zFP*@`wYS@h1LlHos@F-2|i%=I1j(Q{+IlZ_V?wt*TtWkm)++5+w1>cyuSbK|NL#1Q`o#t^sB8J_tnw7wI~oA-XZ??+|KImh<KRs8QYw&%x<>BEq$4VF0lbCoJCqnx8uRL_aD}5y-EcV<GX?MU5Po#{w4*>WZZhCAnxfs`;#}UsaM#Cy|`}u(~-2*-4?Hl*mYwXhxbKWyqa6$7f83$lN64;|GaG?-WaU@b>I7+xo)ml3uit@+;k4(oBaXT-S;OieVli%h(j3{aoqI7;MXE9KK8nNkBj5}VBL2PBL9w!_*C~FwyT*w)cyNIKgGr=`qf_Bd+-t8%DOE5GVDw7DmERha1C?LI=zhfCdBZuCW<+h__-JOB=EV#>e0Y+Byk?E#~9MT-)kZe`}|t+{l0(ubMtikujujlO}*N`%inAkkCgVQ06<di%*>fB6<W?a$_I;%vb{LMkguh>cE7jvB0=X5MjHoRf4lcKMMqgG_C;`JFtHl{Kd5k9e$cNqXt7@lMoaS}f`%q=Ag3ET1}u76k=KG#vMKg!<x2Ef!M@xd^L1l<o$JdN@3)N)3x++u54>i^8Cv90Rqy)tLmt&MU`+b&T89d-<U=LyEb$adFvE-g95$+Qm%rD{L7#wHo1N680E7c0s`pk%-a$Ag*Ilb`!fEp1oUN(yhC^<mf)(3o340h&rHxJ&@$Xi!(%_83K_uRPaiDq~dqZ$oAL-mw18oUJ)@pqn*pSQ6gQGIGsR%cN<2T*<!3y_XZgJ4=sZ{6p@n#M7!kAPK-?9$@_vwge(j}jkrBB!F!?5f@7Xe&UyLVBMOx<@cf;AJ4Fq(syPC3G}$g<&#!LeiiiWNB=dyIQ%aIRwC_Vzw|He55tPZ1nS&BrsrHR(uz9@cxIf9dMy`YnHEeRnk++BB?9J@y&5S<~k~*C$1Xd4ymej*&jm`TpSyw>Tfz@4+S9H&w2LBJUgnsd-!R6jut`EEqrgvp)_GdiLz>yMJA}^#pfXJQv|rW=kJ*>(z6^T`B23xqz1;1sWwk-`N#s=wpTItnl%W+P_(&T6Ot*%~}RH^rW^G*Ub0C39KZ@Sm5wmEN-QJizyfz&OO%Ewj~0%QIWM78(8nLgZ(5y5!g!zGF;JSK;vUQBEZ8tb~=7E3PpbnTR?@v^~Q27_GBTbt@ZD-apBL}y%FG9`V9NkL=e1!!{8hce8K6*y4EMKE!PN82zq5-%>=;%RkiWF{T}YKf-}zEw+VwB?0YIXB8W0-y^$pViMsFgaV(2$76W0}oE23pH4!<mZ$A6S2+YOU1@7S>$g@H#=pk725P*=4+K(6{BS@7Bom}g}D1akwf0Fy!o{;+*<0ZhK3gQz2`U3%Xo&89DFzF)TD{@~aXU2Ay0|V<l)_Kw_J8zqd`5*3g+Ghk^eX4_Qbzz9TFZ;oVSOZS?5_R{V-tPpXwr5N}P*rm8pD56=n4TqdjN!}tp~O{sUiG;7Y>)qQw*TjB|Lf28!#e`=;IeaFefE>R&qqJlVo$R<!D;!y0=C&-WA;M!WLjUp$B*gRoPD->o-2FVt*O-(ddDx}+DMcB$)4O*##Yx#kf7n2ENrX2pEt^-bN-+=X(W`t*9?qGHAI_w!;{3|?TFx)S^`w|r!%35ea7YzPd7U_#{$dVws3BAc}8L%9k7o(9utW+_7(P*g}vlO&VFo&wy;+?=S>aY)kU!C)cBND@u_xiLB4V(7K3ef+z)Yv4!6F6Ya1r}uwi#59pO@Gxfl3-#D=m-4Qn3f*|^VUHJ<lN?D+}p&|!?d>en~~N(G0cfy(Sq5gqGlE#OOx`##QO=jhXKVdGptm1?sqVkRuFbtY@2@-@yXrtJL4+gnuHHZ1rZ@B!cpm5O>l$C33ju`rVwdp3edfOsR<dB$^)o&R~EeAb}L^3k4Ohiov!{CCDSo;SeR9+-P3{VZ|}e4QVU-*ep9GxhZ*0gtkn$0l8O`m(%f@YRb-&(Vnf|DJ%a6FzZOnR+w7oskdjB?VEASv<fyvT*kJ!EEgX6ZoR^jVCx47Fe?b_QJP(*k=)$ZJZx_HuH(#`XJ9Vyl41rR2JV0d&z=A*DC8A7w$>0<keH{{3<jY%yj~h!cC^=PB0zbrRN@Ae7$=@_xbARaZR!qrE5Gp2%u!4tSOGzz@Jzv%^Vhqsm86Hy?*iY^dXn-f!a`enZ#w1uTi_P03g%Zz_m=8daSee`bZa%HbH3$9h%g<&ueTq>vBt-S;S}|=K1w8iCOYuU$Ix;fBBX-m6d=E1e(%5Jto(#0Fk9HSLB;76#Sd=O(naND828L2Ka1y*E;-b(t6!t4IZuFnzneyW|zAREK2~zl7Oouxlcf8=k4)!x~l+$OThUt?6lvX9LR^@_h}~`_(bABURx`^CJz>VCa~Vq;G=EfQ|%EG;olYPF5)*EKBgg=Q}7RC7b~i8bY%sRd@j^JOhLr-fqbcMFN@kc3AWvIzb_5#^(>F#bIBJ|YxJnec$5vG_TZ|2e{9Jj0nVu7_+DxqzvpojfiIGyhI(h)Z};6joBhg-&c%ZNBxch!>}XfehDL*<a0dqqaixe?Z59>bTWgj(+7J{09~x(Hi1U{m6OIB(*w@{$JAuFJ;XOJnD=Q3D8>@4UJLQ*L)?oE3=P7?bYK@6|jZLV^h8dyG+;NTn?b-T{SVXfF*bi|n<8S!n%o)L_z*>VZK0qwsz(<%M1|bj6n)#&|F@GDjH@5T<Vml8uSac=Va=gS@N*{H=yujf^Q%Dui&`O$8lW{nQI|9FwT)`ve5OK8RTWaF*Nn)Mi*;VH8F$lg^d$Ytxs9iDlAo)F-$s3ejo6;~*@A|xsd{w7h7Bic4%Cqqn-tjqZseJ!sT!5L~X?U-nwli7&A!`o2KmR<R+LyVu`aAs8T}i_%<4$ehxXQ<&=F1-JDh(KM!f{mt-p#q@XIBJ$N!u>{mRsvdHZZGVT~kAEk{?TTD4OkfsqmTj;c4u0Vt=Lu<y!s?zF2V&ZV8+ilczkg;72q6=D}uhFOlbHjTi#EA|T@*{C3yt5`ZF`)Dcg!pf+|r9ljB4nG-YS9^1nxBh`>|5I)f#c}Qa4hj^e>;-9}#Q(pPc8E0DeFVKJgC`R}-K*J(gj+GIz%wE;noIX|jV(B}7WzO_6VAWrgyZ&op-QSzX%7GLu+3*w(pYSeP%t7FsYR$E)TK>G?1503sU-DNgeg%E=+`oM)#H_e(`1Vlp>$*wPSgn45JvZZ7Tgbu4cSG<?W@{T_sHWV71kC&%Ke`SMrLA}*FhuUD{rc{{wUV~GH5)v%hWE2UXiOZ-p-)gatDkvBCO{ZDZ+FqUHFx)`r<<OzTh`swnLas#p>yB=zWOo$?TmkY)7t%ObADW$y9E5B05sV%)U<Lx^u^AMx4JIQa4uHrFqf^#tO-vxZ`N`VYP}b8{keaKSnpQW;Ocv(DMv23Rlhtosnx&O#L2qjLILgmFz;JCbHMe!8%~E;Jtv%wrrTkEM$(n@_xb6y_tEvSH~!bz9RKj@HOpfuKjvgJ)epx^mFqNe@YOyOVh)%W2;US(Z@MokzC>ev%1Uz%DpyhFEziLEvgV9)aOqCFrZHtx(A&Jt8kor5Tb>7RXy(d@$yBqJY<e`ZJXy8wRBhU=5F3dDi9js!Od{TeUwQDzof<juxWCv7muIh|NrEGsKdc#!U4P>-BVhaZoloA%F5<qnADB9UrJ`y_Q$KPj8yTa=htVz}^V>MvS#Nry_3c*IxSx%zsWU+w_6fVLe`*aRz*R~7)0C?!KJS|X>yei_Bq>dtk@Vb{9ntUMEWX~C-qUTXG51`l@#VI2SZIcb%CT$Oa9gj5%Jo&mCM0`xnw|al?)yU-;NMu&R}EFgy0+SXk{C{|;VWq)?rcfOvS+RT&L;5k>f+e@SJ|_Ra}~Gy{7lw*z1d*(x%Je(G=99^-PxTF#wUqMGV%a3%$}pBWB+ju?Grhg4>U{CTu6zZIXcT<`avF6*1kxpB#9?62XD##jthLPjUe43usW|Dmi-g@hN>~B+`xCr)>ii0Ce0C-&VF~eUl>xOMCrEPmUA`@SOmOR&dmXF%u-VX1C3+)(C<i_oYFi!o~6Zjxav2{Gi8>=nXijT9LK=|F^5Avb%NYO#3YF0eZ)%3&Ddq*)@V&TZN<Yi;-%ON!qDnZWP^ksEH`W*5jr`s1#8x-IZCe)i)`6Qp62>5IXBs`&gRT-Gun8@&XSN)*|w|+vgtk<nZ^6OO@FW}2_7B^n!ia1H}!)ycROdk`&YyUIY~t3pA>w;i+uCy97+N}p5<ztz}CJI0RF3e(BiYDbM%q6Y{hrO9<aX8+orttz1vx34XyY46&u9O+uo65!Sz<skJ5`eCch{ii8^Uazpwcm&%Fdom^5hIbTIas-Bq<-JIu5o7_Tf9DcQODXakX2#WyYHQ`2+xBkdRFfwU`$8T@urCD^$*{<<VLobz_4dCLaf349mhB8hVv^I|>rC$;ssl;nqe2F%@U_;i_{eg1sPpS7C9lbA}`KwI#Ec8aWES|ZgTiBw8NT(zy<1J;`&SV@}0XBRzpga4%(6=zqey~eXlgU6b^NboQj_VjS{V)Gxu@b<9Mti!d0JJ}Qaz-B&A_uzjE`03%+ibj#JuXW#W^sy~sp~J^!{)l$JzYN(RC3H`-f{7*!E3}$yRWu8dSmlzneZnrQy_D_s&1sv6{lo@lHm8tC;LpdD^e&R*0=xN{@BT{rcCqcv&#xu|>L1B(P<!QtXS-S_=8iUK+`s-ZU;Gn$|BN3#GGNzpd%j8SImbe>OAYr4iM_%z^`s3c;zWK`%&-1#%0{1>U4nha-qn(M-QNX+LxcU7wTkg9({&>OQ|lt1tw`$XPS4i0FFikDBihU<_z3}@xW6#R@k8f`#MEZ>r3U>V_}Z+)u%=>W=c8rU)~3cf4$c}mci0=3*p461>!pOArCc$5h})jD<$0sI^xIP+qN<%;W4)=yX88O|moddf&t1<`KPN;EDV8zGv((Q7<;SP<J-;0VBKS_CXU*z62j5=A!kEDy-)iGNiQd<+*=!^qw0#@?d*9rTsmtLyx)rb3bi5Jp+dbEheAZoTYb*4@!E?=4gWWo&`02~ykrOsron<MBNqnh){~*aM5)38@aa`@~%y)mKt-I6?=Vw_?98`!Ce#G~eWCOb_zS*=We$W+PS+lrw@1Lt#Y<<}HUiOafZhEap!&%|kT8b2xwe@BA=q|rYfsk8iM~Zq>zbfDHmiCZ{`gypg78~((1)o#D5I=m84@Xiw=KpBh8i+D}<UD0F_mk=Ykp9Z?^ZA`moF$5^D9sDlqF$$IVO+4=qcpe1_1UW7fuCjUg7ZesUH7uH@l+nCT;DD<if6fTNzxg0Yl1ZA@qdcUoMi02(ICijE|$pZqi4pI^wSgw1q!5MMWG#qH!nP2tC0IjaNlQiOUwA@_j0XMQ+*#dwZ5M+fv&D<=^yCVHTud88mBe<i^3M~l%UR#_(zeF8yqdzIP0briy=uXzQfP{&PM!Vy<K8`^BlA!;))-1l4Vnu3pQs{$A%_2EX+ASXEowSrIv0|<0BrTfC<U!$3+}w1*4qzQdCH9su<^{xxD<l+O~-V{ZS8J6Oy@{Eb$@5iJLWYU~%7!pOt@Wn7<`47t9$v`<d;{V$8$`7IyZ$$vLX>t~bxEf94JJf4)8MHqp1gzdk;1cE@Vpe4%E+dvPzkE3K_YtZRZ<;(o{XjKsgF_de$5;*VkC%2-!hbYwqUWVZci(4zn4+w`qO+mo>|NpnV9{vB~xM+7D#?*rm)&2lN;(F;ZFZ+zl0V)i0TH{%=gT%XzJ$N6c0zC1?Do|0q-_Q;97NVG+;YLP^SSQM-8#nd|_@ru=7!PgwF{lM#5?vw}~-Et>g5w8PJH#H%1#;p5!dw=s~V@x$E^Ra#~KH_^Ud)u}8JP+7ADc}#2sKwLAQlp%hp=m_Y9Mu~$jJ$Xq5vwBtjLn6=Ou}zic#N6kK?naU-{HRxCi~Zpu~=JAYSN!srz8tvUS@1C-m$Rf2C)^H#9U#Y_O^bXWIKzFXZI*@rHOcQwA>l?+(P#vYCsCC=Y@uAU?*;4&&6CEzi^Bn)s9QJXS0R(5a3+JnjGj9@)E&tEvN};(~evph=sPO7a6fGzUquA^c9U@TZCruckJ0>Zm++L1PSB%-u^7cJHfLN0|;Mdo5mis9<=9%{>4vYXiH<=OCl)UJX$g0SJ)RzC%F>|shrN(KzxS%X;GXk8WG3Myk!gH!CVYTaHaXO&NM_EIKkZD*)bQtdaVDpSoT#@kCPOiB7W|DuD8m5W&zuDqEC2Je2*F7qrw{E{;Rzg6T7*LJdzID?4!Hxdf2U2ALAg=7zydH_e6gMn~4)39vpnwAdfu`h7<EW%HBib6b-X1(vagw3Neu)Yr_6!yxzgsyF$l3Y(c`W&e)~c*>o%H-iH0joKG*tefkvBBB7$cVVzRM6iRb&4cJ86!rA4t%kPWpn0c$h_}RZB^NI^)cc_y}BDwymg>|O1P2)w&mwRl|q8$~wgL8xAdbCH^2Z1%~^K<OkV1F#;WX$&mzW`T=#${Vh@^BKS<~~YT62^qxTgAd=KiQ&-GYWIN-1w67APmR-b%gT^Hr!*M9)3S*<DJFqH?v55XTyfFe?*dxO>velx+H?DXwzrsX-#)Ea9Y02?+!zymuq&cKH_Z2u^@Ze4($Es+Mw>ON9;HJ0AHRa6gU$d>Y!ToNaB8cYVaBrjb;^pR^I=J=b8@R3TtlB@o`ppm|vV#T|W>9FA#gHKMlPYb|4yHJr0gz-lIPy0bStXUaV1j_6leAC?G)}Y-gutCr*)E-db55y+Nc)D~m%Uf{ikcYSc%+&+vc7DgF2%>lDN^DFL;xF2wQiHAWN+dzl-=9V9}9KXjeXY1uo^Y24Xs);W)_Te*%j>i~zC&vimTB>ZNCE#_hTW=?}s_c+LWk;GS#fF93T!kaYcsVDQWIR3F0;guxCW?ncIBy=_nHPh$^=j;>DVhxqn_e0WWlYRfXnQPzz9*BPf8<W=&3i&9N=MC0tc%Sgq2ko%|AHW^Lr*q=5>&3*ZlMBIjvF9Uyjo9lTf-QXU3C`46=;=5^?Q6sz#O^PS9(!ylczUXDJIVz>GO<8eYn`n*Cv*L3m-O2w*vr?Ft)dtT`$Ih9;YrrV^`J-_5B_~?KQ7%X!vUY+;wi2txkrd~+NpiA-w{7GzZGe$stEDpDc(~LF&ObWv&~rcGLX-MzTc`%K}p0mjAt05;k`~nAMp;(#WiCZ`ih8AV^7u%;HUJ>V?D=yskkl0I2`#t@NN<RtpnL79#9jUJ&(hXJ&mkK@Eo@c`swUxnRH25in(ivi0Ah@6nyXft>%%Kv{r{vLb1d;d9r6_w!PEU+%ea8#~Ka!+wSw{`g%dtOP;G_2eN1TdI8YukK>Ww)1!KEZ{HWjc@;bKVLm}(a^cS)KH0X$E__G!Va1{Yzm_~1T@o0RU&A8aB3LNi9M^}R=aaMMh<F-)$P_l7_K9<~;9S=Fzb?WS$oE7)chVBB*OvP7!Ac`ng}^;9-o1rAXK`P$H&2R}5l2mZdh$02`r|Qm=Sek;f5;_6Zj9=Cx~Nw1g?Xb>@9Cr7%P)_&YWzO>EKKSpZ*#=LN}xx}g~iKpVb;@xvpSj|t0LsYbRJ&KTYo)Q@##xb-uM*0so=|=td(ERjbObbA~W(n&i1N5b%=eQ{_8;-4IOPJW<%>qVP$f0*pu}X@@^<X+>|@Binp!!%hmI--2X{j+1*XgCXPgk=?p~-KbF|r^<vY*p6PAo?df;(Haknz=Tgk}O)p!|k1p0vt=<WrEW!A(#w_bg@Ck`aS!h?`;z9C^9Z&X_oZzPT2&+)wep4b!g_u-6yNt<ug}vBI#8i3-KCGA2E+(tYzluWaom!2xK(t)-2NgG+ihI@+IxEf9SB-VTwLes~1+%{@kr`+GhsPe{f_Qmzems0nO5iy0z1VO4u$JP<b<D~MfyVRw7G?31n^A9W?DIYwBN31z!Sa3fzKHAGo?C0V5O5xU%UX28N&8iE?@-wIM#J1<-g3fjnddWQO?<V=*2A%f&&Yn4mKvv1$7kh&MQ37;<rCKSaS>JdEo*{~pTKce?8J6PTi7kGt70y!P`^wG(AE076|1El^5?Z_D1440@RoCNcDxGvyMAiE&-ClZ9HwL4u9j{${B|q*&4{Z@>{Vh54TV3FoW~i~LE4Rg*i5`<_^b}E5j+yls-IuGr?}Vfv$l91Rk;m6-h1_$|A*&V%D>^s-V7=H{UpbuV+`)$CC7i~=MTjh@vH^WsgfXhp)MJgK2zj_E94@IduW&P|25TsKf_y5_-x`sJLmBn83&mZC2ZZf)!L_w`Oor!q_Jo21D@dmxfB!o`8wri`B)0QM~MhPv^@20v%Ol}pX#$`dM-Z~tCvJpWloO*LsAH#^`3A_>}1Xl=hfZws49}Ez9Yrpr2j}9Te9A!FWynh@>Gkc;)nb|O#1uQ=cj79pT*~W9{=<c{4TlR?({$Q;r}Q5aO%9x@Lf3nhF4o+YAW1&>UYDd7s)+yJliK&tQV&7)OddEA?C`(9!oj+2ila*%D*Ll<78Ff394gY<!5rfQhR$fp5CAJE8cJxhUa@W)3qS+&<W<dj(>9EQr}$_500Nj!<?t~a{83v4eR^G7UjB>UG52y*u(~bLwP-N_dUZ;P+X67ULRW|_<rV>MNHh;pyRV<9`v@N&zv%Li)(5Yxov_T`9rtNsc_}_hG?_?C~S%fiFnM~m+LWi+4bT|T`?3%f0HHiBg6tRw`Q?-QWpp29sEed!k$HAL+E}mI8aPW82Eflz8HtQHWu-6E%})vd_VGzcwSA|^|_YuL$Ja+@yKBsi^%L+F|J8mi)(hs%QLoDu`omzW7_!rl`dE}$Mx}@j>r6#J;W1{dwtTuz1z&^)p0zsH!Be__Zb(b`=Kb3_6Z#2iJl7GqPS_798pUhaa5K6QuRfZzJpj*;q7&mgDBVbYcbnIak5@_&D&+@xv%hjuQp5AOr`zN<2`uR6nYGmps~W{w^pV8KEw>3jQ!+uzc6m)GhweEmr{gIV~&Ry%NFAHjqehh=oI)ddJ=1LR}%ax@^z-%$He)KYWtDr{4#PX0!-{Lt_qniH42`~UYm!eJvw53<3;vEP_!KP#TlVE;Vbu?>m$kQnQ&xLtcUjQ#jobA^w}Ek<Y>|tc_z+X^4G44y{Yx*AYW~o1DIxfqUUXrdGU1`*UF@ET^8b$Lf+~Ee6a_6p5xYg_jbz~k{e|<xO#HJ*?2Yxt?BH_o;cmnY*-co_S|V#;#|XoJ9zd7`;qE6&LXF%mhud<m%gjbjs2-ToAmq2zL+1~x3BDXd~^{b8C=ul{VC_REza^l`Noy>;SwR(Os|7NcaIJEj>epkk@rn7X6625UStmccM(w(i#YmGnv3E2fcI9<S^RJ=r8tJ?r2a%cl!uqgp1+WjoVS;;iD$rbzWvLVeGFgpoM|63<73A5wHiQUers`~sUEopA@jS~?-<jx?Ypx#^Y#UH>5nA0aP{WjcYal_Z9CT`1~REL`Vsds`=)#y?-D+7y-rxm14TZ2RZ|;%o2}hft_k)g%6>%nJj>M9OOfp~mzeaQq(W+&UzNL=zAIli(Su=~^_h8^={n;8DxPo055`%@{hU3cZc~x<$!FJB&F}iyPMol1RUGAIe1+LrdO`$ojcdG1{2I=jMPz+f`6!M*?S0JnCJQ~F^wXK2)n4Z0YLeo?%XM8`yo?>d?<sJ%<9?^U#j-5C{^uk2x3UX~9)JluHG@we<J}PNf<4`z5tMDn)la?>r(P5vt>vbbe{1TV>@iz!J$oBd6N1;FevcPyS#vu`F;e1_?OtHnq9p=iHsEJRqs<t;u@q!wJzMv>LLWw!U5Ic0dVJny!Tk8J7`u0$vi!K}C+moK5PJbdSDh~AwCzPor^L5c9Y45k`F%$x&lP@;XT!US@mv8l7X}B+$JXj2N_Fvm`YZU|Q^W~ne?a9i>bRLNuEG9(TwZ23%7V;Ak@JR{Wpi%0)Qj@Edt80fl#pY!6(w^8Pqtgtp~Q5f3UsL37}Fd`DGA-@bRR5g{Px2Dp%j*24<Y0=OeOvvQzps8a<>9O=(9ZwNQ>qZ+RE2pP=lG8y{j_p=qD)*icqsEY+IEU8)4gNd+To<YZLv=k3IjH*1|K8e=a#`f)xZ>vtT|+gXG%`&lkrr>5oWhOW05#xaDDfX?C3s>Fq2^<rorZq4|Bxmw}B%84?MjAq=5cmMi-0ZM~JF=68+r`Ga=p%bxuV9YC|RPfp7zOL$+|7WCS*mVUN1{gQNRPWSLz$9R_7<f1h3C9swc?eCXEqc*>tLZ;F7e*HLq3H8{ovAbX2{_(SRSO0uVTZ7&G4Q(zBcK7q`c)!H%emy<xPutxBRJBa4d-vRX^N%0C&#!6a`^@|Nu=Vhl?9Z=h<NKw4(GQn8o8If!kGIi3`r$GBlKo1^Go=);Cy(?Ge8RkKgwRYGz&63-J0N85coD*IebR-`kH0Okw(%_mv4>3(ZP_w{(3W9wrNsAFPzN{qOTS^PXZ@wmJpWn0soWZx$TF0uMmiTrp@rXWr$?_qvD6TH*FMt#x5?U*N>H1kOja}vxre-9g1H&QKBY4PmO4jU;ri>b0lOG`I%YW#K`-=!a0CAo&u%h)Jc{_b>+}4iM6E53W43O%UPbQa138^U{^T!u#@*wCrC_{GrBuS15~?uem#xe4as{|k!#m=&V?|fo@ZD1>+A1~3b3()XFnUtu#@SmYb@O8>*aAK1NJ4?i_T73)AbpC)*&Y<rtI4w{s=0bvRZAr>H)XnLmUCsECz1Y^wgm5gg7pwOu+jg(TEM@(#|!9w{)v6|-+%kR{|{mDRk#'''
+try:
+    replacements = json.loads(zlib.decompress(base64.b85decode(blob.encode())).decode())
+except Exception as exc:
+    raise SystemExit(f"canonical materialization blob invalid: {exc}")
+if len(replacements) != 30:
+    raise SystemExit(f"canonical replacement cardinality mismatch: {len(replacements)}")
+for relative, encoded in replacements.items():
+    pure = PurePosixPath(relative)
+    if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+        raise SystemExit(f"canonical replacement path unsafe: {relative}")
+    if pure.parts[0] in {".auto-research", "review-evidence", "logs", ".fixture-shim"}:
+        raise SystemExit(f"canonical replacement crosses authority boundary: {relative}")
+    target = project.joinpath(*pure.parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(base64.b64decode(encoded, validate=True))
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+# Bind copied final binaries and their versioned copies to this materialized
+# generation.  DOCX/PDF container bytes can differ across authentic builds.
+final_manifest_path = project / "final/final-manifest.json"
+final_manifest = json.loads(final_manifest_path.read_text())
+for key, relative in final_manifest["output_paths"].items():
+    canonical = project / relative
+    versioned = project / final_manifest["versioned_output_paths"][key]
+    versioned.parent.mkdir(parents=True, exist_ok=True)
+    versioned.write_bytes(canonical.read_bytes())
+    final_manifest["output_hashes"][key] = sha(canonical)
+    final_manifest["versioned_output_hashes"][key] = sha(versioned)
+final_md_hash = sha(project / final_manifest["output_paths"]["md"])
+final_manifest["same_source"]["source_md_sha256"] = final_md_hash
+for record in final_manifest["format_generation"].values():
+    record["source_md_sha256"] = final_md_hash
+final_bytes = (json.dumps(final_manifest, indent=2, sort_keys=True) + "\n").encode()
+final_manifest_path.write_bytes(final_bytes)
+(project / final_manifest["versioned_output_paths"]["manifest"]).write_bytes(final_bytes)
+
+# Phase 20 consumes the now-rebound Phase 19 package.  Rebind only declared
+# source/output hashes and keep self-referential JSON entries explicit.
+hygiene_path = project / "submission/submission-hygiene.json"
+hygiene = json.loads(hygiene_path.read_text())
+final_sources = {
+    "final_manifest": "final/final-manifest.json",
+    "final_latest": "final/LATEST.txt",
+    "final_md": "final/manuscript-final.md",
+    "final_docx": "final/manuscript-final.docx",
+    "final_tex": "final/manuscript-final.tex",
+    "final_pdf": "final/manuscript-final.pdf",
+    "references_bib": "citation/references.bib",
+    "ethics_open_science": "ethics/ethics-open-science.json",
+    "replication_report": "replication-package/replication-report.json",
+}
+for key, relative in final_sources.items():
+    hygiene["source_hashes"][key] = sha(project / relative)
+hygiene_bytes = (json.dumps(hygiene, indent=2, sort_keys=True) + "\n").encode()
+hygiene_path.write_bytes(hygiene_bytes)
+
+package_path = project / "submission/submission-package-manifest.json"
+package = json.loads(package_path.read_text())
+for key, relative in package["canonical_outputs"].items():
+    canonical = project / relative
+    if relative.endswith(".json"):
+        package["output_hashes"][key] = "SELF_REFERENTIAL"
+        continue
+    package["output_hashes"][key] = sha(canonical)
+    versioned = project / package["versioned_outputs"][key]
+    versioned.parent.mkdir(parents=True, exist_ok=True)
+    versioned.write_bytes(canonical.read_bytes())
+    package["versioned_output_hashes"][key] = sha(versioned)
+for item in package["package_inventory"]["files"]:
+    relative = item["path"]
+    item["sha256"] = "SELF_REFERENTIAL" if relative.endswith(".json") else sha(project / relative)
+versioned_hygiene = project / package["versioned_outputs"]["hygiene_json"]
+versioned_hygiene.parent.mkdir(parents=True, exist_ok=True)
+versioned_hygiene.write_bytes(hygiene_bytes)
+package_bytes = (json.dumps(package, indent=2, sort_keys=True) + "\n").encode()
+package_path.write_bytes(package_bytes)
+(project / package["versioned_outputs"]["package_manifest"]).write_bytes(package_bytes)
+
+data_like = sorted(
+    path.relative_to(project).as_posix()
+    for path in project.rglob("*")
+    if path.is_file() and path.suffix.lower() in {".rds", ".rdata", ".sav", ".dta", ".sas7bdat"}
+)
+expected_data = [
+    "data/interim/panel-loaded.rds",
+    "data/processed/analytic-sample.rds",
+    "data/processed/analytic-variables.rds",
+]
+if data_like != expected_data:
+    raise SystemExit(f"canonical data-like inventory mismatch: {data_like}")
+for path in project.rglob("*"):
+    mode = path.lstat().st_mode
+    if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+        raise SystemExit(f"canonical materialization contains unsupported entry: {path}")
+
+# The vendored bundle authenticates bytes, not host filesystem timestamps.
+# Normalize every materialized artifact to one fixed epoch so extraction order
+# cannot make a manifest look older than the artifacts it records.
+materialized_epoch = 1_700_000_000
+for path in project.rglob("*"):
+    if path.is_file():
+        os.utime(path, (materialized_epoch, materialized_epoch), follow_symlinks=False)
+
+# Phase 5's pre-execution gate must observe no Phase 8 result artifacts.  Hold
+# exactly those late outputs outside the project until Phase 7 is complete.
+stage_root = fixture_root / "completion-chain-staged"
+for relative in (
+    "analysis/execution-report.json",
+    "tables/results-registry.csv",
+    "figures/figure-registry.csv",
+):
+    source = project / relative
+    destination = stage_root / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(destination)
+
+shim = project / ".fixture-shim/secrets.py"
+shim.parent.mkdir(parents=True, exist_ok=True)
+shim.write_text(
+    'import json, os\n'
+    '_values=json.loads(os.environ["SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE"])\n'
+    'def token_hex(nbytes=None):\n'
+    ' value=_values.pop(0)\n'
+    ' if nbytes is not None and len(value)!=2*nbytes: raise RuntimeError("fixture token length mismatch")\n'
+    ' return value\n',
+    encoding="utf-8",
+)
+
+deny = fixture_root / "completion-chain-deny"
+deny.mkdir(parents=True, exist_ok=True)
+curl = deny / "curl"
+curl.write_text('#!/usr/bin/env bash\necho "F20_L4_NETWORK_DENIED: curl" >&2\nexit 1\n', encoding="utf-8")
+curl.chmod(0o755)
+PY
+# POST_STOP20_CALL_END l4.chain.artifact-setup
+
+export PATH="$TMP/completion-chain-deny:$PATH"
+export SCHOLAR_ZOTERO_DIR="$FIXTURE_ZOTERO_DIR"
+
+# POST_STOP20_CALL_BEGIN l4.chain.init
+bash "$SCRIPT_DIR/auto-research-state.sh" init "$CHAIN_PROJ" >/dev/null
+# POST_STOP20_CALL_END l4.chain.init
+# POST_STOP20_CALL_BEGIN l4.chain.set-mode
+bash "$SCRIPT_DIR/auto-research-state.sh" set-mode "$CHAIN_PROJ" autonomous "F20 L4 canonical completion chain" >/dev/null
+# POST_STOP20_CALL_END l4.chain.set-mode
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-0
+# CASE_ID: l4.chain.accept.complete-phase-0
+expect_pass l4.chain.accept.complete-phase-0 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 0
+# POST_STOP20_CALL_END l4.chain.complete-phase-0
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-1
+# CASE_ID: l4.chain.accept.complete-phase-1
+expect_pass l4.chain.accept.complete-phase-1 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 1
+# POST_STOP20_CALL_END l4.chain.complete-phase-1
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-2
+# CASE_ID: l4.chain.accept.complete-phase-2
+expect_pass l4.chain.accept.complete-phase-2 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 2
+# POST_STOP20_CALL_END l4.chain.complete-phase-2
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-3
+# CASE_ID: l4.chain.accept.complete-phase-3
+expect_pass l4.chain.accept.complete-phase-3 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 3
+# POST_STOP20_CALL_END l4.chain.complete-phase-3
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-4
+# CASE_ID: l4.chain.accept.complete-phase-4
+expect_pass l4.chain.accept.complete-phase-4 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 4
+# POST_STOP20_CALL_END l4.chain.complete-phase-4
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-5
+# CASE_ID: l4.chain.accept.complete-phase-5
+expect_pass l4.chain.accept.complete-phase-5 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 5
+# POST_STOP20_CALL_END l4.chain.complete-phase-5
+
+# POST_STOP20_CALL_BEGIN l4.chain.review-begin-phase-6
+PYTHONPATH="$CHAIN_PROJ/.fixture-shim" \
+  SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE='["085f63f019172c7d39e0a843","80244723ef3a8b14b2da27dc","8d33a2a831e170b80ba414b7","5ed51c0702abf93d8c8ddb43","6d10a1dea515dc52b241cb1d","49faaee620318e9efd3a2439","1570991dbf4da26fc71fcef1"]' \
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-begin "$CHAIN_PROJ" 6 initial_panel generic-fixture-host >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-begin-phase-6
+CHAIN_REVIEW_SOURCE="$(single_review_session_dir "$PREEXEC_PROJ" 06)"
+CHAIN_REVIEW_DEST="$CHAIN_PROJ/review-evidence/phase-06/s-085f63f019172c7d39e0a843"
+mkdir -p "$CHAIN_REVIEW_DEST/reports" "$CHAIN_REVIEW_DEST/traces"
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" correctness
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-6-correctness
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 6 s-085f63f019172c7d39e0a843 correctness \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-6-correctness
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" robustness
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-6-robustness
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 6 s-085f63f019172c7d39e0a843 robustness \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-6-robustness
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" statistical
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-6-statistical
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 6 s-085f63f019172c7d39e0a843 statistical \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-6-statistical
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" reproducibility
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-6-reproducibility
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 6 s-085f63f019172c7d39e0a843 reproducibility \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-6-reproducibility
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" style_ai_patterns
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-6-style_ai_patterns
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 6 s-085f63f019172c7d39e0a843 style_ai_patterns \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-6-style_ai_patterns
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" data_handling
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-6-data_handling
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 6 s-085f63f019172c7d39e0a843 data_handling \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-6-data_handling
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-6
+# CASE_ID: l4.chain.accept.complete-phase-6
+expect_pass l4.chain.accept.complete-phase-6 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 6
+# POST_STOP20_CALL_END l4.chain.complete-phase-6
+
+# POST_STOP20_CALL_BEGIN l4.chain.review-begin-phase-7
+PYTHONPATH="$CHAIN_PROJ/.fixture-shim" \
+  SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE='["96f4059a54d7e0a7c3dd9432","4bf6139d435b9e5d44ffb3a5","d9a91733868a1ae2872332bd","70b5eaf70b9ca80dade24c8a","cf7f1d2141b4128c99809a9d"]' \
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-begin "$CHAIN_PROJ" 7 premortem_panel generic-fixture-host >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-begin-phase-7
+CHAIN_REVIEW_SOURCE="$(single_review_session_dir "$PREMORTEM_PROJ" 07)"
+CHAIN_REVIEW_DEST="$CHAIN_PROJ/review-evidence/phase-07/s-96f4059a54d7e0a7c3dd9432"
+mkdir -p "$CHAIN_REVIEW_DEST/reports" "$CHAIN_REVIEW_DEST/traces"
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" identification
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-7-identification
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 7 s-96f4059a54d7e0a7c3dd9432 identification \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-7-identification
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" measurement_missingness
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-7-measurement_missingness
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 7 s-96f4059a54d7e0a7c3dd9432 measurement_missingness \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-7-measurement_missingness
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" model_robustness
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-7-model_robustness
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 7 s-96f4059a54d7e0a7c3dd9432 model_robustness \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-7-model_robustness
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" interpretation_claims
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-7-interpretation_claims
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 7 s-96f4059a54d7e0a7c3dd9432 interpretation_claims \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-7-interpretation_claims
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-7
+# CASE_ID: l4.chain.accept.complete-phase-7
+expect_pass l4.chain.accept.complete-phase-7 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 7
+# POST_STOP20_CALL_END l4.chain.complete-phase-7
+
+mkdir -p "$CHAIN_PROJ/analysis" "$CHAIN_PROJ/tables" "$CHAIN_PROJ/figures"
+mv "$TMP/completion-chain-staged/analysis/execution-report.json" "$CHAIN_PROJ/analysis/execution-report.json"
+mv "$TMP/completion-chain-staged/tables/results-registry.csv" "$CHAIN_PROJ/tables/results-registry.csv"
+mv "$TMP/completion-chain-staged/figures/figure-registry.csv" "$CHAIN_PROJ/figures/figure-registry.csv"
+mkdir -p "$CHAIN_PROJ/logs"
+cp -R "$EXEC_PROJ/logs/." "$CHAIN_PROJ/logs/"
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-8
+# CASE_ID: l4.chain.accept.complete-phase-8
+expect_pass l4.chain.accept.complete-phase-8 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 8
+# POST_STOP20_CALL_END l4.chain.complete-phase-8
+
+# POST_STOP20_CALL_BEGIN l4.chain.review-begin-phase-9
+PYTHONPATH="$CHAIN_PROJ/.fixture-shim" \
+  SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE='["fe212f6e914b0e00004724a9","fad70623d822a17523e7c245","a8692ac1012611577e19f1ac","16faa35d82220e09cc6262a0","1b8b59525e562a2eaca4548a"]' \
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-begin "$CHAIN_PROJ" 9 post_execution_panel generic-fixture-host >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-begin-phase-9
+CHAIN_REVIEW_SOURCE="$(single_review_session_dir "$POSTEXEC_PROJ" 09)"
+CHAIN_REVIEW_DEST="$CHAIN_PROJ/review-evidence/phase-09/s-fe212f6e914b0e00004724a9"
+mkdir -p "$CHAIN_REVIEW_DEST/reports" "$CHAIN_REVIEW_DEST/traces"
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" statistical_results
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-9-statistical_results
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 9 s-fe212f6e914b0e00004724a9 statistical_results \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-9-statistical_results
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" robustness_consistency
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-9-robustness_consistency
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 9 s-fe212f6e914b0e00004724a9 robustness_consistency \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-9-robustness_consistency
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" sample_data_integrity
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-9-sample_data_integrity
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 9 s-fe212f6e914b0e00004724a9 sample_data_integrity \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-9-sample_data_integrity
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" interpretation_claims
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-9-interpretation_claims
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 9 s-fe212f6e914b0e00004724a9 interpretation_claims \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-9-interpretation_claims
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-9
+# CASE_ID: l4.chain.accept.complete-phase-9
+expect_pass l4.chain.accept.complete-phase-9 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 9
+# POST_STOP20_CALL_END l4.chain.complete-phase-9
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-10
+# CASE_ID: l4.chain.accept.complete-phase-10
+expect_pass l4.chain.accept.complete-phase-10 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 10
+# POST_STOP20_CALL_END l4.chain.complete-phase-10
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-11
+# CASE_ID: l4.chain.accept.complete-phase-11
+expect_pass l4.chain.accept.complete-phase-11 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 11
+# POST_STOP20_CALL_END l4.chain.complete-phase-11
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-12
+# CASE_ID: l4.chain.accept.complete-phase-12
+expect_pass l4.chain.accept.complete-phase-12 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 12
+# POST_STOP20_CALL_END l4.chain.complete-phase-12
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-13
+# CASE_ID: l4.chain.accept.complete-phase-13
+expect_pass l4.chain.accept.complete-phase-13 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 13
+# POST_STOP20_CALL_END l4.chain.complete-phase-13
+
+# POST_STOP20_CALL_BEGIN l4.chain.review-begin-phase-14
+PYTHONPATH="$CHAIN_PROJ/.fixture-shim" \
+  SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE='["725fa00440dbc3674b6f490b","4c22beb27d6878524cf8b6c3","989c6d808960c0d85f1b5e90","12f95f2f054f71dfa6cea6f4","8ed68e5896a296220ada58ec"]' \
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-begin "$CHAIN_PROJ" 14 verification_panel generic-fixture-host >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-begin-phase-14
+CHAIN_REVIEW_SOURCE="$(single_review_session_dir "$REPLICATION_PROJ" 14)"
+CHAIN_REVIEW_DEST="$CHAIN_PROJ/review-evidence/phase-14/s-725fa00440dbc3674b6f490b"
+mkdir -p "$CHAIN_REVIEW_DEST/reports" "$CHAIN_REVIEW_DEST/traces"
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" verify-numerics
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-14-verify-numerics
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 14 s-725fa00440dbc3674b6f490b verify-numerics \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-14-verify-numerics
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" verify-figures
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-14-verify-figures
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 14 s-725fa00440dbc3674b6f490b verify-figures \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-14-verify-figures
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" verify-logic
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-14-verify-logic
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 14 s-725fa00440dbc3674b6f490b verify-logic \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-14-verify-logic
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" verify-completeness
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-14-verify-completeness
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 14 s-725fa00440dbc3674b6f490b verify-completeness \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-14-verify-completeness
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-14
+# CASE_ID: l4.chain.accept.complete-phase-14
+expect_pass l4.chain.accept.complete-phase-14 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 14
+# POST_STOP20_CALL_END l4.chain.complete-phase-14
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-15
+# CASE_ID: l4.chain.accept.complete-phase-15
+expect_pass l4.chain.accept.complete-phase-15 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 15
+# POST_STOP20_CALL_END l4.chain.complete-phase-15
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-16
+# CASE_ID: l4.chain.accept.complete-phase-16
+expect_pass l4.chain.accept.complete-phase-16 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 16
+# POST_STOP20_CALL_END l4.chain.complete-phase-16
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-17
+# CASE_ID: l4.chain.accept.complete-phase-17
+expect_pass l4.chain.accept.complete-phase-17 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 17
+# POST_STOP20_CALL_END l4.chain.complete-phase-17
+
+# POST_STOP20_CALL_BEGIN l4.chain.review-begin-phase-18
+PYTHONPATH="$CHAIN_PROJ/.fixture-shim" \
+  SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE='["4348fa35cf6880ecc4f08dc8","8c2b21b3f9ce69e356a3bbd6","75ee2fed215d13c103f36f72","c6dfa156ab32c581c146c667","344386b4ab768fdf9ed97fe1","c00f44c2a0f12e01b971e2c8"]' \
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-begin "$CHAIN_PROJ" 18 adversarial_panel generic-fixture-host --extra-role survey-methods >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-begin-phase-18
+CHAIN_REVIEW_SOURCE="$(single_review_session_dir "$FINAL_PROJ" 18)"
+CHAIN_REVIEW_DEST="$CHAIN_PROJ/review-evidence/phase-18/s-4348fa35cf6880ecc4f08dc8"
+mkdir -p "$CHAIN_REVIEW_DEST/reports" "$CHAIN_REVIEW_DEST/traces"
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" methods-evidence
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-18-methods-evidence
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 18 s-4348fa35cf6880ecc4f08dc8 methods-evidence \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-18-methods-evidence
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" theory-contribution
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-18-theory-contribution
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 18 s-4348fa35cf6880ecc4f08dc8 theory-contribution \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-18-theory-contribution
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" senior-editor
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-18-senior-editor
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 18 s-4348fa35cf6880ecc4f08dc8 senior-editor \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-18-senior-editor
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" interpretive-skeptic
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-18-interpretive-skeptic
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 18 s-4348fa35cf6880ecc4f08dc8 interpretive-skeptic \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-18-interpretive-skeptic
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" survey-methods
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-18-survey-methods
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 18 s-4348fa35cf6880ecc4f08dc8 survey-methods \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-18-survey-methods
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-18
+# CASE_ID: l4.chain.accept.complete-phase-18
+expect_pass l4.chain.accept.complete-phase-18 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 18
+# POST_STOP20_CALL_END l4.chain.complete-phase-18
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-19
+# CASE_ID: l4.chain.accept.complete-phase-19
+expect_pass l4.chain.accept.complete-phase-19 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 19
+# POST_STOP20_CALL_END l4.chain.complete-phase-19
+
+# POST_STOP20_CALL_BEGIN l4.chain.review-begin-phase-20
+PYTHONPATH="$CHAIN_PROJ/.fixture-shim" \
+  SCHOLAR_FIXTURE_TOKEN_HEX_SEQUENCE='["e1a79f4cbb5aebed2376d7fd","8a8be373777e3b937b64546a"]' \
+  bash "$SCRIPT_DIR/auto-research-state.sh" review-begin "$CHAIN_PROJ" 20 semantic_body_reader generic-fixture-host >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-begin-phase-20
+CHAIN_REVIEW_SOURCE="$(single_review_session_dir "$SUBMISSION_PROJ" 20)"
+CHAIN_REVIEW_DEST="$CHAIN_PROJ/review-evidence/phase-20/s-e1a79f4cbb5aebed2376d7fd"
+mkdir -p "$CHAIN_REVIEW_DEST/reports" "$CHAIN_REVIEW_DEST/traces"
+copy_review_role_evidence "$CHAIN_REVIEW_SOURCE" "$CHAIN_REVIEW_DEST" semantic_body_prose_reader
+# POST_STOP20_CALL_BEGIN l4.chain.review-complete-phase-20-semantic_body_prose_reader
+bash "$SCRIPT_DIR/auto-research-state.sh" review-complete "$CHAIN_PROJ" 20 s-e1a79f4cbb5aebed2376d7fd semantic_body_prose_reader \
+  --driver-status succeeded \
+  --host-task-unavailable "fixture host does not expose task identifiers" \
+  --model-unavailable "fixture backend does not expose model identifiers" >/dev/null
+# POST_STOP20_CALL_END l4.chain.review-complete-phase-20-semantic_body_prose_reader
+
+# POST_STOP20_CALL_BEGIN l4.chain.complete-phase-20
+# CASE_ID: l4.chain.accept.complete-phase-20
+expect_pass l4.chain.accept.complete-phase-20 "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" complete "$CHAIN_PROJ" 20
+# POST_STOP20_CALL_END l4.chain.complete-phase-20
+
+# POST_STOP20_CALL_BEGIN l4.chain.next-done
+# CASE_ID: l4.chain.accept.next-done
+expect_pass l4.chain.accept.next-done "$CHAIN_PROJ" -- \
+  bash "$SCRIPT_DIR/auto-research-state.sh" next "$CHAIN_PROJ"
+# POST_STOP20_CALL_END l4.chain.next-done
+
+harness_validate_results --checkpoint completion-tail
+progress "completion-tail authoritative harness assertions passed"
+if [[ "${SCHOLAR_FIXTURE_STOP_AFTER_PHASE:-}" == "completion-tail" ]]; then
+  exit 0
+fi
+
+harness_validate_results
 
 END_TS="$(date +%s)"
 echo "auto-research fixture test: PASS"

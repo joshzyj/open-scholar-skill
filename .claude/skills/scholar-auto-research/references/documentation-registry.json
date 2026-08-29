@@ -1,0 +1,73 @@
+{
+  "schema_version": "scholar-auto-research-documentation/v1",
+  "canonical_outputs": {
+    "review": {
+      "path": "review/",
+      "owner_phases": ["6", "7", "9"]
+    },
+    "verification": {
+      "path": "verify/",
+      "owner_phases": ["14"]
+    },
+    "quality": {
+      "path": "quality/",
+      "owner_phases": ["18"]
+    },
+    "final": {
+      "path": "final/manuscript-final.{md,docx,tex,pdf}",
+      "owner_phases": ["19"]
+    },
+    "submission": {
+      "path": "submission/manuscript-submission.{md,docx,tex,pdf}",
+      "owner_phases": ["20"]
+    },
+    "replication": {
+      "path": "replication-package/",
+      "owner_phases": ["17"]
+    },
+    "review_evidence": {
+      "path": "review-evidence/",
+      "owner_phases": ["6", "7", "9", "14", "18", "20"]
+    }
+  },
+  "protocols": {
+    "review_evidence": {
+      "contract": "references/review-evidence-contract.md",
+      "state_schema": "1.3.0",
+      "default_profile": "normal",
+      "default_assurance": "process_recorded",
+      "migration_ids": ["f09-portable-review-evidence-v1", "f09-review-evidence-closure-v2"]
+    },
+    "runtime": {
+      "manifest": "references/runtime-dependencies.json",
+      "preflight": "scripts/runtime-preflight.py"
+    },
+    "data_safety_runtime": {
+      "contract": "references/data-safety-runtime.md",
+      "guard": "scripts/gates/pretooluse-data-guard.sh"
+    }
+  },
+  "gates": {
+    "regression-table-display-check.sh": {
+      "enforced_phases": ["13", "18"],
+      "input": "project_dir",
+      "verdicts": {
+        "GREEN": 0,
+        "RED": 1,
+        "YELLOW": 2,
+        "INERT": 3
+      },
+      "recovery_phase": "13",
+      "documentation": [
+        "references/manuscript-drafting-contract.md",
+        "references/quality-gate.md"
+      ]
+    }
+  },
+  "manual_prerequisites": {
+    "15": {
+      "verify_phase": "14",
+      "reason": "citation audit operates on the Phase 14-verified manuscript"
+    }
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # front-matter-check.sh — title / abstract / keywords gate.
 #
-# ASR- and JMF-style exemplars both use article front matter as part
+# Goldberg ASR and Zhang JMF exemplars both use article front matter as part
 # of the scholarly argument: a real title, a compact empirical abstract, and
 # keywords. A manuscript that starts at `## Abstract`, lacks keywords for an
 # ASR/JMF-style target, or puts Table/Figure callouts in the abstract is not

@@ -1,0 +1,160 @@
+{
+  "abstract_word_cap": 300,
+  "display_architecture": {
+    "descriptive_table_requirement": "journal_optional",
+    "display_callout_style": "numbered_tables_and_figures",
+    "editable_text_tables": true,
+    "figure_placement_policy": "separate_files_after_tables",
+    "figure_rendering_mode": "separate_figure_files",
+    "image_tables_forbidden": true,
+    "main_text_display_cap": null,
+    "main_text_figure_cap": null,
+    "main_text_table_cap": null,
+    "panel_label_style": "A_B_C",
+    "supplement_label_prefix": "Appendix",
+    "table_notes_policy": "below_table_notes",
+    "table_placement_policy": "end_matter_after_references",
+    "table_rendering_mode": "editable_text_end_matter",
+    "table_title_position": "above_table"
+  },
+  "engine_provenance": {
+    "input_artifacts": [
+      "idea/journal-fit.json",
+      "idea/research-question.json",
+      "manuscript/manuscript-blueprint.json"
+    ],
+    "invoked_at_utc": "2026-04-30T09:00:00Z",
+    "mode": "prepare",
+    "output_artifacts": [
+      "manuscript/journal-spec.json"
+    ],
+    "skill": "scholar-journal",
+    "task_invocation_id": "phase13-journal-001"
+  },
+  "format_notes": {
+    "appendix_policy": "separate appendix if required by journal",
+    "citation_style": "APA-like author-date"
+  },
+  "journal_family": "family sociology",
+  "journal_profile_resolution": {
+    "display_architecture": {
+      "descriptive_table_requirement": "journal_optional",
+      "display_callout_style": "numbered_tables_and_figures",
+      "editable_text_tables": true,
+      "figure_placement_policy": "separate_files_after_tables",
+      "figure_rendering_mode": "separate_figure_files",
+      "image_tables_forbidden": true,
+      "main_text_display_cap": null,
+      "main_text_figure_cap": null,
+      "main_text_table_cap": null,
+      "panel_label_style": "A_B_C",
+      "supplement_label_prefix": "Appendix",
+      "table_notes_policy": "below_table_notes",
+      "table_placement_policy": "end_matter_after_references",
+      "table_rendering_mode": "editable_text_end_matter",
+      "table_title_position": "above_table"
+    },
+    "fallback_reason": "",
+    "fallback_used": false,
+    "journal_structure": {
+      "discussion_conclusion_policy": "split_required",
+      "methods_section_label": "Data and Methods",
+      "profile_source": "scholar-journal:jmf",
+      "results_before_methods": false,
+      "section_sequence": [
+        "Abstract",
+        "Introduction",
+        "Background",
+        "Data and Methods",
+        "Results",
+        "Discussion",
+        "Conclusion",
+        "References",
+        "Tables",
+        "Figures"
+      ],
+      "supplement_policy": "journal_optional_appendix",
+      "theory_presentation": "background_section"
+    },
+    "profile_origin": "built_in",
+    "profile_source_engine": "scholar-journal",
+    "requested_journal": "Journal of Marriage and Family",
+    "resolved_profile_name": "Journal of Marriage and Family",
+    "source_strategy": "built_in_catalog",
+    "web_lookup_attempted": false
+  },
+  "journal_structure": {
+    "discussion_conclusion_policy": "split_required",
+    "methods_section_label": "Data and Methods",
+    "profile_source": "scholar-journal:jmf",
+    "results_before_methods": false,
+    "section_sequence": [
+      "Abstract",
+      "Introduction",
+      "Background",
+      "Data and Methods",
+      "Results",
+      "Discussion",
+      "Conclusion",
+      "References",
+      "Tables",
+      "Figures"
+    ],
+    "supplement_policy": "journal_optional_appendix",
+    "theory_presentation": "background_section"
+  },
+  "mode": "prepare",
+  "numeric_reporting_policy": {
+    "allow_scientific_notation": false,
+    "descriptive_digits": 2,
+    "inferential_digits": 3,
+    "p_value_rule": "Report exact p-values to 3 decimals and use p < .001 below the reporting floor.",
+    "policy_source": "default_auto_research_when_journal_silent"
+  },
+  "paper_type": "research note",
+  "ready_for_drafting": true,
+  "section_word_budget": {
+    "abstract": {
+      "max_words": 300,
+      "min_words": 80,
+      "target_words": 180
+    },
+    "background": {
+      "max_words": 1200,
+      "min_words": 320,
+      "target_words": 650
+    },
+    "conclusion": {
+      "max_words": 420,
+      "min_words": 120,
+      "target_words": 220
+    },
+    "data and methods": {
+      "max_words": 1500,
+      "min_words": 520,
+      "target_words": 850
+    },
+    "discussion": {
+      "max_words": 850,
+      "min_words": 220,
+      "target_words": 420
+    },
+    "introduction": {
+      "max_words": 850,
+      "min_words": 280,
+      "target_words": 500
+    },
+    "results": {
+      "max_words": 1100,
+      "min_words": 320,
+      "target_words": 700
+    }
+  },
+  "source_engine": "scholar-journal",
+  "target_journal": "Journal of Marriage and Family",
+  "total_word_range": {
+    "max": 12000,
+    "min": 1300
+  },
+  "verdict": "PASS"
+}

@@ -1,0 +1,36 @@
+{
+  "overall_verdict": "PASS",
+  "unresolved_critical_count": 0,
+  "reviewers": [
+    {
+      "role": "identification",
+      "verdict": "PASS",
+      "critical_issues_count": 0,
+      "recommendations": ["clarify event-time estimand"]
+    },
+    {
+      "role": "measurement",
+      "verdict": "PASS",
+      "critical_issues_count": 0,
+      "recommendations": ["document educational expectations scale"]
+    },
+    {
+      "role": "theory_mechanism",
+      "verdict": "PASS",
+      "critical_issues_count": 0,
+      "recommendations": ["connect income shock to feasibility beliefs"]
+    },
+    {
+      "role": "feasibility_data",
+      "verdict": "PASS",
+      "critical_issues_count": 0,
+      "recommendations": ["check attrition"]
+    },
+    {
+      "role": "journal_skeptic",
+      "verdict": "PASS",
+      "critical_issues_count": 0,
+      "recommendations": ["avoid overclaiming causality"]
+    }
+  ]
+}

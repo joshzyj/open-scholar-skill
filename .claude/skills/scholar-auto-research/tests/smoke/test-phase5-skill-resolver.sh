@@ -3,9 +3,14 @@
 # helper used by both Layer 1 (verify.sh Phase 5) and Layer 2
 # (control-variables-check.sh).
 
-set -u
+set -uo pipefail
 
-HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/gates" && pwd)/_phase5-skill-resolver.sh"
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+HELPER="$SKILL_DIR/scripts/gates/_phase5-skill-resolver.sh"
+SEED="$SKILL_DIR/tests/fixtures/phase5-seed"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/scholar-auto-research-resolver.XXXXXX")"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+[ -d "$SEED" ] || { echo "FAIL: missing vendored Phase 5 seed: $SEED"; exit 1; }
 
 PASS=0
 FAIL=0
@@ -22,7 +27,7 @@ note() {
 # Pass "__SKIP__" to skip writing the file entirely.
 build_proj() {
   local payload="$1"
-  local P; P=$(mktemp -d)
+  local P; P=$(mktemp -d "$TMP_ROOT/case.XXXXXX")
   mkdir -p "$P/design"
   if [ "$payload" != "__SKIP__" ]; then
     printf '%s' "$payload" > "$P/design/identification-strategy.json"
@@ -146,20 +151,15 @@ else
   note FAIL "T9 (rc=$RC): expected usage error rc=2. Got: $OUT"
 fi
 
-# ── T10: real fixture (if available) ──
+# ── T10: vendored lightweight Phase 5 seed ──
 echo ""
-echo "=== T10: bundled fixture preexec-project → scholar-analyze ==="
-FP=$(ls -td /tmp/scholar-auto-research-fixture-* 2>/dev/null | head -1)
-if [ -d "$FP/preexec-project" ]; then
-  OUT=$(bash "$HELPER" "$FP/preexec-project" 2>&1); RC=$?
-  if echo "$OUT" | grep -q "^PRIMARY_EXECUTION_SKILL=scholar-analyze$" \
-     && echo "$OUT" | grep -q "^COVARIATES_OPTIONAL=false$" && [ "$RC" = "0" ]; then
-    note PASS "T10: bundled fixture → scholar-analyze, strict"
-  else
-    note FAIL "T10 (rc=$RC): bundled fixture output unexpected. Got: $OUT"
-  fi
+echo "=== T10: vendored Phase 5 seed → scholar-analyze ==="
+OUT=$(bash "$HELPER" "$SEED" 2>&1); RC=$?
+if echo "$OUT" | grep -q "^PRIMARY_EXECUTION_SKILL=scholar-analyze$" \
+   && echo "$OUT" | grep -q "^COVARIATES_OPTIONAL=false$" && [ "$RC" = "0" ]; then
+  note PASS "T10: vendored seed → scholar-analyze, strict"
 else
-  echo "  ⊘ T10 skipped (no /tmp/scholar-auto-research-fixture-* available; run auto-research-fixture-test.sh first)"
+  note FAIL "T10 (rc=$RC): vendored seed output unexpected. Got: $OUT"
 fi
 
 echo ""

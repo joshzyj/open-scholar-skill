@@ -25,7 +25,13 @@ Required independent reviewer roles:
 - `source_hashes`: SHA-256 hashes for `spec_registry`, `analysis_premortem`, `execution_report`, `results_registry`, and `figure_registry`
 - `phase7_constraint_carryforward`: object proving the Phase 7 null-falsification table and reporting-depth checklist were read and carried forward into interpretation constraints
 - `raw_output_verification`: object with `verdict`, `stage`, `checked_raw_tables`, `checked_figures`, `registry_consistency`, `visual_figure_inspection`, `critical_count`, and `report_path`
-- `reviewer_provenance`: list covering every reviewer, each with `reviewer_id`, `role`, `agent_name`, `task_invocation_id`, `dispatched_at_utc`, `model_id`, and `report_path`
+- `reviewer_provenance`: list covering every reviewer, each with `reviewer_id`,
+  `role`, a nonempty host-neutral `agent_name`, evidence-bound
+  `task_invocation_id`/`report_path`, dispatch time, and model identity when the
+  host reports one. This is a descriptive projection of `reviewers`, not a
+  second authority: derive it from `reviewers`, and keep `reviewer_id`, `role`,
+  `task_invocation_id`, and `report_path` exactly equal to the corresponding
+  evidence-bound reviewer record.
 - `phase8_status`: confirms Phase 8 `PASS`, `ready_for_phase_9: true`, and no errors
 - `reviewers`: list covering all required roles, each with `reviewer_id`, `role`, `agent_type`, `task_invocation_id`, `report_path`, `reviewed_specs`, `reviewed_figures`, `findings`, and `verdict`
 - `reviewed_specs`: all planned specs from `analysis/spec-registry.csv`, each with `spec_id`, `planned_direction`, `observed_direction`, `estimate`, `std_error`, `p_value`, `ci_low`, `ci_high`, `n`, `sample_id`, `technical_validity`, `substantive_classification`, `interpretation_constraint`, and `allowed_claim_verbs`

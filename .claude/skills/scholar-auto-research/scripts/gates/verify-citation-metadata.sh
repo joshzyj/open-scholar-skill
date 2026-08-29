@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # verify-citation-metadata.sh — validate .bib metadata against CrossRef DOI registry.
 #
-# RATIONALE: citation audits regularly find that a large share of .bib
-# entries carry hallucinated metadata — e.g. an author's own paper
-# misattributed to a similar-but-wrong name (a first-name swap between two
-# authors who share a surname), plus pure fabrications with no CrossRef
-# record. A structural existence gate (`(Author Year)` in body ↔ entry in
-# .bib) cannot catch these because it never validates the bib metadata
-# against a canonical source.
+# AUDIT TRAIL (2026-05-24, age-cohabitation-cfps): a citation audit found 13
+# of 43 bib entries (26%) carried hallucinated metadata — including the
+# project user's OWN paper misattributed to a fabricated "Yuanting Zhang"
+# (real: Yongjun Zhang). Two entries were pure fabrications (no CrossRef
+# record). Phase 8's `verify-citation-existence.sh` did not catch any of
+# these because it checks STRUCTURAL match (`(Author Year)` in body ↔ entry
+# in .bib) without validating bib metadata against a canonical source.
 #
 # THIS GATE closes that gap. For each bib entry:
 #   1. If `doi=` field present: resolve via CrossRef API; compare metadata.
@@ -32,7 +32,7 @@
 #   2 — YELLOW (network issues, advisory)
 #
 # Usage:
-#   verify-citation-metadata.sh <project_dir>
+#   verify-citation-metadata.sh <project_dir> [explicit_bib_path]
 #
 # Environment:
 #   SCHOLAR_CROSSREF_TIMEOUT_S — per-request timeout (default 10)
@@ -50,37 +50,37 @@ if [ $# -lt 1 ]; then
 fi
 
 PROJ="$1"
+EXPLICIT_BIB="${2:-}"
 if [ ! -d "$PROJ" ]; then
   echo "STATUS=YELLOW"
   echo "REASON=project_dir_not_found:$PROJ"
   exit 2
 fi
 
-CITATIONS_DIR="$PROJ/citations"
-if [ ! -d "$CITATIONS_DIR" ]; then
+CITATION_DIR="$PROJ/citation"
+
+BIB_FILES=()
+if [ -n "$EXPLICIT_BIB" ]; then
+  if [ -f "$EXPLICIT_BIB" ]; then
+    BIB_FILES+=("$EXPLICIT_BIB")
+  fi
+elif [ -f "$CITATION_DIR/references.bib" ]; then
+  BIB_FILES+=("$CITATION_DIR/references.bib")
+fi
+
+if [ "${#BIB_FILES[@]}" -eq 0 ]; then
   echo "STATUS=YELLOW"
-  echo "REASON=no_citations_dir"
+  echo "REASON=canonical_bib_not_found:$CITATION_DIR/references.bib"
   exit 2
 fi
 
-# Connectivity precheck
+# Connectivity is checked only after exact canonical input resolution, so an
+# unavailable provider cannot mask a wrong/missing bibliography path.
 if ! curl --max-time 5 -sf -o /dev/null -A "scholar-skill/1.0" \
      "https://api.crossref.org/works/10.1111/jomf.12419" 2>/dev/null; then
   echo "STATUS=YELLOW"
   echo "REASON=crossref_api_unreachable"
-  echo "DETAIL: try again when network access is available"
-  exit 2
-fi
-
-# Find bib files
-BIB_FILES=()
-while IFS= read -r f; do
-  [ -n "$f" ] && BIB_FILES+=("$f")
-done < <(find "$CITATIONS_DIR" -maxdepth 1 -type f -name "*.bib" 2>/dev/null)
-
-if [ "${#BIB_FILES[@]}" -eq 0 ]; then
-  echo "STATUS=YELLOW"
-  echo "REASON=no_bib_files_in_citations_dir"
+  echo "DETAIL: canonical_bib=${BIB_FILES[0]}"
   exit 2
 fi
 
@@ -362,9 +362,8 @@ def _first_initial_match(bib_first, cr_first):
     Tokenize each (drop periods, split on whitespace). For each position:
     - if EITHER token is a 1-2-char initial → require first-letter match
     - if BOTH tokens are full names (3+ chars) → require full match
-    This catches the same-surname first-name-swap case (e.g. two authors
-    whose given names share a first letter but differ — full-name match
-    required so one is not silently substituted for the other).
+    This catches the diagnostic Zhang case ('Yuanting' vs 'Yongjun' — both
+    start with Y but are different names, so full-name match required).
     """
     if not bib_first or not cr_first:
         return True  # one side missing → don't penalize
@@ -797,6 +796,8 @@ print(f"REAL={len(real)}")
 print(f"MISREMEMBERED={len(red)}")
 print(f"FABRICATED={len(fab)}")
 print(f"UNVERIFIABLE={len(unver)}")
+for key, _, _ in real:
+    print(f"AUTHORITY_KEY={key}")
 
 if red or fab:
     print("STATUS=RED")

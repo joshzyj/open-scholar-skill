@@ -2,12 +2,12 @@
 # locked-artifact-transclusion-check.sh — Phase 13 / 19 / 20 lock-fidelity
 # gate.
 #
-# Rationale: a common failure is Phase 13 / Phase 19 rebuilding the main
-# regression Table 1 from `tables/model-estimates.csv` using hardcoded
-# focal-coefficient + SE + p + N rows. The locked HTML/TeX regression
-# artifact exists and is correct, but the manuscript embeds a hand-built
-# focal extract instead — so the lock contract is satisfied at the artifact
-# level but defeated at the display level.
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): Phase 13 and Phase 19
+# rebuilt the main regression Table 1 from `tables/model-estimates.csv`
+# using hardcoded focal-coefficient + SE + p + N rows. The locked HTML/TeX
+# regression artifact existed and was correct, but the manuscript embedded
+# a hand-built focal extract instead. The lock contract was satisfied at
+# the artifact level but defeated at the display level.
 #
 # Contract
 # --------

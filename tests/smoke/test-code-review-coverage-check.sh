@@ -362,6 +362,105 @@ else
   fail "Expected rc=2 + YELLOW (got rc=$RC)" "$OUT"
 fi
 
+# ── A6 (register G4/U23b), 2026-08-16 ────────────────────────────────────────
+# T13/T13b: per-dimension layout. scholar-full-paper Phase 5.5 dispatches six agents
+# that each write their own report; 36 such files existed on the run that surfaced
+# this while the gate reported "no code-review report found". They are AGGREGATED,
+# not selected — one file carries one dimension, so picking the newest would scan a
+# 1-of-6 surface and RED a project that did all six.
+echo ""
+echo "Test 13: per-dimension reviews/phase-5.5-iterN-<dim>.md is discovered and aggregated"
+PROJ="$TMPDIR_BASE/proj13"
+mkdir -p "$PROJ/reviews"
+for d in correctness data-handling statistics reproducibility robustness style; do
+  printf '# iter6 %s\nreview-code-%s\n' "$d" "$d" > "$PROJ/reviews/phase-5.5-iter6-$d.md"
+done
+OUT="$TMPDIR_BASE/t13.out"
+RC=$(run_gate "$PROJ" --required=full "$OUT")
+if [ "$RC" -eq 0 ] && grep -q "STATUS=GREEN" "$OUT" && grep -q "REPORT_LAYOUT=per-dimension" "$OUT"; then
+  pass "GREEN via aggregated per-dimension layout"
+else
+  fail "Expected rc=0 + GREEN + REPORT_LAYOUT=per-dimension (got rc=$RC)" "$OUT"
+fi
+
+echo ""
+echo "Test 13b: NEGATIVE CONTROL — 3 of 6 per-dimension reports still REDs"
+PROJ="$TMPDIR_BASE/proj13b"
+mkdir -p "$PROJ/reviews"
+for d in correctness data-handling statistics; do
+  printf '# iter6 %s\nreview-code-%s\n' "$d" "$d" > "$PROJ/reviews/phase-5.5-iter6-$d.md"
+done
+OUT="$TMPDIR_BASE/t13b.out"
+RC=$(run_gate "$PROJ" --required=full "$OUT")
+if [ "$RC" -eq 1 ] && grep -q "STATUS=RED" "$OUT" && grep -q "review-code-style" "$OUT"; then
+  pass "RED when only 3 of 6 dimensions present (aggregation did not mask the gap)"
+else
+  fail "Expected rc=1 + RED naming missing dims (got rc=$RC)" "$OUT"
+fi
+
+# T14/T14b: a stray positional (e.g. the phase) was silently consumed as
+# [<report_path>] and reported as "no report found", flipping a GREEN project to
+# YELLOW with a message naming the wrong cause.
+echo ""
+echo "Test 14: a non-existent explicit report path is REJECTED, not treated as absent"
+PROJ="$TMPDIR_BASE/proj14"
+mkdir -p "$PROJ/reviews"
+for d in correctness data-handling statistics reproducibility robustness style; do
+  printf '# iter6 %s\nreview-code-%s\n' "$d" "$d" > "$PROJ/reviews/phase-5.5-iter6-$d.md"
+done
+OUT="$TMPDIR_BASE/t14.out"
+RC=$(run_gate "$PROJ" 5.5 --required=full "$OUT")
+if [ "$RC" -eq 1 ] && grep -q "STATUS=RED" "$OUT" && grep -q -- "--phase=5.5" "$OUT"; then
+  pass "stray positional rejected with the --phase hint (no silent YELLOW)"
+else
+  fail "Expected rc=1 + RED + --phase hint (got rc=$RC)" "$OUT"
+fi
+
+echo ""
+echo "Test 14b: NEGATIVE CONTROL — a genuinely absent report is still YELLOW, not RED"
+PROJ="$TMPDIR_BASE/proj14b"
+mkdir -p "$PROJ"
+OUT="$TMPDIR_BASE/t14b.out"
+RC=$(run_gate "$PROJ" --required=full "$OUT")
+if [ "$RC" -eq 2 ] && grep -q "STATUS=YELLOW" "$OUT"; then
+  pass "absent report remains YELLOW (rejection did not over-fire)"
+else
+  fail "Expected rc=2 + YELLOW (got rc=$RC)" "$OUT"
+fi
+
+# ── Handoff 2026-08-25 P1-B: Layout B and the 5A.5 family ────────────────────
+echo ""
+echo "Test 13c: only phase-5A.5-iterN files, default invocation → 5A.5 family fallback"
+PROJ="$TMPDIR_BASE/proj13c"
+mkdir -p "$PROJ/reviews"
+for d in correctness data-handling statistics reproducibility robustness style; do
+  printf '# iter2 %s\nreview-code-%s\n' "$d" "$d" > "$PROJ/reviews/phase-5A.5-iter2-$d.md"
+done
+printf '# index stub\n' > "$PROJ/reviews/phase-5A.5-iter2-statistics-INDEX.md"
+OUT="$TMPDIR_BASE/t13c.out"
+RC=$(run_gate "$PROJ" --required=full "$OUT")
+if [ "$RC" -eq 0 ] && grep -q "STATUS=GREEN" "$OUT" && grep -q "REPORT_LAYOUT=per-dimension(phase-5A.5-iter2)" "$OUT"; then
+  pass "GREEN via 5A.5 per-dimension fallback (INDEX stub ignored)"
+else
+  fail "Expected rc=0 + GREEN + REPORT_LAYOUT=per-dimension(phase-5A.5-iter2) (got rc=$RC)" "$OUT"
+fi
+
+echo ""
+echo "Test 13d: BOTH families present → 5.5 wins, families never mixed"
+PROJ="$TMPDIR_BASE/proj13d"
+mkdir -p "$PROJ/reviews"
+for d in correctness data-handling statistics reproducibility robustness style; do
+  printf '# iter1 %s\nreview-code-%s\n' "$d" "$d" > "$PROJ/reviews/phase-5.5-iter1-$d.md"
+  printf '# iter9 %s\nreview-code-%s\n' "$d" "$d" > "$PROJ/reviews/phase-5A.5-iter9-$d.md"
+done
+OUT="$TMPDIR_BASE/t13d.out"
+RC=$(run_gate "$PROJ" --required=full "$OUT")
+if [ "$RC" -eq 0 ] && grep -q "REPORT_LAYOUT=per-dimension(phase-5.5-iter1)" "$OUT"; then
+  pass "5.5 family selected despite a higher 5A.5 iteration on disk"
+else
+  fail "Expected REPORT_LAYOUT=per-dimension(phase-5.5-iter1) (got rc=$RC)" "$OUT"
+fi
+
 echo ""
 echo "════════════════════"
 echo "Results: $PASS passed, $FAIL failed"

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # interaction-joint-test-check.sh — Phase 8 substantive-quality gate.
 #
-# Rationale: a common failure is a model that declares several interaction
-# terms (e.g. treatment_x_education, treatment_x_region, treatment_x_cohort)
-# whose Results prose interprets them as a "stratified pattern" without any
-# joint-test evidence that the interaction block significantly improved fit.
-# Reading individual interaction estimates against zero is not the same as
-# testing whether the moderation set jointly matters.
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): Model 6 declared three
+# interaction terms (platform_dependence_x_education,
+# platform_dependence_x_hukou, platform_dependence_x_cohort) and the
+# manuscript Results interpreted them as a "stratified pattern" without
+# any joint-test evidence that the interaction block significantly
+# improved fit. Reading individual interaction estimates against zero is
+# not the same as testing whether the moderation set jointly matters.
 #
 # Contract
 # --------
@@ -69,7 +70,7 @@ spec_path, jt_path, blueprint_path = (pathlib.Path(p) for p in sys.argv[1:4])
 # Detect interaction markers in predictor strings.
 # Patterns:
 #   - R formula style: x1*x2 or x1:x2
-#   - Slug style: x1_x_x2 (e.g. treatment_x_education)
+#   - Slug style: x1_x_x2 (audit-2026-05-06 cfps-platform-trust used this)
 INTERACTION_PATTERNS = [
     re.compile(r"[A-Za-z0-9_]+\s*\*\s*[A-Za-z0-9_]+"),
     re.compile(r"[A-Za-z0-9_]+\s*:\s*[A-Za-z0-9_]+"),

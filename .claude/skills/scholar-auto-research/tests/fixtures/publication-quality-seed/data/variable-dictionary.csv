@@ -1,0 +1,5 @@
+variable,role,construct,operationalization,source,missing_values
+job_loss,x,parental job loss,employment transition indicator,panel.csv,0/NA
+edu_expect,y,adolescent educational expectations,expected highest degree scale,panel.csv,NA/refused
+age,control,child age,age in years,panel.csv,system missing
+income,control,household income,total household income,panel.csv,negative/NA

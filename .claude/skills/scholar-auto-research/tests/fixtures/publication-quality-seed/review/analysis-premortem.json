@@ -1,0 +1,556 @@
+{
+  "accepted_limitations": [
+    {
+      "limitation_id": "L1",
+      "monitoring_plan": "Manuscript must report confidence intervals and avoid success/failure framing.",
+      "rationale": "Null estimates may still be informative if uncertainty is reported.",
+      "severity": "minor"
+    }
+  ],
+  "blocking_items_resolved": true,
+  "decision_rules": [
+    {
+      "action": "halt Phase 8 and repair execution",
+      "condition": "results registry lacks S1, S2, or S3",
+      "rule_id": "D1"
+    },
+    {
+      "action": "downgrade causal language and flag robustness",
+      "condition": "pretrend diagnostics fail",
+      "rule_id": "D2"
+    },
+    {
+      "action": "run missingness sensitivity before drafting",
+      "condition": "missingness exceeds planned threshold",
+      "rule_id": "D3"
+    }
+  ],
+  "degraded": false,
+  "go_no_go": {
+    "decision": "GO",
+    "ready_for_phase_8": true,
+    "route_back_phase": null
+  },
+  "iteration": 1,
+  "null_falsification_table": [
+    {
+      "discussion_concedes_null": true,
+      "hypothesis_id": "H1",
+      "null_pattern": "Primary and robustness estimates near zero with confidence intervals excluding substantively meaningful negative effects would count against the expectation-lowering claim.",
+      "precommitted": true,
+      "status": "PASS"
+    }
+  ],
+  "phase8_handoff": {
+    "expected_figure_registry": "figures/figure-registry.csv",
+    "expected_outputs": [
+      "data/interim/panel-loaded.rds",
+      "data/processed/analytic-sample.rds",
+      "data/processed/analytic-variables.rds",
+      "analysis/planned-model-calls.json",
+      "tables/results-registry.csv",
+      "tables/regression-main.html",
+      "figures/figure-registry.csv"
+    ],
+    "expected_result_registry": "tables/results-registry.csv",
+    "halt_checks": [
+      "missing result registry",
+      "missing figure registry",
+      "missing planned spec"
+    ],
+    "script_order": [
+      "analysis/scripts/01_load_data.R",
+      "analysis/scripts/02_build_sample.R",
+      "analysis/scripts/03_construct_variables.R",
+      "analysis/scripts/04_plan_models.R"
+    ]
+  },
+  "premortem_engine": {
+    "auto_research_contract": "phase_7",
+    "input_artifacts": [
+      "design/identification-strategy.json",
+      "design/model-specs.json",
+      "analysis/analysis-plan.md",
+      "analysis/spec-registry.csv",
+      "analysis/scripts-inventory.json"
+    ],
+    "invoked_at_utc": "2026-04-29T10:20:00Z",
+    "mode": "premortem",
+    "output_artifacts": [
+      "review/analysis-premortem.json",
+      "review/analysis-premortem.md",
+      "review/analysis-premortem-fix-log.json"
+    ],
+    "skill": "scholar-analyze",
+    "skip_premortem_ignored": true,
+    "task_invocation_id": "phase7-premortem-001"
+  },
+  "ready_for_phase_8": true,
+  "reporting_depth_checklist": [
+    {
+      "diagnostic_outputs": [
+        "event-time coefficient table",
+        "pretrend p-value"
+      ],
+      "failure_mode_disclosure": "Sparse event time cannot establish parallel pretrends or causal timing.",
+      "reporting_location": "Results robustness paragraph and Appendix event-study table",
+      "risk_id": "R2",
+      "sensitivity_range": "Report whether the negative direction survives event-study timing checks."
+    },
+    {
+      "diagnostic_outputs": [
+        "missingness rate table",
+        "attrition-weighted sensitivity output"
+      ],
+      "failure_mode_disclosure": "Differential attrition could bias observed expectation changes.",
+      "reporting_location": "Methods missing-data subsection and Results robustness paragraph",
+      "risk_id": "R4",
+      "sensitivity_range": "Compare complete-case and attrition-weighted specifications."
+    },
+    {
+      "diagnostic_outputs": [
+        "primary estimate",
+        "event-study estimate",
+        "attrition-weighted estimate"
+      ],
+      "failure_mode_disclosure": "Fixed-effects assumptions do not remove time-varying unobserved shocks.",
+      "reporting_location": "Results table and robustness paragraph",
+      "risk_id": "R5",
+      "sensitivity_range": "Compare S1, S2, and S3 signs, magnitudes, and uncertainty intervals."
+    },
+    {
+      "diagnostic_outputs": [
+        "results registry",
+        "figure registry",
+        "execution halt-check log"
+      ],
+      "failure_mode_disclosure": "Missing registries would make later manuscript verification rely on incomplete output evidence.",
+      "reporting_location": "Phase 8 execution report and Phase 10 runtime sanity inventory",
+      "risk_id": "R9",
+      "sensitivity_range": "Confirm every planned spec and figure registry requirement is present before Phase 8 completion."
+    }
+  ],
+  "review_evidence": {
+    "attempt_epoch": 0,
+    "profile": "normal",
+    "rounds": {
+      "premortem_panel": {
+        "achieved_assurance": "process_recorded",
+        "session_id": "s-4edbf6b0fe7ee67f165023c1"
+      }
+    }
+  },
+  "reviewed_scripts": [
+    "analysis/scripts/01_load_data.R",
+    "analysis/scripts/02_build_sample.R",
+    "analysis/scripts/03_construct_variables.R",
+    "analysis/scripts/04_plan_models.R"
+  ],
+  "reviewed_specs": [
+    "S1",
+    "S2",
+    "S3"
+  ],
+  "reviewed_tests": [
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6"
+  ],
+  "reviewer_provenance": [
+    {
+      "agent_name": "peer-reviewer-quant",
+      "dispatched_at_utc": "2026-04-29T10:30:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/identification.md",
+      "reviewer_id": "P1",
+      "role": "identification",
+      "task_invocation_id": "d-d8bb6b6e8f6e9b5ecfc6a712"
+    },
+    {
+      "agent_name": "peer-reviewer-demographics",
+      "dispatched_at_utc": "2026-04-29T10:30:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/measurement_missingness.md",
+      "reviewer_id": "P2",
+      "role": "measurement_missingness",
+      "task_invocation_id": "d-2b3ecea5d597600d646bbb89"
+    },
+    {
+      "agent_name": "peer-reviewer-senior",
+      "dispatched_at_utc": "2026-04-29T10:30:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/model_robustness.md",
+      "reviewer_id": "P3",
+      "role": "model_robustness",
+      "task_invocation_id": "d-e95936e078b73a8df3fa903a"
+    },
+    {
+      "agent_name": "peer-reviewer-theory",
+      "dispatched_at_utc": "2026-04-29T10:30:00Z",
+      "model_id": "gpt-5.5",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/interpretation_claims.md",
+      "reviewer_id": "P4",
+      "role": "interpretation_claims",
+      "task_invocation_id": "d-e51e0199443c710b39482623"
+    }
+  ],
+  "reviewers": [
+    {
+      "agent_type": "independent_codex_agent",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/identification.md",
+      "reviewed_inputs": [
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/measurement-plan.md",
+        "data/variable-dictionary.csv",
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "review/pre-execution-review.json",
+        "review/pre-execution-fix-log.json",
+        "review/pre-execution-rereview.json"
+      ],
+      "reviewer_id": "P1",
+      "risks": [
+        "R1",
+        "R2"
+      ],
+      "role": "identification",
+      "task_invocation_id": "d-d8bb6b6e8f6e9b5ecfc6a712",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "independent_codex_agent",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/measurement_missingness.md",
+      "reviewed_inputs": [
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/measurement-plan.md",
+        "data/variable-dictionary.csv",
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "review/pre-execution-review.json",
+        "review/pre-execution-fix-log.json",
+        "review/pre-execution-rereview.json"
+      ],
+      "reviewer_id": "P2",
+      "risks": [
+        "R3",
+        "R4"
+      ],
+      "role": "measurement_missingness",
+      "task_invocation_id": "d-2b3ecea5d597600d646bbb89",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "independent_codex_agent",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/model_robustness.md",
+      "reviewed_inputs": [
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/measurement-plan.md",
+        "data/variable-dictionary.csv",
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "review/pre-execution-review.json",
+        "review/pre-execution-fix-log.json",
+        "review/pre-execution-rereview.json"
+      ],
+      "reviewer_id": "P3",
+      "risks": [
+        "R5",
+        "R6",
+        "R7"
+      ],
+      "role": "model_robustness",
+      "task_invocation_id": "d-e95936e078b73a8df3fa903a",
+      "verdict": "PASS"
+    },
+    {
+      "agent_type": "independent_codex_agent",
+      "report_path": "review-evidence/phase-07/s-4edbf6b0fe7ee67f165023c1/reports/interpretation_claims.md",
+      "reviewed_inputs": [
+        "design/identification-strategy.json",
+        "design/model-specs.json",
+        "data/measurement-plan.md",
+        "data/variable-dictionary.csv",
+        "analysis/analysis-plan.md",
+        "analysis/spec-registry.csv",
+        "analysis/scripts-inventory.json",
+        "review/pre-execution-review.json",
+        "review/pre-execution-fix-log.json",
+        "review/pre-execution-rereview.json"
+      ],
+      "reviewer_id": "P4",
+      "risks": [
+        "R8",
+        "R9"
+      ],
+      "role": "interpretation_claims",
+      "task_invocation_id": "d-e51e0199443c710b39482623",
+      "verdict": "PASS"
+    }
+  ],
+  "risk_register": [
+    {
+      "affected_scripts": [
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S1"
+      ],
+      "description": "Analysis plan must stay aligned with the fixed-effects estimand.",
+      "domain": "design_plan_alignment",
+      "evidence": "Compared model registry to design model M1.",
+      "mitigation": "Added explicit alignment check before execution.",
+      "owner_phase": "7",
+      "risk_id": "R1",
+      "route_back_phase": null,
+      "severity": "major",
+      "status": "mitigated"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S2"
+      ],
+      "description": "Pretrend interpretation may be weak with sparse event time.",
+      "domain": "identification",
+      "evidence": "Event-study robustness is planned.",
+      "mitigation": "Report pretrend diagnostics before interpreting timing.",
+      "owner_phase": "7",
+      "risk_id": "R2",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/03_construct_variables.R"
+      ],
+      "affected_specs": [
+        "S1"
+      ],
+      "description": "Expectations scale comparability must be checked.",
+      "domain": "measurement",
+      "evidence": "Measurement plan defines validity checks.",
+      "mitigation": "Check valid scale range during variable construction.",
+      "owner_phase": "7",
+      "risk_id": "R3",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/03_construct_variables.R"
+      ],
+      "affected_specs": [
+        "S1"
+      ],
+      "description": "Missing values may vary after job loss.",
+      "domain": "missing_data",
+      "evidence": "Variable dictionary records missing codes.",
+      "mitigation": "Run missingness diagnostics and attrition weights.",
+      "owner_phase": "7",
+      "risk_id": "R4",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "description": "Estimates may depend on household fixed-effects assumptions.",
+      "domain": "model_fragility",
+      "evidence": "Robustness specs S2 and S3 exist.",
+      "mitigation": "Compare primary, event-study, and attrition-weighted estimates.",
+      "owner_phase": "7",
+      "risk_id": "R5",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S2",
+        "S3"
+      ],
+      "description": "Robustness outputs must be registered.",
+      "domain": "robustness",
+      "evidence": "Scripts inventory prepares registry schemas.",
+      "mitigation": "Halt if S2 or S3 is missing from the results registry.",
+      "owner_phase": "7",
+      "risk_id": "R6",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S1"
+      ],
+      "description": "Null results may still be substantively meaningful.",
+      "domain": "null_or_conflicting_results",
+      "evidence": "Decision rules handle null estimates.",
+      "mitigation": "Use confidence intervals and avoid binary success language.",
+      "owner_phase": "7",
+      "risk_id": "R7",
+      "route_back_phase": null,
+      "severity": "minor",
+      "status": "accepted_limitation"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S1"
+      ],
+      "description": "Causal wording must match observational design.",
+      "domain": "claim_support",
+      "evidence": "Identification strategy is observational.",
+      "mitigation": "Use cautious within-household change language.",
+      "owner_phase": "7",
+      "risk_id": "R8",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    },
+    {
+      "affected_scripts": [
+        "analysis/scripts/01_load_data.R",
+        "analysis/scripts/02_build_sample.R",
+        "analysis/scripts/03_construct_variables.R",
+        "analysis/scripts/04_plan_models.R"
+      ],
+      "affected_specs": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "description": "Execution must halt if registries are missing.",
+      "domain": "execution_readiness",
+      "evidence": "Phase 8 handoff names required registries.",
+      "mitigation": "Halt checks require result and figure registry creation.",
+      "owner_phase": "7",
+      "risk_id": "R9",
+      "route_back_phase": null,
+      "severity": "moderate",
+      "status": "nonblocking"
+    }
+  ],
+  "source_hashes": {
+    "analysis_plan": "29cb8f79c7d84821e0f09a96cd4154e2c7ad79f59cb03232790b9d41ad0c86af",
+    "identification_strategy": "29653ce061eb2e5a08d882cf90628b4cf286598f9893e4343f5987a2569dc5c5",
+    "measurement_plan": "638c1daea1d7aeec854b6bcf79a13579499bf2b00f0358167e2b7d8da8bef231",
+    "model_specs": "95a61929fbd5524b933746092eaacd74ff3c86de282bd2fce73cc7158b2995ff",
+    "pre_execution_fix_log": "ea044ab62cfed765fba5bd8aab68303b7b93442583f6cf3b22fab2026553e9a4",
+    "pre_execution_rereview": "d72fe50979b4a10d638d07a59c1bd72fbdc34aaf0282c0eb3e417de0fb9ae8ad",
+    "pre_execution_review": "cf6f890c418b413ada94f00bb1f0139374d730425597186bd6f8f64ce43792d6",
+    "scripts_inventory": "4d3b3543015b6a005b83b69c35b445d36ca448a1b08c36334d4200b147b59514",
+    "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8",
+    "variable_dictionary": "14618069c33b3c0325677e0f746c563902566a6824e527747209a3d9246eafe8"
+  },
+  "traffic_light_summary": [
+    {
+      "dimension": "identification",
+      "evidence": "Fixed-effects identification is coherent but requires cautious noncausal language.",
+      "lead_reviewer": "P1",
+      "verdict": "YELLOW"
+    },
+    {
+      "dimension": "variable_construction",
+      "evidence": "Variable construction is linked to the Phase 4 dictionary and planned construction script.",
+      "lead_reviewer": "P2",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "sample_restrictions",
+      "evidence": "Sample restrictions are explicit in the planned sample build script and tests.",
+      "lead_reviewer": "P2",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "model_specification",
+      "evidence": "Primary model is aligned, with robustness checks required to bound fragility.",
+      "lead_reviewer": "P3",
+      "verdict": "YELLOW"
+    },
+    {
+      "dimension": "standard_errors",
+      "evidence": "The planned model call records clustered/robust variance handling for panel observations.",
+      "lead_reviewer": "P3",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "missing_data",
+      "evidence": "Missingness needs diagnostics and attrition-weighted sensitivity before interpretation.",
+      "lead_reviewer": "P2",
+      "verdict": "YELLOW"
+    },
+    {
+      "dimension": "robustness",
+      "evidence": "S2 and S3 provide timing and attrition robustness checks.",
+      "lead_reviewer": "P3",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "power_effect_size",
+      "evidence": "Power is feasible but null estimates must be interpreted with uncertainty.",
+      "lead_reviewer": "P3",
+      "verdict": "YELLOW"
+    },
+    {
+      "dimension": "heterogeneity_multi_comparison",
+      "evidence": "No K>=3 hypothesis family is planned in this fixture.",
+      "lead_reviewer": "P3",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "mechanism_evidence",
+      "evidence": "Mechanism language must stay aligned with measured stress and feasibility proxies.",
+      "lead_reviewer": "P4",
+      "verdict": "YELLOW"
+    },
+    {
+      "dimension": "table_figure_plan",
+      "evidence": "The handoff requires result and figure registries before Phase 8 completion.",
+      "lead_reviewer": "P3",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "preregistration_deviation",
+      "evidence": "No preregistration deviation is introduced in the planned scripts.",
+      "lead_reviewer": "P1",
+      "verdict": "GREEN"
+    },
+    {
+      "dimension": "interpretive_reach",
+      "evidence": "The manuscript must concede weak or null robustness instead of reframing it as support.",
+      "lead_reviewer": "P4",
+      "verdict": "YELLOW"
+    }
+  ],
+  "unresolved_blocking_count": 0,
+  "verdict": "PASS"
+}

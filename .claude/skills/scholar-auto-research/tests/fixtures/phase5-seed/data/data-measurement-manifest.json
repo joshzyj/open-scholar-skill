@@ -1,0 +1,134 @@
+{
+  "codebook_validation": {
+    "measurement_units_checked": true,
+    "missing_codes_checked": true,
+    "reviewed": true,
+    "skip_logic_checked": true,
+    "valid_ranges_checked": true,
+    "value_labels_checked": true
+  },
+  "data_engine": {
+    "input_artifacts": [
+      "design/design-blueprint.md",
+      "design/identification-strategy.json",
+      "design/model-specs.json",
+      "safety/safety-status.json"
+    ],
+    "invoked_at_utc": "2026-04-28T11:00:00Z",
+    "mode": "data_measurement_plan",
+    "output_artifacts": [
+      "data/data-status.json",
+      "data/variable-dictionary.csv",
+      "data/measurement-plan.md",
+      "data/data-measurement-manifest.json"
+    ],
+    "skill": "scholar-data",
+    "task_invocation_id": "phase4-data-001"
+  },
+  "dataset_design_review": {
+    "accepted_limitations": [
+      "The public-use fixture does not reproduce the full production survey design documentation."
+    ],
+    "analytic_decision": "Use adolescent-wave panel structure with household fixed effects and report weights as a robustness design feature.",
+    "clustering_reviewed": true,
+    "limitation_rationale": "The fixture records the panel and weighting decision while limiting the example to reproducible public-use test data.",
+    "panel_structure_reviewed": true,
+    "reviewed": true,
+    "sampling_frame_reviewed": true,
+    "weights_reviewed": true
+  },
+  "dataset_fit": {
+    "access_timeline": "available immediately as public-use data",
+    "key_variables_available": true,
+    "population": "low-income households with adolescent respondents",
+    "sample_size_feasibility": "sufficient for primary fixed-effects model and attrition robustness in the fixture plan",
+    "time_period": "repeated survey waves surrounding parental job loss",
+    "unit_of_analysis": "adolescent-wave",
+    "verdict": "PASS"
+  },
+  "display_semantics": {
+    "label_source": "data/variable-dictionary.csv",
+    "machine_labels_eliminated": true,
+    "machine_like_variable_count": 2,
+    "reader_facing_labels_complete": true,
+    "ready_for_tables": true
+  },
+  "outcome_family_screen": {
+    "outcome_families": [
+      {
+        "decision": "Treat the scale as approximately ordered in the main model and discuss interpretation limits.",
+        "family": "ordinal",
+        "outcome": "adolescent educational expectations",
+        "planned_model": "household fixed effects linear model with ordinal-measure robustness discussion"
+      }
+    ],
+    "phase5_implication": "Phase 5 must keep the ordinal outcome interpretation visible when translating the model plan into executable scripts.",
+    "screened": true
+  },
+  "output_hashes": {
+    "data_status": "690397ce064f86b33bf391de29957f4dff2fe9436c193cc39668de37ff68b7f2",
+    "measurement_plan": "beb4b9c30f25d189e9f1b5808c2db31b59fa5a1f78983e2c393135cbb3384ab7",
+    "variable_dictionary": "f7c4b63bfc2b2a66e2046b556a64961b2cd3ec0ccbdf16bd04a71793b58c058a"
+  },
+  "post_treatment_review": {
+    "post_treatment_controls": [],
+    "reviewed": true,
+    "unresolved_count": 0
+  },
+  "ready_for_phase_5": true,
+  "safety_provenance": {
+    "files_scanned": 1,
+    "high_risk_unresolved": 0
+  },
+  "source_hashes": {
+    "design_blueprint": "59c76dfe56b34f982ccaa0c2b29ba8c4f1956f676316f3c345cec559b7940898",
+    "design_manifest": "d149f54b63e68b5af7bcc373a0f89180411ef892e810ef2e6cf3e367eef4e4ec",
+    "identification_strategy": "201fa9c250f2758147e89c563d854704c4d83baa4eba5ba280a0956fe62b6046",
+    "model_specs": "cec2bb5ee6cef7a301859ea117ce0919492a51d8c58f916177eb2875cdb890d2",
+    "safety_status": "4cb16ac01673ff9e185ba08233794b4357c51ed76f91841d8a675cedaaaed5ab"
+  },
+  "source_phase": "4",
+  "variable_coverage": {
+    "accepted_limitations": [],
+    "design_measures": [
+      {
+        "covered": true,
+        "name": "parental job loss",
+        "variable": "job_loss"
+      },
+      {
+        "covered": true,
+        "name": "adolescent educational expectations",
+        "variable": "edu_expect"
+      }
+    ],
+    "model_variables": [
+      {
+        "covered": true,
+        "name": "adolescent educational expectations",
+        "variable": "edu_expect"
+      },
+      {
+        "covered": true,
+        "name": "parental job loss",
+        "variable": "job_loss"
+      },
+      {
+        "covered": true,
+        "name": "child age",
+        "variable": "age"
+      },
+      {
+        "covered": true,
+        "name": "wave",
+        "variable": "wave"
+      },
+      {
+        "covered": true,
+        "name": "household income",
+        "variable": "income"
+      }
+    ]
+  },
+  "verdict": "PASS"
+}

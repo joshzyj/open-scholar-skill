@@ -8,10 +8,9 @@
 #   ar-6   — Phase 6 pre-execution code review   → codex code mode (A1+A2+A3)
 #   ar-14  — Phase 14 manuscript verification    → codex full mode (A4+A5)
 #
-# Default flipped 2026-05-10 (user-requested): SCHOLAR_CODEX_DEFAULT now
-# defaults to `true`, so Codex cross-model review is mandatory whenever the
-# codex CLI is on PATH. Set SCHOLAR_CODEX_DEFAULT=false to opt out at the
-# shell level.
+# This is an explicit optional diversity lane. Set SCHOLAR_CODEX_REVIEW=1 to
+# request it. Ambient Codex availability never changes the portable phase
+# requirement.
 #
 # Excuse mechanism (per-phase): add `[EXCUSED:codex-review:<reason>]` to
 # the phase report at:
@@ -59,7 +58,10 @@ else
   CODEX_AVAILABLE=false
 fi
 
-CODEX_DEFAULT="${SCHOLAR_CODEX_DEFAULT:-true}"
+CODEX_REQUESTED=false
+case "${SCHOLAR_CODEX_REVIEW:-0}" in
+  1|true|TRUE|yes|YES) CODEX_REQUESTED=true ;;
+esac
 
 # ─── Locate the phase report ─────────────────────────────────────────────
 case "$PHASE" in
@@ -89,7 +91,7 @@ fi
 
 # ─── Determine whether codex dispatch SHOULD have fired ──────────────────
 TRIGGER_KIND=none
-if [ "$CODEX_DEFAULT" = "true" ]; then
+if [ "$CODEX_REQUESTED" = "true" ]; then
   TRIGGER_KIND=strong
 elif [ "$CRITICAL_FOUND" = "true" ]; then
   TRIGGER_KIND=recommend
@@ -98,13 +100,13 @@ fi
 # ─── Detect dispatch artifacts ───────────────────────────────────────────
 DID_FIRE=false
 glob_has_match() {
-  # F3 (audit 2026-08-25 port): use `compgen -G`, not `ls $1`. The unquoted `ls $1`
-  # word-split any project path containing a space so a PRESENT dispatch artifact
-  # was reported fired=false — a false RED that forced a redundant re-dispatch.
-  # `compgen -G "$1"` globs the quoted pattern (spaces and A[1-3] classes intact)
-  # and returns nonzero ONLY when there is truly no match. The nonzero return is
-  # safe: glob_has_match is only ever evaluated as an `if`/`||` condition, which
-  # is exempt from `set -e`.
+  # F3 (audit 2026-07-07): use `compgen -G`, not `ls $1`. The unquoted `ls $1`
+  # word-split any project path containing a space ("Dropbox Project/", "o'brien/") so
+  # a PRESENT dispatch artifact was reported fired=false — a false RED that
+  # forced a redundant re-dispatch. `compgen -G "$1"` globs the quoted pattern
+  # (spaces and A[1-3] classes intact) and returns nonzero ONLY when there is
+  # truly no match. The nonzero return is safe: glob_has_match is only ever
+  # evaluated as an `if`/`||` condition, which is exempt from `set -e`.
   compgen -G "$1" > /dev/null 2>&1
 }
 if [ "$MODE" = "code" ]; then
@@ -133,13 +135,13 @@ if [ -n "$REPORT" ] && [ -f "$REPORT" ]; then
 fi
 
 # ─── Emit structured log line (always observable) ────────────────────────
-echo "CODEX_TRIGGER: phase=$PHASE env=$CODEX_DEFAULT cli=$CODEX_AVAILABLE critical=$CRITICAL_FOUND trigger=$TRIGGER_KIND fired=$DID_FIRE excused=$EXCUSED"
+echo "CODEX_TRIGGER: phase=$PHASE requested=$CODEX_REQUESTED cli=$CODEX_AVAILABLE critical=$CRITICAL_FOUND trigger=$TRIGGER_KIND fired=$DID_FIRE excused=$EXCUSED"
 
 # ─── Verdict ─────────────────────────────────────────────────────────────
 if [ "$TRIGGER_KIND" = "none" ]; then
   echo "STATUS=GREEN"
   echo "REASON=no_trigger"
-  echo "DETAIL: env not set AND no CRITICAL findings — skip is fine."
+  echo "DETAIL: optional Codex diversity lane not requested and no CRITICAL findings."
   exit 0
 fi
 
@@ -157,11 +159,11 @@ if [ "$EXCUSED" = "true" ]; then
   exit 0
 fi
 
-# Special case: env=true but codex CLI missing → cannot fire → YELLOW
-if [ "$CODEX_DEFAULT" = "true" ] && [ "$CODEX_AVAILABLE" = "false" ]; then
+# Explicitly requested but CLI missing → cannot fire → YELLOW
+if [ "$CODEX_REQUESTED" = "true" ] && [ "$CODEX_AVAILABLE" = "false" ]; then
   echo "STATUS=YELLOW"
   echo "REASON=cli_missing"
-  echo "DETAIL: SCHOLAR_CODEX_DEFAULT=true but codex CLI not installed — cannot dispatch. Either install codex, set SCHOLAR_CODEX_DEFAULT=false, or annotate the phase report with [EXCUSED:codex-review: codex CLI not available]"
+  echo "DETAIL: SCHOLAR_CODEX_REVIEW=1 but codex CLI is unavailable. Install it, unset the explicit request, or annotate the phase report with [EXCUSED:codex-review: codex CLI not available]."
   exit 2
 fi
 
@@ -169,9 +171,9 @@ if [ "$TRIGGER_KIND" = "strong" ]; then
   echo "STATUS=RED"
   echo "REASON=strong_trigger_no_dispatch"
   if [ "$MODE" = "code" ]; then
-    echo "DETAIL: SCHOLAR_CODEX_DEFAULT=true and codex CLI present, but no codex code-mode artifacts (reviews/codex/A[1-3]-*.md) and no excuse. Remediation: /scholar-openai code <manuscript-path> <scripts-dir>, or annotate the phase report with [EXCUSED:codex-review: <reason>]"
+    echo "DETAIL: SCHOLAR_CODEX_REVIEW=1 and Codex is present, but no code-mode artifacts exist and no excuse was recorded."
   else
-    echo "DETAIL: SCHOLAR_CODEX_DEFAULT=true and codex CLI present, but no codex full-mode artifacts (reviews/codex/codex-review-consolidated-*.md or A[4-5]-*.md) and no excuse. Remediation: /scholar-openai full <manuscript-path>, or annotate the phase report with [EXCUSED:codex-review: <reason>]"
+    echo "DETAIL: SCHOLAR_CODEX_REVIEW=1 and Codex is present, but no full-mode artifacts exist and no excuse was recorded."
   fi
   exit 1
 fi

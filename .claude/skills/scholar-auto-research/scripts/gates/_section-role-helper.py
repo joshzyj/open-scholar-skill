@@ -68,15 +68,12 @@ STOPWORDS = {
 # Exit-code contract shared by every gate in this plugin:
 #   0 GREEN · 1 RED · 2 YELLOW · 3 INERT ("graded nothing").
 # This map used to be `1 if status == "RED" else 0`, which collapsed INERT onto
-# GREEN: a gate that examined NOTHING became indistinguishable from one that
-# checked and found nothing wrong.
-#
-# Nothing was mis-reporting here as a result. The only consumer of these five
-# gates is `run_external_gate` in auto-research-verify.sh, which parses the
-# STATUS line and ignores the return code, so it read INERT correctly throughout.
-# The fix matters for any caller that branches on the EXIT CODE instead: the
-# contract such a caller relies on was simply wrong, and a section that was never
-# examined reached it as a pass.
+# GREEN. Callers split on the EXIT CODE, not the STATUS line -- phase-verify.sh
+# has `3) note_inert` arms and an operator-facing "N gate(s) graded NOTHING"
+# banner -- so all five helper-backed gates reported a pass over work they never
+# examined whenever the project had no manuscript yet, and never reached the
+# banner. scholar-auto-research reads the STATUS line instead and was unaffected,
+# which is why one consumer looked correct while the other was blind.
 _EXIT_CODES = {"GREEN": 0, "RED": 1, "YELLOW": 2, "INERT": 3}
 
 

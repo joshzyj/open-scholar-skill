@@ -214,27 +214,73 @@ if [ "$PHASE" = "8" ]; then
   METADATA_ONLY_MAX="${SCHOLAR_EVIDENCE_METADATA_ONLY_MAX:-40}"
   ISSUES=0; ADVISORIES=0; REPORT=""
   AUDIT=$(_ev_find_audit)
-  if [ ! -s "$LEDGER" ]; then
-    echo "RESULT: YELLOW — no evidence ledger; audit coverage cannot be assessed"
-    [ "$STRICT" = "1" ] && exit 1
-    exit 2
-  fi
-  if [ -z "$AUDIT" ] || [ ! -s "$AUDIT" ]; then
-    if [ -f "$PROJ/logs/project-state.md" ]; then
+  # ── Audit-existence and coverage-assessability are INDEPENDENT ─────────────
+  # Until 2026-08-27 they were fused: `if [ ! -s "$LEDGER" ]` exited YELLOW
+  # BEFORE $AUDIT was ever consulted, even though $AUDIT was computed on the
+  # line above. So "was the faithfulness audit produced?" was gated on "is the
+  # ledger non-empty?" — two different questions. A project reaching Phase 8
+  # with an empty ledger got YELLOW; phase-verify.sh maps exit 2 to WARNINGS++
+  # (never ISSUES++) and prints "PASS with N warning(s)", exit 0. The one check
+  # in the suite that reads a cited source's actual text was skippable end to
+  # end with a passing phase — which is how 6 HIGH attribution defects, 4 of
+  # them asserting the OPPOSITE of the cited source, cleared Phase 8 (P17-A).
+  #
+  # This is severity-ADDITIVE. The pre-existing non-empty-ledger RED is
+  # unchanged; the newly-visible case (orchestrated + empty ledger + no audit)
+  # is advisory by default and RED under SCHOLAR_FAITHFULNESS_ENFORCE=1,
+  # matching SCHOLAR_LEDGER_CLOSE_ENFORCE / _CONTROL_DAG_ENFORCE /
+  # _TRACE_XLINK_ENFORCE. Defaulting it to RED would flip completed and parked
+  # projects on re-verification; that call belongs to the PI, not to this gate.
+  FAITHFULNESS_ENFORCE="${SCHOLAR_FAITHFULNESS_ENFORCE:-0}"
+  ORCHESTRATED=0; [ -f "$PROJ/logs/project-state.md" ] && ORCHESTRATED=1
+  AUDIT_PRESENT=0; [ -n "$AUDIT" ] && [ -s "$AUDIT" ] && AUDIT_PRESENT=1
+  LEDGER_NONEMPTY=0; [ -s "$LEDGER" ] && LEDGER_NONEMPTY=1
+
+  if [ "$AUDIT_PRESENT" -eq 0 ]; then
+    if [ "$ORCHESTRATED" -eq 1 ] && [ "$LEDGER_NONEMPTY" -eq 1 ]; then
       echo "RESULT: RED — ledger has $(wc -l < "$LEDGER" | tr -d ' ') anchor(s) but no claim-faithfulness audit was produced (a skipped audit must not be indistinguishable from a passing one; dispatch verify-claim-faithfulness — phase-citation.md)"
       exit 1
+    fi
+    if [ "$ORCHESTRATED" -eq 1 ]; then
+      # Empty/absent ledger on an orchestrated run. Two independent facts, and
+      # the gate must state both rather than let one hide the other.
+      echo "  NOTE: no evidence ledger — audit COVERAGE cannot be assessed (a separate fact from the one below)."
+      if [ "$FAITHFULNESS_ENFORCE" = "1" ] || [ "$STRICT" = "1" ]; then
+        echo "RESULT: RED — no claim-faithfulness audit was produced on an orchestrated run. Nothing in this project compared a prose claim against the text of the source cited for it. Dispatch verify-claim-faithfulness (phase-citation.md Step 4)."
+        exit 1
+      fi
+      echo "RESULT: YELLOW — no claim-faithfulness audit was produced on an orchestrated run."
+      echo "        Existence/DOI/CrossRef gates verify that a reference EXISTS and is correctly"
+      echo "        identified. NONE of them verifies that it SUPPORTS the sentence citing it."
+      echo "        An empty ledger does not make that check unnecessary — it makes it unperformed."
+      echo "        Set SCHOLAR_FAITHFULNESS_ENFORCE=1 to fail on this."
+      exit 2
     fi
     echo "RESULT: YELLOW — no claim-faithfulness audit yet (standalone run)"
     [ "$STRICT" = "1" ] && exit 1
     exit 2
   fi
+  if [ "$LEDGER_NONEMPTY" -eq 0 ]; then
+    # An audit exists but there is no ledger to measure it against. Report what
+    # could not be assessed; never render it as clean.
+    echo "RESULT: YELLOW — claim-faithfulness audit present, but no evidence ledger; audit coverage cannot be assessed"
+    [ "$STRICT" = "1" ] && exit 1
+    exit 2
+  fi
   # (b) consistency of the audit artifact itself
   CONS_GATE="$(cd "$(dirname "$0")" && pwd)/check-claim-audit-consistency.sh"
-  if [ -x "$CONS_GATE" ]; then
+  # `if [ -x ]` alone is a DC-11 fail-open: a missing or non-executable helper
+  # made "the audit is consistent" indistinguishable from "nobody checked".
+  # It is invoked via `bash`, so executability is not even required to run it —
+  # only presence is. Absence is now reported, never silently skipped.
+  if [ -f "$CONS_GATE" ]; then
     if ! CONS_OUT=$(bash "$CONS_GATE" "$AUDIT" 2>&1); then
       REPORT="${REPORT}\n  RED: audit fails check-claim-audit-consistency.sh — $(printf '%s\n' "$CONS_OUT" | grep '^  RED:' | head -2 | tr '\n' ' ')"
       ISSUES=$((ISSUES + 1))
     fi
+  else
+    REPORT="${REPORT}\n  YELLOW: check-claim-audit-consistency.sh not found at $CONS_GATE — audit shape was NOT validated (this is 'unchecked', not 'clean')"
+    ADVISORIES=$((ADVISORIES + 1))
   fi
   # (c) HIGH severities — mirrors the Phase 8 Hard Stop
   HIGHS=$(jq -r 'select(.severity == "HIGH") | .claim_id' "$AUDIT" 2>/dev/null | wc -l | tr -d ' ')
@@ -398,25 +444,98 @@ if [ ! -s "$LEDGER" ]; then
   exit 3
 fi
 
-# ── (a) Schema-lite validation of every ledger line ──
-TOTAL_LINES=$(wc -l < "$LEDGER" | tr -d ' ')
-VALID_LINES=$(jq -c '
-  select(
-    .schema == "claim-anchor/v1"
-    and (.anchor_id | type == "string" and test("^[a-z0-9_-]+-[0-9a-f]{8}$"))
-    and (.cite_key | type == "string" and length > 0)
-    and (.claim_kind | IN("prose_sentence","map_cell","hypothesis","mechanism_status","magnitude","theory_attribution","gap_claim","reading_list"))
-    and (.stance | IN("supports","contradicts","qualifies"))
-    and (.evidence_form | IN("source_verbatim","abstract_verbatim","kg_paraphrase","metadata_only"))
-    and (.access_tier | IN("T0_kg_fulltext","T1_fulltext","T2_oa_fulltext","T3_abstract","T4_none"))
-    and (.produced_by | type == "string" and length > 0)
-    and (.ts | type == "string" and length > 0)
-  )' "$LEDGER" 2>/dev/null | wc -l | tr -d ' ')
-INVALID_LINES=$((TOTAL_LINES - VALID_LINES))
+# ── (a) Schema-lite validation, latest-line-per-anchor_id (real-project
+# eval finding 17, 2026-08-22: the gate accepted ANY non-empty produced_by
+# while the schema enumerates — gate-GREEN was not schema-valid — and it
+# graded SUPERSEDED lines as hard failures, so an append-only correction
+# could never clear the gate). The ledger is append-only: the LATEST line
+# per anchor_id is the live record; earlier lines are history. Live-line
+# failures RED; superseded-only failures YELLOW. produced_by matches the
+# schema exactly: the skill enum OR the delegated reader identity
+# (reader-batchN, RCA Round 2 #10b).
+_EV_VAL=$(python3 - "$LEDGER" <<'PY_EVCHECK'
+import json, re, sys
+
+SKILLS = {"scholar-lit-review", "scholar-lit-review-hypothesis", "scholar-citation",
+          "scholar-write", "scholar-hypothesis", "scholar-respond", "scholar-book",
+          "scholar-grant", "scholar-teach", "scholar-brainstorm", "scholar-idea",
+          "scholar-conceptual"}
+READER_RE = re.compile(r"^reader-batch[0-9]+$")
+KINDS = {"prose_sentence", "map_cell", "hypothesis", "mechanism_status", "magnitude",
+         "theory_attribution", "gap_claim", "reading_list"}
+STANCES = {"supports", "contradicts", "qualifies"}
+FORMS = {"source_verbatim", "abstract_verbatim", "kg_paraphrase", "metadata_only"}
+TIERS = {"T0_kg_fulltext", "T1_fulltext", "T2_oa_fulltext", "T3_abstract", "T4_none"}
+AID_RE = re.compile(r"^[a-z0-9_-]+-[0-9a-f]{8}$")
+
+def valid(r):
+    if not isinstance(r, dict) or r.get("schema") != "claim-anchor/v1":
+        return False
+    aid = r.get("anchor_id")
+    if not (isinstance(aid, str) and AID_RE.match(aid)):
+        return False
+    ck = r.get("cite_key")
+    if not (isinstance(ck, str) and ck):
+        return False
+    if r.get("claim_kind") not in KINDS or r.get("stance") not in STANCES:
+        return False
+    if r.get("evidence_form") not in FORMS or r.get("access_tier") not in TIERS:
+        return False
+    pb = r.get("produced_by")
+    if not (isinstance(pb, str) and (pb in SKILLS or READER_RE.match(pb))):
+        return False
+    ts = r.get("ts")
+    return isinstance(ts, str) and bool(ts)
+
+rows, unparseable = [], 0
+total = 0
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if not line.strip():
+        continue
+    total += 1
+    try:
+        rows.append(json.loads(line))
+    except ValueError:
+        unparseable += 1
+        rows.append(None)
+
+latest = {}
+for i, r in enumerate(rows):
+    if isinstance(r, dict) and isinstance(r.get("anchor_id"), str):
+        latest[r["anchor_id"]] = i
+
+live_bad = superseded_bad = 0
+for i, r in enumerate(rows):
+    if r is None:
+        live_bad += 1   # unparseable: cannot be judged superseded; fail closed
+        continue
+    if valid(r):
+        continue
+    aid = r.get("anchor_id") if isinstance(r, dict) else None
+    if isinstance(aid, str) and latest.get(aid) != i:
+        superseded_bad += 1
+    else:
+        live_bad += 1
+
+print("TOTAL=%d" % total)
+print("LIVE_BAD=%d" % live_bad)
+print("SUPERSEDED_BAD=%d" % superseded_bad)
+PY_EVCHECK
+)
+TOTAL_LINES=$(printf '%s\n' "$_EV_VAL" | grep '^TOTAL=' | cut -d= -f2)
+INVALID_LINES=$(printf '%s\n' "$_EV_VAL" | grep '^LIVE_BAD=' | cut -d= -f2)
+_EV_SUP_BAD=$(printf '%s\n' "$_EV_VAL" | grep '^SUPERSEDED_BAD=' | cut -d= -f2)
+TOTAL_LINES=${TOTAL_LINES:-0}; INVALID_LINES=${INVALID_LINES:-0}; _EV_SUP_BAD=${_EV_SUP_BAD:-0}
+VALID_LINES=$((TOTAL_LINES - INVALID_LINES - _EV_SUP_BAD))
 if [ "$INVALID_LINES" -gt 0 ]; then
-  REPORT="${REPORT}\n  RED: $INVALID_LINES of $TOTAL_LINES ledger line(s) fail claim-anchor/v1 validation (schema/claim-anchor.schema.json)"
+  REPORT="${REPORT}\n  RED: $INVALID_LINES of $TOTAL_LINES ledger line(s) fail claim-anchor/v1 validation on the LIVE (latest-per-anchor_id) record (schema/claim-anchor.schema.json; produced_by must be a skill name or reader-batchN)"
   ISSUES=$((ISSUES + 1))
 fi
+if [ "$_EV_SUP_BAD" -gt 0 ]; then
+  REPORT="${REPORT}\n  YELLOW: $_EV_SUP_BAD superseded ledger line(s) fail validation (history only — the latest line per anchor_id is valid; append-only corrections are not re-punished)"
+  ADVISORIES=$((ADVISORIES + 1))
+fi
+unset _EV_VAL _EV_SUP_BAD
 
 # ── Quote-cap advisory (protocol §1: evidence_quote <= 60 words) ──
 OVERLONG=$(jq -r 'select(.evidence_quote != null) | .evidence_quote' "$LEDGER" 2>/dev/null \

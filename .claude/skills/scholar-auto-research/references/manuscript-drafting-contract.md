@@ -63,6 +63,13 @@ Required outputs:
 - `manuscript/polish-report.json`
 - `manuscript/journal-spec.json`
 
+The Phase 13 verifier runs `scripts/gates/regression-table-display-check.sh
+<project_dir>` for quantitative-regression designs. It returns GREEN/0 when a
+locked full regression table is reader-facing, RED/1 when the full table is
+hidden, YELLOW/2 when the manuscript or Python runtime is unavailable, and
+INERT/3 when the design is not quantitative or no full regression table exists.
+A RED reader-facing display defect routes back to Phase 13.
+
 `manuscript/journal-spec.json` must include:
 
 - `verdict`: `PASS`
@@ -175,7 +182,7 @@ For quantitative empirical manuscripts, the visible main empirical table must be
 
 Quantitative empirical drafts must display at least one locked artifact with role `main_regression_table` or `regression_table` and a regression-table display type. `sensitivity_regression_table` may support robustness discussion but cannot replace the main table unless the manuscript explicitly has no primary model and the blueprint records that exception. `tables/results-registry.csv` and model-ladder/focal-coefficient extracts must remain trace-only unless the research question is explicitly about the pipeline or table registry itself.
 
-The visible main regression table must be obtained by transcluding (or rendering in place from) the locked HTML/TeX/Markdown artifact named in `results-locked/manifest.json` for `artifact_role = main_regression_table`. Phase 13 must NOT reconstruct the regression table from `tables/model-estimates.csv`, `tables/results-registry.csv`, or any other source CSV. The gate `scripts/gates/locked-artifact-transclusion-check.sh` verifies the source-path file matches the locked sha256; a hash mismatch indicates a Phase 13 builder silently rewrote Table 1 and routes back with reason `rebuild-from-locked-artifact`.
+The visible main regression table must be obtained by transcluding (or rendering in place from) the locked HTML/TeX/Markdown artifact named in `results-locked/manifest.json` for `artifact_role = main_regression_table`. Phase 13 must NOT reconstruct the regression table from `tables/model-estimates.csv`, `tables/results-registry.csv`, or any other source CSV. The gate `scripts/gates/locked-artifact-transclusion-check.sh` verifies the source-path file matches the locked sha256; a hash mismatch indicates a Phase 13 builder silently rewrote Table 1 and routes back with reason `rebuild-from-locked-artifact`. (Audit 2026-05-06 cfps-platform-trust-asr-auto.)
 
 A focal-summary extract — a row-per-statistic table whose first column is `Statistic` and whose rows are `Focal adjusted association`, `p value`, `N` (or equivalent collapse to one focal coefficient) — is NOT acceptable as the main regression table even if it is wrapped in a locked HTML file. The Phase 18 quality engine's focal-summary detector and `scripts/gates/regression-table-export-check.sh` (regression-engine purity branch) reject focal-summary tables whose underlying renderer was a descriptive engine such as `datasummary_df()` or `tbl_summary()`.
 
@@ -237,7 +244,7 @@ Use explicit display anchors so Phase 13 can verify visible evidence separately 
 <!-- DISPLAY_FIGURE: figures/main-effect.pdf -->
 ```
 
-`results_registry` is provenance-only and must not be rendered as a reader-facing table by default. It may be discussed or displayed only when the article's substantive object is a registry/preregistration system; otherwise it belongs in trace comments, manifests, verification reports, and replication documentation rather than manuscript Results tables.
+`results_registry` is unconditionally provenance-only and must never be rendered as a reader-facing manuscript table. It belongs in trace comments, manifests, verification reports, and replication documentation; every regression display instead maps to a distinct locked `results_registry` through schema-v2 claim-source metadata.
 
 `manuscript/draft-manifest.json` must include:
 
@@ -267,7 +274,8 @@ Use explicit display anchors so Phase 13 can verify visible evidence separately 
 - `display_type` must identify the visible rendering form such as `markdown_table`, `html_table`, `regression_table_markdown`, `regression_table_html`, `regression_table_tex`, `regression_table_docx`, `markdown_image`, `html_image`, or `figure_link_block`
 - `display_evidence`: manuscript-level summary with `status: PASS`, `table_display_count`, `figure_display_count`, `required_table_display_min`, `required_figure_display_min`, and `displayed_sources`
 - `display_evidence`: must also report `results_table_callouts`, `results_figure_callouts`, and `all_display_items_called_out_in_results: true`
-- `locked_result_claims`: row-level claims for every reader-facing locked CSV result source other than provenance-only registries, including `claim_id`, `row_index`, `spec_id`, `estimate`, `std_error`, `p_value`, `n`, and a manuscript anchor containing those values
+- `locked_result_claims_schema_version`: exactly `2`
+- `locked_result_claims`: one mapped claim group for every non-exempt displayed regression table; each group binds the displayed artifact to a distinct locked `results_registry`, declares a bounded `markdown_pipe_v1` models-as-columns mapping, and lists every selected registry row with its `lrc2:` identity, physical row index, `spec_id`, rendered column, exact numeric payload, and a unique stable Results-sentence anchor that does not repeat the payload
 - `numeric_reporting_policy`: exact copy of `manuscript/journal-spec.json.numeric_reporting_policy`
 - `citation_plan`: BibTeX entry count, unique draft citation count, `all_citations_in_bib: true`, and `unresolved_citation_count: 0`
 - `claim_discipline`: `phase9_constraints_used: true`, `overclaim_count: 0`, and all Phase 9 required disclosures present
@@ -280,3 +288,6 @@ The verifier computes exact sentence repetition from the manuscript. A passing d
 Phase 13 fails if Phase 11 validation fails, if Phase 12 blueprint approval fails, if the draft uses stale source hashes, if the draft quality gate fails, if any reader-facing locked artifact lacks a trace anchor, if any display-required locked artifact lacks a visible display block, if the Results section lacks visible evidence, if quantitative empirical Results lack a canonical regression table, if a required descriptive statistics table is generated but not reader-facing, if a registry/model-ladder/focal-coefficient extract is used as the main empirical table, if a sparse omnibus table collapses unrelated model families, if display-required evidence is not explicitly called out in Results prose, if front matter lacks title/abstract/required keywords, if reader-facing text uses scientific notation or excessive floating precision against the journal numeric policy, if the abstract omits purpose/data/method/findings/contribution moves or references tables/figures, if visible manuscript content exposes raw dataset-native variable names that should have been translated through Phase 4 display fields, if locked CSV values are not present in the manuscript where claimed, if citations are unresolved, if required sections are thin or missing, if quantitative Methods lacks Data/Sample, Variables/Measures, and Analytic Strategy structure, if Data/Sample omits original data size, final analytic sample size, restriction/missingness logic, or justification for the analytic sample, if quantitative or computational Analytic Strategy omits method-family-specific technical detail using the actual variables/data pipeline, if quantitative Variables/Measures does not distinguish dependent variables, independent variables, and controls/covariates, if the literature/theory section does not synthesize mechanisms and rival explanations, if a full quantitative theory section has no subheadings or motivated hypotheses structure, if displayed hypotheses appear without nearby theoretical motivation, if the Theory/Hypotheses block drifts from canonical Phase 2 hypotheses, if Theory contains post-results language or the drafting plan gives Theory result-aware instructions, if the Results section does not compare specifications or return findings to theory, if the manuscript drifts from the approved blueprint, if Phase 9 claim constraints are violated, or if the draft manifest hash differs from the manuscript.
 
 Length compliance is prose-only. A draft cannot satisfy the journal total word range by adding references, end-matter tables, figure captions, appendix boilerplate, declarations, lock comments, or other trace metadata. For full empirical articles, `budget_compliance.main_text_word_count` must be the sum of `section_prose_word_counts` over the approved article sections and must meet `journal-spec.json.total_word_range.min`.
+# Locked result claims schema v2
+
+Phase 13 requires `locked_result_claims_schema_version: 2`. A displayed regression table remains reader-facing while `results_registry` remains provenance-only. Every non-exempt displayed regression table backed by a locked registry must declare a lock-bound `claim_source` mapping selected `spec_id` rows to unique rendered coordinates. Each selected row has one collision-resistant `lrc2:` identity and one unique, nonnumeric visible Results-sentence anchor. Locked row, bounded `markdown_pipe_v1` display cell, and sentence-local estimate, standard error, p-value, N, and direction must agree. Legacy v1 or unversioned claims reject read-only and reroute through Phase 13.

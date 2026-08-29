@@ -1,0 +1,18 @@
+{
+  "required_revisions_completed": true,
+  "unresolved_critical_count": 0,
+  "final_verdict": "PASS",
+  "revision_rounds": [
+    {
+      "round": 1,
+      "status": "resolved",
+      "issue_id": "D-001",
+      "action_taken": "Added event-study pretrend robustness and attrition weighting to the design.",
+      "affected_files": [
+        "design/design-blueprint.md",
+        "design/identification-strategy.json",
+        "design/model-specs.json"
+      ]
+    }
+  ]
+}

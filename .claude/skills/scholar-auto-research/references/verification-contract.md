@@ -108,18 +108,23 @@ Minimum JSON shape:
   "scanned": 2,
   "critical_count": 0,
   "selected_manuscript_hash": "<sha256>",
-  "agent_reports": ["verify/agent-output-to-manuscript.md", "verify/agent-prose-consistency.md"],
+  "agent_reports": [
+    "review-evidence/phase-14/<session-id>/reports/verify-numerics.md",
+    "review-evidence/phase-14/<session-id>/reports/verify-figures.md",
+    "review-evidence/phase-14/<session-id>/reports/verify-logic.md",
+    "review-evidence/phase-14/<session-id>/reports/verify-completeness.md"
+  ],
   "agents": [
-    {"role": "verify-numerics", "agent_id": "N1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "phase13-numerics-001", "independent": true, "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "verify/agents/verify-numerics.md", "verdict": "PASS"},
-    {"role": "verify-figures", "agent_id": "F1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "phase13-figures-001", "independent": true, "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "verify/agents/verify-figures.md", "verdict": "PASS"},
-    {"role": "verify-logic", "agent_id": "L1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "phase13-logic-001", "independent": true, "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "verify/agents/verify-logic.md", "verdict": "PASS"},
-    {"role": "verify-completeness", "agent_id": "C1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "phase13-completeness-001", "independent": true, "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "verify/agents/verify-completeness.md", "verdict": "PASS"}
+    {"role": "verify-numerics", "agent_id": "N1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "<verify-numerics-dispatch-id>", "independent": true, "verification_scope": ["stage_1_numeric_values", "stage_2_numeric_claims"], "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "review-evidence/phase-14/<session-id>/reports/verify-numerics.md", "verdict": "PASS"},
+    {"role": "verify-figures", "agent_id": "F1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "<verify-figures-dispatch-id>", "independent": true, "verification_scope": ["stage_1_visual_inspection", "caption_claims"], "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "review-evidence/phase-14/<session-id>/reports/verify-figures.md", "verdict": "PASS"},
+    {"role": "verify-logic", "agent_id": "L1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "<verify-logic-dispatch-id>", "independent": true, "verification_scope": ["stage_2_claim_scope", "phase9_constraints"], "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "review-evidence/phase-14/<session-id>/reports/verify-logic.md", "verdict": "PASS"},
+    {"role": "verify-completeness", "agent_id": "C1", "agent_type": "independent_scholar_verify_agent", "task_invocation_id": "<verify-completeness-dispatch-id>", "independent": true, "verification_scope": ["coverage", "live_read_audit"], "input_hashes": {"manuscript": "<sha256>", "draft_manifest": "<sha256>", "lock_manifest": "<sha256>"}, "report_path": "review-evidence/phase-14/<session-id>/reports/verify-completeness.md", "verdict": "PASS"}
   ],
   "lock_coverage": {
     "lock_id": "LOCK-20260429-001",
     "all_locked_artifacts_accounted": true,
     "live_output_reads_detected": false,
-    "covered_sources": ["tables/results-registry.csv"]
+    "covered_sources": ["tables/regression-main.html", "tables/results-registry.csv"]
   },
   "findings": [],
   "input_artifacts_read": [
@@ -132,11 +137,11 @@ Minimum JSON shape:
     "critical_count": 0,
     "checked": [
       {
-        "source_artifact": "tables/table1.csv",
-        "locked_path": "results-locked/LOCK-20260429-001/tables/table1.csv",
-        "manuscript_location": "Table 1",
-        "manuscript_anchor": "<anchor text>",
-        "visual_inspection": {"rendered": true, "caption_matches": true, "read_confirmed": "READ-CONFIRMED: results-locked/LOCK-20260429-001/figures/F1.png", "figure_sha256": "<sha256>", "rendered_dimensions": "800x600", "caption_claims_checked": ["caption claim"]},
+        "source_artifact": "tables/regression-main.html",
+        "locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+        "manuscript_location": "Table 2",
+        "manuscript_anchor": "The primary specification shows the clearest negative association.",
+        "visual_inspection": {"rendered": true, "caption_matches": true, "read_confirmed": "READ-CONFIRMED: results-locked/LOCK-20260429-001/tables/regression-main.html", "artifact_sha256": "<sha256>", "rendered_dimensions": "<dimensions>", "caption_claims_checked": ["caption claim"]},
         "check_type": "numeric_match",
         "verdict": "PASS"
       }
@@ -150,12 +155,17 @@ Minimum JSON shape:
     "checked": [
       {
         "manuscript_location": "Results paragraph 1",
-        "referenced_artifact": "Table 1",
-        "source_artifact": "tables/table1.csv",
-        "locked_path": "results-locked/LOCK-20260429-001/tables/table1.csv",
-        "claim_id": "tables/table1.csv#0:S1",
+        "referenced_artifact": "Table 2",
+        "binding_type": "mapped_structured_source",
+        "display_source_path": "tables/regression-main.html",
+        "display_locked_path": "results-locked/LOCK-20260429-001/tables/regression-main.html",
+        "source_artifact": "tables/results-registry.csv",
+        "locked_path": "results-locked/LOCK-20260429-001/tables/results-registry.csv",
+        "claim_id": "lrc2:<sha256-identity>",
         "row_index": 0,
         "spec_id": "S1",
+        "display_coordinate_kind": "column",
+        "display_coordinate": "Model 1",
         "estimate": "-0.120",
         "std_error": "0.040",
         "p_value": "0.003",
@@ -187,22 +197,18 @@ The four verifier roles must cover distinct surfaces:
 
 Phase 18 quality gate must score contribution, RQ answer, argument coherence, theory-results integration, limitation candor, journal fit, and abstract/introduction/discussion consistency.
 
-## Codex cross-model review gate (added 2026-05-10)
+## Portable execution evidence
 
-Phase 14 verification runs `scripts/gates/codex-trigger-phase14.sh` after the four-agent verification + manuscript-blueprint alignment checks. The gate enforces the following rule whenever `SCHOLAR_CODEX_DEFAULT=true` (the default as of 2026-05-10) AND the `codex` CLI is on PATH:
+The four verifier roles use the registered lifecycle in
+`review-evidence-contract.md`. Their canonical records bind `report_path` and
+`task_invocation_id` to the selected evidence completions. Opaque task IDs and
+structured model/task unavailability are portable and valid under the normal
+`process_recorded` profile.
 
-- Either Codex full-mode artifacts must exist at `${PROJ}/reviews/codex/codex-review-consolidated-*.md` (or `${PROJ}/reviews/codex/A[4-5]-*.md` per-agent reports), OR
-- The verification report must contain `[EXCUSED:codex-review: <reason>]` in `verify/manuscript-verification.md` (or any string-valued field in `verify/manuscript-verification.json`).
+The packaged Codex cross-model gate is an optional diversity enhancement and
+runs only when the operator explicitly sets `SCHOLAR_CODEX_REVIEW=1`. Ambient
+Codex availability cannot change Phase 14 correctness or replace the registered
+four-role verification panel.
+# Phase 14 mapped-claim coverage
 
-If neither is satisfied, the gate emits `STATUS=RED` and Phase 14 verification fails.
-
-Verdict matrix is the same as the Phase 6 gate (see `pre-execution-review-contract.md`).
-
-Opt-out paths:
-
-- Per shell: `export SCHOLAR_CODEX_DEFAULT=false`
-- Per phase: append `[EXCUSED:codex-review: <reason>]` to `verify/manuscript-verification.md`.
-
-When not excused, dispatch via `/scholar-openai full <manuscript-path>`. The `full` mode runs the consolidated A1–A5 agent panel (numerics + figures + logic + completeness + senior synthesizer) and saves the consolidated report under `${PROJ}/reviews/codex/`.
-
-The gate is **self-contained** within scholar-auto-research: it does not depend on the parent `scholar-skill/scripts/gates/` directory.
+Phase 14 consumes only Phase 13 locked-result claim schema v2. Stage 2 must cover exactly every v2 identity and repeat its display source, value source, locked paths, physical row index, `spec_id`, rendered coordinate, numeric payload, and visible Results anchor. Missing, extra, duplicate, zero, or mismatched checks reject; order is immaterial.

@@ -1,0 +1,145 @@
+{
+  "analysis_planning_engine": {
+    "mode": "analysis_plan_compiler",
+    "skill": "scholar-auto-research"
+  },
+  "dataset_design_plan": {
+    "analytic_decision": "Use adolescent-wave panel structure with household fixed effects and report weights as a robustness design feature.",
+    "clustering_considered": true,
+    "decision_rationale": "This inherits the Phase 4 panel and weighting review while keeping the primary model aligned with the planned within-household comparison.",
+    "denominator_rules_considered": true,
+    "panel_structure_considered": true,
+    "reviewed": true,
+    "weights_considered": true
+  },
+  "hypothesis_spec_coverage": [
+    {
+      "covered": true,
+      "hypothesis_id": "H1",
+      "spec_ids": [
+        "S1",
+        "S2",
+        "S3"
+      ]
+    }
+  ],
+  "missing_data_alignment": {
+    "strategy_matches_phase4": true,
+    "variable_dictionary_hash": "f7c4b63bfc2b2a66e2046b556a64961b2cd3ec0ccbdf16bd04a71793b58c058a"
+  },
+  "missingness_sensitivity_plan": {
+    "denominator_checks": true,
+    "post_restriction_diagnostics": true,
+    "rationale": "The plan checks complete-case restrictions, denominator stability, and skip-code handling before interpreting model estimates.",
+    "sensitivity_specs": [
+      "S3"
+    ],
+    "skip_vs_missing_reviewed": true
+  },
+  "model_spec_coverage": [
+    {
+      "covered": true,
+      "model_id": "M1",
+      "spec_ids": [
+        "S1",
+        "S2",
+        "S3"
+      ]
+    }
+  ],
+  "outcome_model_ladder": {
+    "bounded_scale_checked": true,
+    "distributional_diagnostics_planned": true,
+    "headline_estimator": "household fixed effects linear model",
+    "outcome_family": "ordinal",
+    "sensitivity_specs": [
+      {
+        "rationale": "Timing robustness checks whether the ordered expectation pattern is sensitive to event timing.",
+        "spec_id": "S2"
+      },
+      {
+        "rationale": "Attrition-weighted robustness checks whether sample composition changes the ordinal-outcome estimate.",
+        "spec_id": "S3"
+      }
+    ]
+  },
+  "output_hashes": {
+    "analysis_plan": "3d758ac2a6f9df20779418ea708922b3726968dd0aea513494fc62d4de9b4cfb",
+    "scripts_inventory": "4d3b3543015b6a005b83b69c35b445d36ca448a1b08c36334d4200b147b59514",
+    "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8"
+  },
+  "ready_for_phase_6": true,
+  "robustness_coverage": [
+    {
+      "covered": true,
+      "design_item": "event-study pretrend check",
+      "spec_ids": [
+        "S2"
+      ]
+    },
+    {
+      "covered": true,
+      "design_item": "inverse probability attrition weights",
+      "spec_ids": [
+        "S3"
+      ]
+    }
+  ],
+  "script_dag": {
+    "script_order": [
+      "analysis/scripts/01_load_data.R",
+      "analysis/scripts/02_build_sample.R",
+      "analysis/scripts/03_construct_variables.R",
+      "analysis/scripts/04_plan_models.R"
+    ],
+    "valid": true
+  },
+  "source_hashes": {
+    "data_measurement_manifest": "b2bb04efc832403d61b0d0971d93fbe6aaaa562a01dc05d67b314c9eadd43ccd",
+    "data_status": "690397ce064f86b33bf391de29957f4dff2fe9436c193cc39668de37ff68b7f2",
+    "design_manifest": "d149f54b63e68b5af7bcc373a0f89180411ef892e810ef2e6cf3e367eef4e4ec",
+    "identification_strategy": "201fa9c250f2758147e89c563d854704c4d83baa4eba5ba280a0956fe62b6046",
+    "measurement_plan": "beb4b9c30f25d189e9f1b5808c2db31b59fa5a1f78983e2c393135cbb3384ab7",
+    "model_specs": "cec2bb5ee6cef7a301859ea117ce0919492a51d8c58f916177eb2875cdb890d2",
+    "variable_dictionary": "f7c4b63bfc2b2a66e2046b556a64961b2cd3ec0ccbdf16bd04a71793b58c058a"
+  },
+  "source_phase": "5",
+  "test_coverage": {
+    "categories": [
+      "data_loading",
+      "analytic_sample",
+      "variable_construction",
+      "missingness",
+      "model_spec",
+      "output_registry"
+    ],
+    "spec_ids": [
+      "S1",
+      "S2",
+      "S3"
+    ]
+  },
+  "variable_coverage": [
+    {
+      "covered": true,
+      "name": "adolescent educational expectations"
+    },
+    {
+      "covered": true,
+      "name": "parental job loss"
+    },
+    {
+      "covered": true,
+      "name": "child age"
+    },
+    {
+      "covered": true,
+      "name": "wave"
+    },
+    {
+      "covered": true,
+      "name": "household income"
+    }
+  ],
+  "verdict": "PASS"
+}

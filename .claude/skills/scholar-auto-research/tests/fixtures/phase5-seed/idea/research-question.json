@@ -1,0 +1,51 @@
+{
+  "verdict": "PASS",
+  "engine": "scholar-idea",
+  "engine_provenance": {
+    "task_invocation_id": "phase1-idea-001",
+    "invoked_at_utc": "2026-04-28T08:00:00Z",
+    "input_artifacts": ["idea/topic-brief.txt"],
+    "output_artifacts": [
+      "idea/candidate-rqs.json",
+      "idea/journal-fit.json",
+      "idea/research-question.json",
+      "idea/research-question.md"
+    ]
+  },
+  "input_mode": "idea",
+  "selected_rq_id": "RQ1",
+  "selected_rq": "Among low-income United States households with adolescent children, what is the association between parental job loss and adolescent educational expectations?",
+  "x": "parental job loss",
+  "y": "adolescent educational expectations",
+  "directional_relation": "negative",
+  "mechanism": "income shock and household stress reduce perceived educational feasibility",
+  "confounders": ["prior household income", "parental education", "baseline academic performance"],
+  "scope": {
+    "population": "low-income households with adolescent children",
+    "place": "United States",
+    "time": "contemporary household panel period",
+    "unit": "adolescent-year"
+  },
+  "target_journal": {
+    "primary": "Journal of Marriage and Family",
+    "journal_family": "family sociology",
+    "fit_rationale": "The question connects family economic instability to adolescent expectations with a family-process mechanism.",
+    "method_bar": "transparent observational design with panel controls, robustness checks, and cautious associational language",
+    "theory_bar": "clear family stress and status-attainment mechanism with explicit scope conditions",
+    "desk_reject_risks": ["novelty must be distinguished from generic family stress replications"]
+  },
+  "paper_type": "research note",
+  "method_orientation": "observational panel analysis",
+  "recommended_dataset": "Panel Study of Income Dynamics Child Development Supplement",
+  "claim_strength": "associational",
+  "rationale": "The question links labor-market instability to intergenerational educational inequality and is testable with household panel data while preserving cautious associational language.",
+  "selection_evidence": {
+    "candidate_count": 3,
+    "panel_consensus": "strong",
+    "fatal_flaw": false,
+    "data_feasible": true,
+    "novelty_risk": "medium",
+    "journal_fit": "strong"
+  },
+  "ready_for_phase_2": true
+}

@@ -82,7 +82,7 @@ _notice_full() {
   printf '    fabrication (citations, data, coauthors, JSON); no sycophancy.\n'
   printf '  - Operational rules (auto-research-specific): run mode persistence,\n'
   printf '    self-contained vendoring, Phase 15 gate cross-check + skip-flag,\n'
-  printf '    prereq chain integrity, JSON-shape strictness, codex defaults.\n\n'
+  printf '    prereq chain integrity, JSON-shape strictness, host-neutral defaults.\n\n'
   printf '═══════════════ BEGIN auto-managed content ════════════════════════\n'
   # Print the marker block (BEGIN..END) so the operator sees what was written
   sed -n "/^${MARK_BEGIN//\//\\/}\$/,/^${MARK_END//\//\\/}\$/p" "$target_path"
@@ -105,7 +105,9 @@ _notice_short() {
 }
 
 # ── Assemble the marker block ───────────────────────────────────────
+SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RENDERED=$(cat "$TEMPLATE")
+RENDERED="${RENDERED//__AUTO_RESEARCH_SKILL_DIR__/$SKILL_ROOT}"
 AUTO_BLOCK="${MARK_BEGIN}
 ${RENDERED}
 ${MARK_END}"

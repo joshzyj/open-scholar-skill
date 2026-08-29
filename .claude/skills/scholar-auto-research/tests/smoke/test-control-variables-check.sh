@@ -4,7 +4,23 @@
 
 set -u
 
-GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/gates" && pwd)/control-variables-check.sh"
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GATE="$SKILL_DIR/scripts/gates/control-variables-check.sh"
+CASE_RESULT_HELPER="$SKILL_DIR/tests/helpers/case_result.py"
+TEST_TMP_PROPOSAL="$(python3 "$CASE_RESULT_HELPER" prepare-owned-root \
+  --tmpdir "${TMPDIR:-/tmp}" --prefix scholar-ar-control-vars)" || exit 1
+IFS=$'\t' read -r TEST_TMP_ROOT TEST_TMP_NONCE TEST_TMP_PARENT <<< "$TEST_TMP_PROPOSAL"
+cleanup_test_root() {
+  [ -n "${TEST_TMP_ROOT:-}" ] && [ -e "$TEST_TMP_ROOT" ] || return 0
+  python3 "$CASE_RESULT_HELPER" cleanup-owned-root --root "$TEST_TMP_ROOT" \
+    --nonce "$TEST_TMP_NONCE" --tmp-parent "$TEST_TMP_PARENT"
+}
+trap cleanup_test_root EXIT
+trap 'cleanup_test_root; exit 130' INT
+trap 'cleanup_test_root; exit 143' TERM
+trap 'cleanup_test_root; exit 129' HUP
+python3 "$CASE_RESULT_HELPER" create-owned-root --root "$TEST_TMP_ROOT" \
+  --nonce "$TEST_TMP_NONCE" --tmp-parent "$TEST_TMP_PARENT" || exit 1
 
 PASS=0
 FAIL=0
@@ -27,7 +43,7 @@ note() {
 #   decomposition:*                                                 → scholar-analyze (decomposition is a scholar-analyze sub-family)
 build_proj() {
   local design_type="$1"; shift
-  local P; P=$(mktemp -d)
+  local P; P=$(mktemp -d "$TEST_TMP_ROOT/case.XXXXXX")
   mkdir -p "$P/analysis" "$P/design"
   cat > "$P/analysis/spec-registry.csv" <<'HDR'
 spec_id,model_id,hypothesis_ids,outcome,predictors,covariates,estimator,purpose,robustness_type,missing_data_strategy,status

@@ -1,0 +1,155 @@
+{
+  "verdict": "PASS",
+  "degraded": false,
+  "decision": "PROCEED_TO_RESULTS_LOCK",
+  "ready_for_phase_11": true,
+  "runtime_engine": {
+    "skill": "scholar-auto-research",
+    "mode": "runtime_sanity",
+    "auto_research_contract": "phase_10",
+    "deterministic_gate": true
+  },
+  "source_hashes": {
+    "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8",
+    "execution_report": "db3a565ee053b4e9b90cd7ccde7da09aa919df5aebe04e99aea504b705eda421",
+    "results_registry": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+    "figure_registry": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+    "post_execution_review": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc",
+    "post_execution_fix_log": "3eb19e484a635b4774f654445203e44c69b9801073eb47f256f63c8a2ed5c3f8"
+  },
+  "phase9_status": {
+    "verdict": "PASS",
+    "decision": "PROCEED_TO_RUNTIME_SANITY",
+    "ready_for_phase_10": true,
+    "critical_count": 0,
+    "unresolved_blocking_count": 0,
+    "route_back_phase": null
+  },
+  "phase9_constraint_carryforward": {
+    "unexpected_results_checked": true,
+    "claim_constraints_checked": true,
+    "unexpected_result_spec_ids": ["S2"],
+    "forbidden_claim_verbs": ["prove", "causes", "guarantees"],
+    "required_disclosures": ["observational design", "weaker robustness estimate"],
+    "evidence": "Phase 9 weak robustness classification and claim constraints are carried into runtime sanity before results lock."
+  },
+  "plausibility": {
+    "verdict": "PASS",
+    "checks": [
+      {"domain": "numeric_finite", "status": "PASS", "evidence": "All estimates and standard errors are finite."},
+      {"domain": "sample_size", "status": "PASS", "evidence": "All result rows use n=1200."},
+      {"domain": "p_value_range", "status": "PASS", "evidence": "All p-values fall between zero and one."},
+      {"domain": "effect_magnitude", "status": "PASS", "evidence": "Effects are plausible for the educational expectation scale."},
+      {"domain": "interpretation_constraints", "status": "PASS", "evidence": "Phase 9 claim constraints are present."}
+    ]
+  },
+  "clean_room": {
+    "verdict": "PASS",
+    "reviewed_artifacts_match": true,
+    "artifact_hashes": {
+      "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8",
+      "execution_report": "db3a565ee053b4e9b90cd7ccde7da09aa919df5aebe04e99aea504b705eda421",
+      "results_registry": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+      "figure_registry": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+      "post_execution_review": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc",
+      "post_execution_fix_log": "3eb19e484a635b4774f654445203e44c69b9801073eb47f256f63c8a2ed5c3f8"
+    },
+    "run": {
+      "verdict": "PASS",
+      "mode": "fixture_clean_room_hash_check",
+      "commands": ["Rscript analysis/scripts/01_load_data.R", "Rscript analysis/scripts/02_build_sample.R", "Rscript analysis/scripts/03_construct_variables.R", "Rscript analysis/scripts/04_plan_models.R"],
+      "exit_codes": {
+        "analysis/scripts/01_load_data.R": 0,
+        "analysis/scripts/02_build_sample.R": 0,
+        "analysis/scripts/03_construct_variables.R": 0,
+        "analysis/scripts/04_plan_models.R": 0
+      },
+      "input_hashes": {
+        "spec_registry": "b8a6fb8178e89ab9539f31b3044ec1bfa9c1292fd4aeeca55052a8772c900bd8",
+        "post_execution_review": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc"
+      },
+      "output_hashes": {
+        "data/interim/panel-loaded.rds": "ee2fd4ecd68c220b005fa2ae69f9b6da94a0b0dbd95d1ce42e0c8e1ab895ac9e",
+        "data/processed/analytic-sample.rds": "03b9dd4b03f7855e077788339ba0c79147402a6fcd55a0b90ad4de09eb5e0e8a",
+        "data/processed/analytic-variables.rds": "4837ed925ef4776e4e3bf02dbbd4c873edeb614c49b5150201d6527098100807",
+        "analysis/planned-model-calls.json": "bc4b20ffae85b91492407f287ef49975965d314ee6676a28cfe01d3a8ef2c022",
+        "tables/results-registry.csv": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f",
+        "figures/figure-registry.csv": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57",
+        "tables/model-results.csv": "85859949cad0dc38d596699174004f0b75944afc8fd7228caedbaa552fc7701d",
+        "tables/regression-main.html": "8a0d41f7cd3f855dc1db4706205dee7657dd6e052058931d5358cff3c6490cf5",
+        "figures/event-study.png": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460"
+      },
+      "numeric_tolerance": 1e-09,
+      "seed": "not-used-fixture",
+      "session_info": "fixture shell validation"
+    }
+  },
+  "invariants": {
+    "verdict": "PASS",
+    "checks": [
+      {"name": "planned_specs_equal_results", "status": "PASS", "evidence": "S1, S2, and S3 appear in both planned and result registries."},
+      {"name": "execution_report_matches_registries", "status": "PASS", "evidence": "Execution report registry paths match output registries."},
+      {"name": "expected_outputs_exist", "status": "PASS", "evidence": "All Phase 8 expected outputs exist."},
+      {"name": "figure_registry_complete", "status": "PASS", "evidence": "All figure files are registered."},
+      {"name": "post_execution_review_current", "status": "PASS", "evidence": "Post-execution review hash matches current file."},
+      {"name": "phase8_artifact_manifest_current", "status": "PASS", "evidence": "Every Phase 8 artifact_manifest path exists with a matching hash."},
+      {"name": "phase9_constraints_current", "status": "PASS", "evidence": "Phase 9 unexpected result and claim-constraint records are unchanged."}
+    ]
+  },
+  "pap_drift": {
+    "verdict": "PASS",
+    "planned_spec_ids": ["S1", "S2", "S3"],
+    "executed_spec_ids": ["S1", "S2", "S3"],
+    "spec_fingerprints": {"S1": "09ab341118e9d60d092ff75b54bab0a86d5de77bdc7a36173d339461f42e9c57", "S2": "3bae35c816a69e7c1813fc315f8c6f1179f0cbc481e77b337a4276c82f211512", "S3": "f84ef6ff32b971144f1b82e79830c986bd8639dc7aef8acae1f3299487b79d4f"},
+    "unresolved_drift_count": 0,
+    "drift_items": [
+      {"drift_id": "NONE", "status": "none", "description": "No unresolved analysis-plan drift detected."}
+    ]
+  },
+  "artifact_inventory": [
+    {"path": "analysis/execution-report.json", "sha256": "db3a565ee053b4e9b90cd7ccde7da09aa919df5aebe04e99aea504b705eda421", "lock_candidate": true},
+    {"path": "tables/results-registry.csv", "sha256": "54e7abae3bc7284123e5146391d80a48581af695dffc65d938ccb52fe55d660f", "lock_candidate": true},
+    {"path": "tables/model-results.csv", "sha256": "85859949cad0dc38d596699174004f0b75944afc8fd7228caedbaa552fc7701d", "lock_candidate": true},
+    {"path": "tables/regression-main.html", "sha256": "8a0d41f7cd3f855dc1db4706205dee7657dd6e052058931d5358cff3c6490cf5", "lock_candidate": true},
+    {"path": "figures/figure-registry.csv", "sha256": "26b0268da93dfa36b989b90dd10b78a0e0c53425ecf76bb9e31475023f93af57", "lock_candidate": true},
+    {"path": "figures/event-study.png", "sha256": "431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460", "lock_candidate": true},
+    {"path": "review/post-execution-review.json", "sha256": "6f79abafd935099da132b13f5498b357e79dce5507e0a827129e29584995a8cc", "lock_candidate": true}
+  ],
+  "lock_candidate_reconciliation": {
+    "status": "PASS",
+    "required_paths": [
+      "analysis/execution-report.json",
+      "figures/event-study.png",
+      "figures/figure-registry.csv",
+      "review/post-execution-review.json",
+      "tables/model-results.csv",
+      "tables/regression-main.html",
+      "tables/results-registry.csv"
+    ],
+    "inventory_paths": [
+      "analysis/execution-report.json",
+      "figures/event-study.png",
+      "figures/figure-registry.csv",
+      "review/post-execution-review.json",
+      "tables/model-results.csv",
+      "tables/regression-main.html",
+      "tables/results-registry.csv"
+    ],
+    "missing_paths": [],
+    "extra_paths": [],
+    "phase8_manifest_paths_checked": [
+      "analysis/planned-model-calls.json",
+      "data/interim/panel-loaded.rds",
+      "data/processed/analytic-sample.rds",
+      "data/processed/analytic-variables.rds",
+      "figures/event-study.png",
+      "figures/figure-registry.csv",
+      "tables/model-results.csv",
+      "tables/regression-main.html",
+      "tables/results-registry.csv"
+    ]
+  },
+  "critical_count": 0,
+  "unresolved_blocking_count": 0,
+  "route_back_phase": null
+}

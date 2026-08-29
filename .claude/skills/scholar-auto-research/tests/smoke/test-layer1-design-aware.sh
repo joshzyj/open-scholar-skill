@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # Integration test for design-aware Layer 1 in auto-research-verify.sh Phase 5.
 #
-# Strategy: reuse the bundled fixture-test's preexec-project. Copy it, mutate
+# Strategy: reuse the vendored lightweight Phase 5 seed. Copy it, mutate
 # identification-strategy.json + spec-registry.csv, run verify.sh 5, and
 # assert on the FAIL message content.
 #
 # Falsifiable observable: the SAME spec-registry with empty covariates should
 # produce different verify.sh 5 outcomes depending on primary_execution_skill.
 
-set -u
+set -uo pipefail
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERIFY="$SKILL_DIR/scripts/auto-research-verify.sh"
+SRC="$SKILL_DIR/tests/fixtures/phase5-seed"
+TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/scholar-auto-research-layer1.XXXXXX")"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+[ -d "$SRC" ] || { echo "FAIL: missing vendored Phase 5 seed: $SRC"; exit 1; }
 
 PASS=0
 FAIL=0
@@ -24,33 +28,11 @@ note() {
   fi
 }
 
-# Materialize the bundled fixture if not already present. The fixture-test
-# fails at Phase 8 (pre-existing unrelated bug) but creates Phases 0-7
-# fixtures cleanly. We only need the preexec-project for Phase 5.
-ensure_fixture() {
-  local existing
-  existing=$(ls -td /tmp/scholar-auto-research-fixture-* 2>/dev/null | head -1)
-  if [ -n "$existing" ] && [ -d "$existing/preexec-project" ]; then
-    echo "$existing/preexec-project"
-    return 0
-  fi
-  echo "Materializing bundled fixture (this takes ~60 seconds)..." >&2
-  bash "$SKILL_DIR/scripts/auto-research-fixture-test.sh" >/dev/null 2>&1 || true
-  existing=$(ls -td /tmp/scholar-auto-research-fixture-* 2>/dev/null | head -1)
-  if [ -n "$existing" ] && [ -d "$existing/preexec-project" ]; then
-    echo "$existing/preexec-project"
-    return 0
-  fi
-  echo "ERROR: could not materialize fixture" >&2
-  return 1
-}
-
-SRC=$(ensure_fixture) || { echo "FAIL: no fixture available"; exit 1; }
-echo "Source fixture: $SRC"
+echo "Source fixture: vendored Phase 5 seed"
 
 # Clone the fixture to a fresh dir for each test (so we never mutate the source).
 clone_fixture() {
-  local dest; dest=$(mktemp -d)
+  local dest; dest=$(mktemp -d "$TMP_ROOT/case.XXXXXX")
   cp -R "$SRC"/. "$dest"/
   echo "$dest"
 }
@@ -90,8 +72,8 @@ echo "=== T1: scholar-analyze (regression) + empty covariates → FAIL on covari
 P=$(clone_fixture)
 set_skill "$P" "scholar-analyze"
 clear_covariates "$P"
-OUT=$(bash "$VERIFY" 5 "$P" 2>&1) || true
-if echo "$OUT" | grep -qE "row [0-9]+ covariates"; then
+OUT=$(bash "$VERIFY" 5 "$P" 2>&1); RC=$?
+if [ "$RC" -eq 1 ] && printf '%s\n' "$OUT" | grep -qE "row [0-9]+ covariates"; then
   note PASS "T1: scholar-analyze + empty covariates → FAIL mentions 'covariates' (Layer 1 blocks as expected)"
 else
   note FAIL "T1: expected FAIL with 'row N covariates'. Got: $(echo "$OUT" | head -3)"
@@ -104,11 +86,14 @@ echo "=== T2: scholar-compute (ML) + empty covariates → Layer 1 advances past 
 P=$(clone_fixture)
 set_skill "$P" "scholar-compute"
 clear_covariates "$P"
-OUT=$(bash "$VERIFY" 5 "$P" 2>&1) || true
-# Layer 1's covariates emptiness check should now skip. Verify.sh 5 may
-# still fail at a LATER check (variable_coverage etc.), but NOT at covariates.
-if ! echo "$OUT" | grep -qE "row [0-9]+ covariates"; then
-  note PASS "T2: scholar-compute + empty covariates → Layer 1 passes covariates check (FAIL message has no 'covariates', if any FAIL at all)"
+OUT=$(bash "$VERIFY" 5 "$P" 2>&1); RC=$?
+# The mutation intentionally invalidates the manifest hash after Layer 1. Pin
+# that exact downstream sentinel so an unrelated early failure cannot pass.
+if [ "$RC" -eq 1 ] \
+   && ! printf '%s\n' "$OUT" | grep -qE "row [0-9]+ covariates" \
+   && printf '%s\n' "$OUT" | grep -q 'FAIL: Phase 5 analysis-plan manifest source_hashes are stale' \
+   && printf '%s\n' "$OUT" | grep -q 'identification_strategy mismatch'; then
+  note PASS "T2: scholar-compute bypasses covariates and reaches exact stale-hash sentinel"
 else
   note FAIL "T2: scholar-compute should bypass covariates emptiness check. Got: $(echo "$OUT" | head -3)"
 fi
@@ -120,9 +105,12 @@ echo "=== T3: scholar-qual + empty covariates → Layer 1 advances past covariat
 P=$(clone_fixture)
 set_skill "$P" "scholar-qual"
 clear_covariates "$P"
-OUT=$(bash "$VERIFY" 5 "$P" 2>&1) || true
-if ! echo "$OUT" | grep -qE "row [0-9]+ covariates"; then
-  note PASS "T3: scholar-qual + empty covariates → Layer 1 passes covariates check"
+OUT=$(bash "$VERIFY" 5 "$P" 2>&1); RC=$?
+if [ "$RC" -eq 1 ] \
+   && ! printf '%s\n' "$OUT" | grep -qE "row [0-9]+ covariates" \
+   && printf '%s\n' "$OUT" | grep -q 'FAIL: Phase 5 analysis-plan manifest source_hashes are stale' \
+   && printf '%s\n' "$OUT" | grep -q 'identification_strategy mismatch'; then
+  note PASS "T3: scholar-qual bypasses covariates and reaches exact stale-hash sentinel"
 else
   note FAIL "T3: scholar-qual should bypass covariates emptiness check. Got: $(echo "$OUT" | head -3)"
 fi

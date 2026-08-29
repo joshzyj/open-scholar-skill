@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # concept-to-measure-check.sh — Phase 13 / 19 measurement-bridge gate.
 #
-# Rationale: a common failure is a Methods section that uses variable
-# display labels and broad construct names but contains no paragraph or
-# subsection linking each modeled variable family to its conceptualization
-# and operationalization. The variable dictionary already carries
-# `construct`, `display_label`, `levels_display`, and `operationalization`
-# columns — they are simply left unused in prose. No skill contract
-# required Methods to consume those fields; no gate checked for the bridge.
+# Audit 2026-05-06 (cfps-platform-trust-asr-auto): the original Methods
+# section used variable display labels and broad construct names but
+# contained no paragraph or subsection that linked each modeled variable
+# family to its conceptualization and operationalization. The variable
+# dictionary already carried `construct`, `display_label`, `levels_display`,
+# and `operationalization` columns — they were simply unused in prose.
+# No skill contract required Methods to consume those fields; no gate
+# checked for the bridge.
 #
 # Contract
 # --------

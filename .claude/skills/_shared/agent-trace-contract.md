@@ -8,6 +8,14 @@ Every dispatched agent (peer-reviewer-*, review-code-*, verify-*, extract-sectio
 
 ## What you MUST do
 
+Your report and sidecar paths come from your dispatch: a briefed dispatch
+(agent-brief/v2, 2026-08-23) pins them in the brief's `output_contract`
+(`report_path` / `trace_path`) — those are authoritative; a `--write-to` /
+`--trace-to` line in your prompt is the same value in transport form. A gated
+dispatch always carries them: `emit-agent-brief.sh` refuses to emit a brief
+without a report path, because a stdout-only report leaves no trace event and
+`trace-coverage-check.sh` RED-fails the phase (handoff P3-3).
+
 When dispatched with `--write-to <report-path>` (and, when provided, `--trace-to <sidecar-path>`; otherwise default the sidecar to `<report-path>.trace.ndjson`):
 
 1. As you work, keep a short list of RAO steps — each is one decision / check / observation you made (e.g. "read scripts", "checked clustering", "assessed identification", "final verdict").
@@ -28,7 +36,7 @@ When dispatched with `--write-to <report-path>` (and, when provided, `--trace-to
    so the dispatcher can confirm both artifacts by grepping your last lines.
 5. If a `Write` fails, report it in stdout and **exit non-zero** — do not silently degrade.
 
-If `--write-to` is absent (standalone debugging), emit the report to stdout and you may skip the sidecar.
+If `--write-to` is absent AND your brief carries no `output_contract` (standalone debugging only — a gated dispatch always has one), emit the report to stdout and you may skip the sidecar.
 
 ---
 

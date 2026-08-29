@@ -82,7 +82,7 @@ Review-protocol proof:
 - `references_bib_hash`
 - `source_hashes`
 - `protocol_artifacts`: object with canonical `search_log` and `review_protocol` paths
-- `evidence_ledger`: object `{"path": "evidence/claim-anchors.ndjson", "records": <N>}` asserting the write-time Evidence Ledger the delegated skills produced (`_shared/evidence-ledger.md`); the verifier requires the file to exist with at least `records` lines. Legacy manifests without the key pass unchanged, but new Phase-2 runs MUST declare it — capture is inherited from `scholar-lit-review-hypothesis`/`scholar-write`, this assertion makes the inheritance enforceable
+- `evidence_ledger`: object `{"path": "evidence/claim-anchors.ndjson", "records": <N>}` asserting the write-time Evidence Ledger the delegated skills produced under their own evidence protocol; the packaged verifier requires the file to exist with at least `records` lines. Legacy manifests without the key pass unchanged, but new Phase-2 runs MUST declare it — capture is inherited from `scholar-lit-review-hypothesis`/`scholar-write`, this assertion makes the inheritance enforceable
 - `ready_for_phase_3`: `true`
 
 Rules:

@@ -3,10 +3,9 @@
 #
 # Quantitative sociology articles normally make measurement roles visible:
 # dependent variables / outcomes, independent variables / predictors, and
-# control variables / covariates. Some ASR-style articles do this with
-# separate Method subheadings; some JMF-style articles use compact
-# role-marked prose. This gate accepts either pattern, but rejects an
-# undifferentiated methods
+# control variables / covariates. Goldberg ASR does this with separate
+# Method subheadings; the Zhang JMF exemplar uses compact role-marked prose.
+# This gate accepts either pattern, but rejects an undifferentiated methods
 # blob that leaves readers to infer variable roles from a model table.
 
 set -uo pipefail

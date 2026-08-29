@@ -1,0 +1,302 @@
+{
+  "coverage_matrix": {
+    "competing_findings": [
+      "income shock effects",
+      "adaptive expectations"
+    ],
+    "constructs": [
+      "parental job loss",
+      "educational expectations"
+    ],
+    "datasets_populations": [
+      "household panel data",
+      "low-income adolescents"
+    ],
+    "methods": [
+      "fixed effects",
+      "event study"
+    ],
+    "theories": [
+      "family stress model",
+      "status attainment"
+    ]
+  },
+  "engine_handoff": {
+    "lit_review_engine": {
+      "input_artifacts": [
+        "idea/research-question.json",
+        "idea/journal-fit.json"
+      ],
+      "invoked_at_utc": "2026-04-28T09:00:00Z",
+      "mode": "integrated_literature_theory_hypotheses",
+      "output_artifacts": [
+        "literature/literature-coverage-matrix.json",
+        "literature/references.bib",
+        "literature/search-log.md",
+        "literature/review-protocol.json"
+      ],
+      "protocol_artifacts": [
+        "literature/review-protocol.json",
+        "literature/search-log.md"
+      ],
+      "protocol_followed": true,
+      "skill": "scholar-lit-review-hypothesis",
+      "task_invocation_id": "phase2-lit-review-001"
+    },
+    "target_journal": "Journal of Marriage and Family",
+    "writing_engine": {
+      "input_artifacts": [
+        "literature/literature-coverage-matrix.json",
+        "idea/journal-fit.json"
+      ],
+      "invoked_at_utc": "2026-04-28T09:30:00Z",
+      "mode": "draft",
+      "output_artifacts": [
+        "literature/lit-theory.md",
+        "literature/lit-theory-manifest.json"
+      ],
+      "section": "Literature Review and Theory",
+      "skill": "scholar-write",
+      "task_invocation_id": "phase2-write-001"
+    }
+  },
+  "hypotheses": [
+    {
+      "direction": "negative",
+      "id": "H1",
+      "text": "Parental job loss lowers adolescent educational expectations."
+    }
+  ],
+  "journal_calibration": {
+    "citation_density": "dense enough to establish family, inequality, and adolescent-development conversations without padding",
+    "must_cite_strategy": "prioritize family instability, status attainment, and adolescent expectations literatures relevant to JMF readers",
+    "paper_type": "research note",
+    "target_journal": "Journal of Marriage and Family",
+    "theory_depth": "family-process mechanism with explicit links to family stress and status-attainment theory"
+  },
+  "mechanism_chain": [
+    {
+      "link": "income shock",
+      "step": "job loss reduces resources"
+    },
+    {
+      "link": "perceived feasibility",
+      "step": "resource loss lowers expectations"
+    }
+  ],
+  "must_cite_coverage": [
+    {
+      "covered": true,
+      "key": "work01"
+    },
+    {
+      "covered": true,
+      "key": "work02"
+    },
+    {
+      "covered": true,
+      "key": "work03"
+    },
+    {
+      "covered": true,
+      "key": "work04"
+    },
+    {
+      "covered": true,
+      "key": "work05"
+    },
+    {
+      "covered": true,
+      "key": "work06"
+    },
+    {
+      "covered": true,
+      "key": "work07"
+    },
+    {
+      "covered": true,
+      "key": "work08"
+    },
+    {
+      "covered": true,
+      "key": "work09"
+    },
+    {
+      "covered": true,
+      "key": "work10"
+    },
+    {
+      "covered": true,
+      "key": "work11"
+    },
+    {
+      "covered": true,
+      "key": "work12"
+    },
+    {
+      "covered": true,
+      "key": "work13"
+    },
+    {
+      "covered": true,
+      "key": "work14"
+    },
+    {
+      "covered": true,
+      "key": "work15"
+    },
+    {
+      "covered": true,
+      "key": "work16"
+    },
+    {
+      "covered": true,
+      "key": "work17"
+    },
+    {
+      "covered": true,
+      "key": "work18"
+    },
+    {
+      "covered": true,
+      "key": "work19"
+    },
+    {
+      "covered": true,
+      "key": "work20"
+    },
+    {
+      "covered": true,
+      "key": "work21"
+    },
+    {
+      "covered": true,
+      "key": "work22"
+    },
+    {
+      "covered": true,
+      "key": "work23"
+    },
+    {
+      "covered": true,
+      "key": "work24"
+    },
+    {
+      "covered": true,
+      "key": "work25"
+    },
+    {
+      "covered": true,
+      "key": "work26"
+    },
+    {
+      "covered": true,
+      "key": "work27"
+    },
+    {
+      "covered": true,
+      "key": "work28"
+    },
+    {
+      "covered": true,
+      "key": "work29"
+    },
+    {
+      "covered": true,
+      "key": "work30"
+    },
+    {
+      "covered": true,
+      "key": "work31"
+    }
+  ],
+  "ready_for_phase_3": true,
+  "review_protocol": "literature/review-protocol.json",
+  "source_role_matrix": [
+    {
+      "argument_role": "theory",
+      "claim_supported": "Source work01 supports the fixture's theory argument role.",
+      "key": "work01",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that theory evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "mechanism",
+      "claim_supported": "Source work02 supports the fixture's mechanism argument role.",
+      "key": "work02",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that mechanism evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "rival",
+      "claim_supported": "Source work03 supports the fixture's rival argument role.",
+      "key": "work03",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that rival evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "method",
+      "claim_supported": "Source work04 supports the fixture's method argument role.",
+      "key": "work04",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that method evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "context",
+      "claim_supported": "Source work05 supports the fixture's context argument role.",
+      "key": "work05",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that context evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "population",
+      "claim_supported": "Source work06 supports the fixture's population argument role.",
+      "key": "work06",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that population evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "empirical_prior",
+      "claim_supported": "Source work07 supports the fixture's empirical prior argument role.",
+      "key": "work07",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that empirical prior evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "journal_canon",
+      "claim_supported": "Source work08 supports the fixture's journal canon argument role.",
+      "key": "work08",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that journal canon evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "design",
+      "claim_supported": "Source work09 supports the fixture's design argument role.",
+      "key": "work09",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that design evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "data",
+      "claim_supported": "Source work10 supports the fixture's data argument role.",
+      "key": "work10",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that data evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "competing_explanation",
+      "claim_supported": "Source work11 supports the fixture's competing explanation argument role.",
+      "key": "work11",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that competing explanation evidence is assigned to a concrete manuscript use."
+    },
+    {
+      "argument_role": "domain",
+      "claim_supported": "Source work12 supports the fixture's domain argument role.",
+      "key": "work12",
+      "target_section": "Literature Review and Theory",
+      "why_it_matters": "This fixture source demonstrates that domain evidence is assigned to a concrete manuscript use."
+    }
+  ],
+  "verdict": "PASS"
+}
