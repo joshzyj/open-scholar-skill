@@ -868,7 +868,7 @@ cd ~/research/nhanes-bmi
 - 细粒度地理数据：GPS 坐标、普查区、地理编码
 - IRB 参与者标志：参与者 ID、知情同意、访谈、转写
 
-**机械化执行。** `scripts/gates/pretooluse-data-guard.sh` 由 `setup.sh` 注册为 `~/.claude/settings.json` 中的 PreToolUse 钩子。凡目标文件的边车状态为 `NEEDS_REVIEW:*` 或 `HALTED`，一律拒绝——即使某个子技能忘了检查，钩子也会在不安全访问抵达 API 之前将其拦下。它现已覆盖两个过去敞开的通道：
+**机械化执行。** `scripts/gates/pretooluse-data-guard.sh` 由 `setup.sh` 注册为 PreToolUse 钩子——Claude Code 下写入 `~/.claude/settings.json`，ZCode 下写入 `~/.zcode/cli/config.json`（`.hooks.events.PreToolUse`）；Codex 下则由 `/scholar-init` 按项目安装（`<project>/.codex/config.toml`）。用 `setup.sh --harness claude|codex|zcode|all` 指定目标，默认自动检测。PostToolUse 输出脱敏器仅限 Claude Code：Codex 与 ZCode 无法改写 Bash 输出，在这两种宿主上处理受限数据应使用 Lockdown 级别。凡目标文件的边车状态为 `NEEDS_REVIEW:*` 或 `HALTED`，一律拒绝——即使某个子技能忘了检查，钩子也会在不安全访问抵达 API 之前将其拦下。它现已覆盖两个过去敞开的通道：
 
 - **Bash** — 一个*面向配合型代理的减速带*：拦截对敏感路径的明显内容倾倒命令（`cat`/`head`/`tail`/`sed`/`awk`/行级 `grep`/`sqlite3`/python·R 行倾倒），同时放行获准的 LOCAL_MODE `Rscript -e`/`python3 -c` 汇总加载器。它**不是一堵墙**——其他解释器、编码手法和变量拼接路径都能绕过。在 **strict** 级别，PostToolUse 钩子（`posttooluse-output-guard.sh`）会额外对 Bash *输出*中的 PII/批量行做脱敏。
 - **Edit/Write** — 拦截对 `.claude/safety-status.json` 的篡改（在没有 `/scholar-init review` 溯源记录的情况下把受限文件改成 `CLEARED`/`OVERRIDE`）。

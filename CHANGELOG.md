@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed: `setup.sh` is harness-specific — Claude Code, Codex and ZCode each get their own install
+
+`setup.sh` installed for Claude Code only. A Codex or ZCode user got nothing from it, and machines running those hosts had been wired by hand. It now takes `--harness claude|codex|zcode|all` (or `SCHOLAR_SETUP_HARNESS`); the default `auto` installs for every harness whose config dir exists (`~/.claude`, `~/.codex`, `~/.zcode`) plus the one driving the session, falling back to claude on a fresh machine.
+
+- **claude** — unchanged in effect: skills + agents → `~/.claude/`; PreToolUse guard + PostToolUse redactor → `~/.claude/settings.json`.
+- **zcode** — skills + agents → `~/.zcode/`; PreToolUse guard → `~/.zcode/cli/config.json` in ZCode's schema (`.hooks.events.<Event>`, `hooks.enabled: true`, per-hook `timeout`, ZCode tool names incl. `ApplyPatch`).
+- **codex** — skills → `~/.codex/skills/` (Codex loads no agent files). No global hook is written: the verified path stays the per-project `.codex/config.toml` that `/scholar-init` installs, and `~/.codex/config.toml` is the user's own TOML with no safe merge available. The summary says so instead of implying Codex is guarded.
+- **The PostToolUse redactor is registered for Claude Code only, deliberately.** It can only redact via Claude's `hookSpecificOutput.updatedToolOutput` wire. codex-cli 0.154.0 carries `updatedMCPToolOutput` but no `updatedToolOutput`; the ZCode 3.10.2 bundle carries neither (string search of the shipped binary/bundle, 2026-09-18 — not an end-to-end run). Registered there it would fire and redact nothing while reading as installed. `SCHOLAR_SETUP_POSTTOOLUSE=force` registers it anyway and labels it inert; a later normal run removes the entry. Same reasoning recorded in `scripts/phases/setup-codex-hooks.sh`.
+- Hook merge hardening (all JSON harnesses): the config is rewritten only when its content changes, the prior version is kept as `<file>.bak-<timestamp>`, the write preserves a symlinked settings file, a zero-byte config is treated as `{}`, and a guard registered by **another checkout** is left in place but called out by path (two guards both run on every tool call).
+- The summary reports protection per harness, and the exit code is non-zero only for a harness whose setup-time guard failed to register.
+- Known gap, not fixed here: `pretooluse-data-guard.sh` has no `ApplyPatch` branch, so ZCode's edit tool passes the write-channel speed-bump. The read channel (Read/Grep/Glob/Bash) is covered.
+- `tests/smoke/test-setup-install.sh`: 16 → 41 assertions (ZCode schema + isolation + idempotency, Codex skills-only, harness selection, forced-redactor labelling, second-checkout warning). Tests 1–3 are pinned to `--harness claude` so they no longer depend on which host runs the suite. `SETUP_SMOKE_VERBOSE=1` prints a sample all-harness run.
+
 ## [5.22.2] - 2026-09-06
 
 ### Fixed: scholar-auto-research — legacy 1.1.0 projects can migrate, and the state script no longer creates a project directory for a bogus argument (ported from dev 5.49.1 + 5.50.5)

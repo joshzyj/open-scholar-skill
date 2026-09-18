@@ -90,7 +90,7 @@ cd ~/research/nhanes-bmi
 
 **受本安全栈约束的十一个数据接触型技能**：`scholar-analyze`、`scholar-eda`、`scholar-compute`、`scholar-ling`、`scholar-qual`、`scholar-brainstorm`（A 级——LOCAL_MODE 分派）；`scholar-data`、`scholar-verify`、`scholar-replication`、`scholar-code-review`、`scholar-write`（B 级——边车检查 + 快速失败拒绝）。
 
-**启用机制化强制执行。** `setup.sh` 会自动将 `scripts/gates/pretooluse-data-guard.sh`（以及在 strict 级别下的 `posttooluse-output-guard.sh`）注册为 `~/.claude/settings.json` 中的钩子，匹配器覆盖 `Read`、`NotebookRead`、`NotebookEdit`、`Grep`、`Glob`、`Bash`、`Edit` 和 `Write`。宿主机上必须安装 `jq` 和 `python3`；二者缺一，读取通道的守卫即失效关闭（Bash/Edit/Write 减速带则失效放行，以免 shell 被彻底卡死）。两个激活时的注意事项：（1）Claude Code 在会话**启动**时对钩子配置做快照，因此安装后必须**重启** Claude Code 钩子才会生效；（2）Claude Code 将钩子的 `command` 作为一行 shell 命令执行，所以当安装路径含有空格（例如 Google Drive）时，命令必须包装为 `bash '<path>'`——`setup.sh` 会替你处理，但手工编辑的 settings 文件也必须如此，否则守卫会对*所有*工具静默失效放行。
+**启用机制化强制执行。** 在 Claude Code 下，`setup.sh` 会自动将 `scripts/gates/pretooluse-data-guard.sh`（以及在 strict 级别下的 `posttooluse-output-guard.sh`）注册为 `~/.claude/settings.json` 中的钩子（ZCode 与 Codex 的接入方式不同——见[安装设置](#安装设置)一节的宿主对照表），匹配器覆盖 `Read`、`NotebookRead`、`NotebookEdit`、`Grep`、`Glob`、`Bash`、`Edit` 和 `Write`。宿主机上必须安装 `jq` 和 `python3`；二者缺一，读取通道的守卫即失效关闭（Bash/Edit/Write 减速带则失效放行，以免 shell 被彻底卡死）。两个激活时的注意事项：（1）Claude Code 在会话**启动**时对钩子配置做快照，因此安装后必须**重启** Claude Code 钩子才会生效；（2）Claude Code 将钩子的 `command` 作为一行 shell 命令执行，所以当安装路径含有空格（例如 Google Drive）时，命令必须包装为 `bash '<path>'`——`setup.sh` 会替你处理，但手工编辑的 settings 文件也必须如此，否则守卫会对*所有*工具静默失效放行。
 
 ### ⚠️ 诚实的局限性 — 这是风险缓解，而非绝对保证
 
@@ -223,17 +223,29 @@ cd ~/research/nhanes-bmi
 
 ```bash
 git clone <this-repo> && cd open-scholar-skill
-bash setup.sh
+bash setup.sh                          # 自动检测你使用的宿主工具
+bash setup.sh --harness claude,zcode   # 或显式指定：claude | codex | zcode | all
 ```
 
 `setup.sh` 将会：
-1. 创建符号链接（`skills/` → `.claude/skills/`，`agents/` → `.claude/agents/`）
-2. 自动检测你的 Zotero 库（或提示输入路径）
-3. 按需配置 BibTeX、EndNote 与 CrossRef 邮箱
-4. 将全部 36 个技能（35 个研究技能 + `sync-docs` 实用工具）+ 20 个智能体作为**个人技能**安装到 `~/.claude/skills/` 与 `~/.claude/agents/`——逐条安装，与已有个人技能并存
-5. 在 `~/.claude/settings.json` 中注册 PreToolUse 数据安全钩子（幂等；保留现有设置）
-6. 检查 `jq` 与 `python3`（数据安全钩子的必要依赖）
-7. 写入包含你的配置的 `.env` 文件
+1. 选定目标宿主工具（harness）。默认的 `auto` 会为所有已存在配置目录（`~/.claude`、`~/.codex`、`~/.zcode`）的宿主以及当前驱动会话的宿主安装；全新机器上回退为 Claude Code。可用 `--harness <列表>` 或 `SCHOLAR_SETUP_HARNESS` 覆盖。
+2. 创建符号链接（`skills/` → `.claude/skills/`，`agents/` → `.claude/agents/`）
+3. 自动检测你的 Zotero 库（或提示输入路径）
+4. 按需配置 BibTeX、EndNote 与 CrossRef 邮箱
+5. 将全部 36 个技能（35 个研究技能 + `sync-docs` 实用工具）+ 20 个智能体作为**个人技能**安装——逐条安装，与已有个人技能并存，位置取决于各宿主读取的目录（见下表）
+6. 在各宿主自己的配置文件中、按其自己的格式注册该宿主真正能执行的数据安全钩子（幂等；保留现有设置；文件内容发生变化时，旧版本保留为 `<file>.bak-<时间戳>`）
+7. 检查 `jq` 与 `python3`（数据安全钩子的必要依赖）
+8. 写入包含你的配置的 `.env` 文件
+
+安装过程是**按宿主区分**的——三种宿主把技能与钩子放在不同位置、采用不同格式，且互不读取对方的文件：
+
+| 宿主 | 技能 / 智能体 | PreToolUse 数据守卫 | PostToolUse 输出脱敏器 |
+|---|---|---|---|
+| **Claude Code** | `~/.claude/skills/`、`~/.claude/agents/` | `~/.claude/settings.json` → `.hooks.PreToolUse` | 有 → `.hooks.PostToolUse`（strict 级别下生效） |
+| **Codex** | `~/.codex/skills/`（Codex 不加载智能体文件） | **按项目安装**——由 `/scholar-init` 写入 `<project>/.codex/config.toml`；在 Codex 中信任该项目后生效 | 不可用 |
+| **ZCode** | `~/.zcode/skills/`、`~/.zcode/agents/` | `~/.zcode/cli/config.json` → `.hooks.events.PreToolUse`（并设 `hooks.enabled: true`） | 不可用 |
+
+脱敏器仅限 Claude Code，是因为它只能通过返回 Claude Code 的 `updatedToolOutput` 钩子协议来脱敏。Codex 与 ZCode 虽有 PostToolUse 事件，却无法替换 Bash 输出；在那里注册它只会装上一个什么也不脱敏的“控制”，所以 `setup.sh` 不这么做。在这两种宿主上处理受限数据，请使用内核级强制的 Lockdown 级别（`/scholar-safety level lockdown`）。安装后请重启各宿主——钩子配置在会话启动时读取。
 
 **环境要求：** `bash`、`python3`、`jq`。缺少 `jq` 或 `python3` 时数据安全钩子会失效关闭，因此请先安装二者（`brew install jq` / `apt-get install jq`）。Presidio（可选，用于基于 NER 的 PII 检测）通过 `python3 -m pip install presidio-analyzer presidio-anonymizer` 安装。
 

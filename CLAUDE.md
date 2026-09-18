@@ -4,6 +4,8 @@
 
 After cloning, run `bash setup.sh` once. This creates symlinks, auto-detects Zotero, and writes `.env`. See `.env.example` for all options.
 
+Setup is **harness-specific**: `bash setup.sh --harness claude|codex|zcode|all` (default `auto` — every harness whose config dir exists, else claude). Claude Code gets skills + agents in `~/.claude/` and PreToolUse + PostToolUse hooks in `~/.claude/settings.json`; ZCode gets skills + agents in `~/.zcode/` and the PreToolUse guard in `~/.zcode/cli/config.json` (`.hooks.events.*`, `hooks.enabled`); Codex gets skills in `~/.codex/skills/` and its guard **per project** from `/scholar-init`. The PostToolUse redactor is registered for Claude Code only — it speaks Claude's `updatedToolOutput` wire, which Codex and ZCode lack, so there it would be an inert control. When adding a harness, extend the capability table in `setup.sh` §5b; never register a hook the host cannot honor.
+
 ---
 
 ## Directory Structure

@@ -90,7 +90,7 @@ cd ~/research/nhanes-bmi
 
 **The eleven data-touching skills gated by this stack**: `scholar-analyze`, `scholar-eda`, `scholar-compute`, `scholar-ling`, `scholar-qual`, `scholar-brainstorm` (Tier A — LOCAL_MODE dispatch); `scholar-data`, `scholar-verify`, `scholar-replication`, `scholar-code-review`, `scholar-write` (Tier B — sidecar check + fail-fast refusal).
 
-**Enabling mechanical enforcement.** `setup.sh` automatically registers `scripts/gates/pretooluse-data-guard.sh` (and, at the strict level, `posttooluse-output-guard.sh`) as hooks in `~/.claude/settings.json`, with the matcher covering `Read`, `NotebookRead`, `NotebookEdit`, `Grep`, `Glob`, `Bash`, `Edit`, and `Write`. `jq` and `python3` are required on the host; the read-channel guard fails closed without either (the Bash/Edit/Write speed-bumps fail open so the shell is never bricked). Two activation gotchas: (1) Claude Code snapshots hook config at session **start**, so you must **restart** Claude Code after install for the hooks to take effect; (2) Claude Code runs a hook `command` as a shell line, so on installs whose path contains spaces (e.g. Google Drive) the command must be wrapped as `bash '<path>'` — `setup.sh` does this for you, but a hand-edited settings file must too, or the guard silently fails open for *all* tools.
+**Enabling mechanical enforcement.** Under Claude Code, `setup.sh` automatically registers `scripts/gates/pretooluse-data-guard.sh` (and, at the strict level, `posttooluse-output-guard.sh`) as hooks in `~/.claude/settings.json` (ZCode and Codex are wired differently — see the harness table under [Setup](#setup)), with the matcher covering `Read`, `NotebookRead`, `NotebookEdit`, `Grep`, `Glob`, `Bash`, `Edit`, and `Write`. `jq` and `python3` are required on the host; the read-channel guard fails closed without either (the Bash/Edit/Write speed-bumps fail open so the shell is never bricked). Two activation gotchas: (1) Claude Code snapshots hook config at session **start**, so you must **restart** Claude Code after install for the hooks to take effect; (2) Claude Code runs a hook `command` as a shell line, so on installs whose path contains spaces (e.g. Google Drive) the command must be wrapped as `bash '<path>'` — `setup.sh` does this for you, but a hand-edited settings file must too, or the guard silently fails open for *all* tools.
 
 ### ⚠️ Honest limitations — this is risk reduction, not a guarantee
 
@@ -223,17 +223,29 @@ If you are using open-scholar-skill to generate papers, you are encouraged to sh
 
 ```bash
 git clone <this-repo> && cd open-scholar-skill
-bash setup.sh
+bash setup.sh                          # auto-detects your harness(es)
+bash setup.sh --harness claude,zcode   # or name them: claude | codex | zcode | all
 ```
 
 `setup.sh` will:
-1. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
-2. Auto-detect your Zotero library (or prompt for path)
-3. Optionally configure BibTeX, EndNote, and CrossRef email
-4. Install all 36 skills (35 research skills + the `sync-docs` utility) + 20 agents as **personal skills** in `~/.claude/skills/` and `~/.claude/agents/` — installed per-entry alongside any existing personal skills
-5. Register the PreToolUse data-safety hook in `~/.claude/settings.json` (idempotent; preserves existing settings)
-6. Check for `jq` and `python3` (required by the data-safety hook)
-7. Write a `.env` file with your configuration
+1. Pick the target harness(es). `auto` (the default) installs for every harness whose config dir exists (`~/.claude`, `~/.codex`, `~/.zcode`) plus the one driving the session, and falls back to Claude Code on a fresh machine. Override with `--harness <list>` or `SCHOLAR_SETUP_HARNESS`.
+2. Create symlinks (`skills/` → `.claude/skills/`, `agents/` → `.claude/agents/`)
+3. Auto-detect your Zotero library (or prompt for path)
+4. Optionally configure BibTeX, EndNote, and CrossRef email
+5. Install all 36 skills (35 research skills + the `sync-docs` utility) + 20 agents as **personal skills** — per-entry, alongside any existing personal skills, in the location each harness reads (table below)
+6. Register the data-safety hooks each harness can actually honor, in that harness's own config file and schema (idempotent; preserves existing settings; the previous file is kept as `<file>.bak-<timestamp>` whenever it changes)
+7. Check for `jq` and `python3` (required by the data-safety hook)
+8. Write a `.env` file with your configuration
+
+Setup is **harness-specific** — the three hosts keep skills and hooks in different places, in different formats, and none reads another's files:
+
+| Harness | Skills / agents | PreToolUse data guard | PostToolUse output redactor |
+|---|---|---|---|
+| **Claude Code** | `~/.claude/skills/`, `~/.claude/agents/` | `~/.claude/settings.json` → `.hooks.PreToolUse` | yes → `.hooks.PostToolUse` (active at the strict level) |
+| **Codex** | `~/.codex/skills/` (Codex does not load agent files) | **per project** — `/scholar-init` writes `<project>/.codex/config.toml`; activates once you trust the project | not available |
+| **ZCode** | `~/.zcode/skills/`, `~/.zcode/agents/` | `~/.zcode/cli/config.json` → `.hooks.events.PreToolUse` (+ `hooks.enabled: true`) | not available |
+
+The redactor is Claude-only because it can only redact by returning Claude Code's `updatedToolOutput` hook wire. Codex and ZCode have a PostToolUse event but no way to replace Bash output, so registering it there would install a control that redacts nothing; `setup.sh` does not. On those hosts use the kernel-enforced Lockdown tier (`/scholar-safety level lockdown`) for restricted data. Restart each harness after setup — hook config is read at session start.
 
 **Requirements:** `bash`, `python3`, `jq`. The data-safety hook fails closed if `jq` or `python3` is missing, so install both first (`brew install jq` / `apt-get install jq`). Presidio (optional, for NER-based PII detection) is installed via `python3 -m pip install presidio-analyzer presidio-anonymizer`.
 

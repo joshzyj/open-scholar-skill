@@ -22,6 +22,18 @@
 #   form preserves the spaces and Blocks. Same footgun as Claude hooks
 #   (_shared/data-handling-policy.md §9).
 #
+# NO PostToolUse BLOCK — ON PURPOSE. The strict-tier redactor
+#   (posttooluse-output-guard.sh) can only redact by returning Claude Code's
+#   hookSpecificOutput.updatedToolOutput wire. Codex has a PostToolUse event but
+#   no way to replace Bash output: the codex-cli 0.154.0 binary carries
+#   `updatedMCPToolOutput` (MCP tools only) and no `updatedToolOutput` (string
+#   search of the shipped binary, 2026-09-18 — not an end-to-end run). Registered
+#   here it would fire, emit JSON Codex ignores, and redact nothing, while
+#   reading as an installed control. Do not add it until Codex gains an
+#   output-rewrite wire AND the guard speaks it. Under Codex the substitute for
+#   the strict tier is Lockdown (generate-lockdown-config.sh). setup.sh applies
+#   the same rule to ZCode — see its section 5b capability table.
+#
 # IDEMPOTENT + NON-DESTRUCTIVE: writes a marker-guarded block; refreshes it in
 #   place on re-run; refuses to clobber a pre-existing NON-scholar [hooks] table
 #   (TOML forbids duplicate tables — merging that is the user's call).
