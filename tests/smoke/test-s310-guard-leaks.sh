@@ -9,6 +9,10 @@
 #   P1  the same leak cases with the leak-rules helper removed ALLOW — proves the test bites
 #   A*  legitimate work that must stay ALLOWED (aggregates, protected copies, model output)
 #   J*  no jq on PATH (python3 present): the guard and the Codex adapter still BLOCK
+# S313-S316 (peer re-test of b887f70): L18-L20 a RED/unreviewed source may not be copied
+# or processed even into data/, and a protected destination must keep a data extension;
+# A11-A15 OVERRIDE/CLEARED files read in the shell, .sum().to_dict() is an aggregate,
+# the skill's own review tool still runs on an unreviewed file; J5 no-jq Read of OVERRIDE.
 # L/A/J run against the top-level guard AND the scholar-auto-research bundled copy;
 # both source the one _guard-leak-rules.sh, which must stay byte-identical.
 # Fixture paths contain a space (CLAUDE.md rule 12).
@@ -26,14 +30,19 @@ pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; }
 
 FIX="$TMPROOT/proj one"
-mkdir -p "$FIX/data/raw" "$FIX/data/derived" "$FIX/.claude" "$FIX/output" "$FIX/tables" "$FIX/scripts" "$FIX/materials"
+mkdir -p "$FIX/data/raw" "$FIX/data/derived" "$FIX/.claude" "$FIX/output" "$FIX/tables" "$FIX/scripts" "$FIX/materials" "$FIX/data/processed"
 printf 'id,income\n1,52000\n2,61000\n' > "$FIX/data/raw/secret.csv"
 printf 'id,voice\n1,wav\n'             > "$FIX/data/raw/halted.csv"
 S="$(cd "$FIX/data/raw" && pwd -P)/secret.csv"
 H="$(cd "$FIX/data/raw" && pwd -P)/halted.csv"
 printf '%%PDF-1.4 consent form\n' > "$FIX/materials/codebook.pdf"
 R="$(cd "$FIX/materials" && pwd -P)/codebook.pdf"
-jq -n --arg s "$S" --arg h "$H" --arg r "$R" '{($s):"LOCAL_MODE", ($h):"HALTED", ($r):"NEEDS_REVIEW:RED"}' > "$FIX/.claude/safety-status.json"
+printf '%%PDF-1.4 public release notes\n' > "$FIX/materials/release-notes.pdf"
+printf 'a,b\n1,2\n' > "$FIX/data/raw/extract.csv"
+O="$(cd "$FIX/materials" && pwd -P)/release-notes.pdf"
+X="$(cd "$FIX/data/raw" && pwd -P)/extract.csv"
+jq -n --arg s "$S" --arg h "$H" --arg r "$R" --arg o "$O" --arg x "$X" \
+  '{($s):"LOCAL_MODE", ($h):"HALTED", ($r):"NEEDS_REVIEW:RED", ($o):"OVERRIDE", ($x):"CLEARED"}' > "$FIX/.claude/safety-status.json"
 printf 'import pandas as pd\ndf = pd.read_csv("data/raw/secret.csv")\nprint(df.head())\n' > "$FIX/scripts/peek.py"
 printf 'import pandas as pd\nsrc = "data/raw/secret.csv"\nd = pd.read_csv(src)\nd.to_csv("output/leak.csv")\n' > "$FIX/scripts/export.py"
 printf 'library(readr)\nd <- read_csv("data/raw/secret.csv")\nm <- lm(income ~ id, data = d)\nprint(m)\nprint(summary(m))\nwrite.csv(d, "data/derived/clean.csv")\nwrite.csv(coef(summary(m)), "tables/coefs.csv")\n' > "$FIX/scripts/04-models.R"
@@ -68,6 +77,9 @@ LEAKS=(
   "L15 script, path variable input, writes frame to output/|Rscript scripts/varpath-export.R"
   "L16 gzip -c LOCAL_MODE > output/|gzip -c data/raw/secret.csv > output/s.gz"
   "L17 base64 LOCAL_MODE > output/|base64 data/raw/secret.csv > output/s.b64"
+  "L18 S313 pdftotext RED into data/processed/|pdftotext materials/codebook.pdf data/processed/cb.txt"
+  "L19 S313 LOCAL_MODE copy into data/ as .txt (escapes the Read gate)|cp data/raw/secret.csv data/processed/secret.txt"
+  "L20 S313 code reading an unreviewed (RED) file|python3 -c \"print(len(open('materials/codebook.pdf','rb').read()))\""
 )
 ALLOWS=(
   "A1 aggregate to stdout|python3 -c \"import pandas as pd; d=pd.read_csv('data/raw/secret.csv'); print(d.shape, d.income.mean())\""
@@ -80,6 +92,11 @@ ALLOWS=(
   "A8 pandoc of an unrestricted doc|pandoc tables/x.csv -o output/x.md"
   "A9 script, file.path input, model summary + saveRDS(model)|Rscript scripts/varpath-model.R"
   "A10 gzip in place under data/|gzip data/raw/secret.csv"
+  "A11 S314 OVERRIDE pdf page to stdout, grep|pdftotext -f 3 -l 3 materials/release-notes.pdf - | grep -n WTSSNRPS"
+  "A12 S314 OVERRIDE pdf into output/|pdftotext materials/release-notes.pdf output/rn.txt"
+  "A13 S314 head of a CLEARED csv in data/raw|head data/raw/extract.csv"
+  "A14 S316 notna().sum().to_dict() on LOCAL_MODE|python3 -c \"import pandas as pd; d=pd.read_csv('data/raw/secret.csv'); print(d.notna().sum().to_dict())\""
+  "A15 LOCAL_MODE copy into data/ keeping .csv|cp data/raw/secret.csv data/processed/secret.csv"
 )
 : > "$FIX/tables/x.csv"
 
@@ -131,6 +148,10 @@ for GD in "$G" "$BUNDLE"; do
   else
     fail "J4 Codex adapter without jq: rc=$RC out=${OUT:0:80}"
   fi
+  RP="$(jq -nc --arg c "$FIX" --arg p "$O" '{tool_name:"Read",tool_input:{file_path:$p},cwd:$c}' | env PATH="$NOJQ" bash "$GD/pretooluse-data-guard.sh" >/dev/null 2>&1; echo $?)"
+  [ "$RP" -eq 0 ] && pass "J5 S315 Read of an OVERRIDE file without jq" || fail "J5 S315 Read of OVERRIDE without jq blocked (rc=$RP)"
+  [ "$(verdict "$GD" "python3 $REPO_ROOT/scripts/gates/anonymize-presidio.py materials/codebook.pdf")" = ALLOW ] \
+    && pass "A16 the skill's review tool still runs on an unreviewed file" || fail "A16 skill review tool BLOCKED on an unreviewed file"
 
 done
 

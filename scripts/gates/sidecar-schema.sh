@@ -57,13 +57,46 @@ is_valid_status() {
 validate_sidecar_schema() {
   local file="$1"
   [ -f "$file" ] || return 0
-  if ! command -v jq >/dev/null 2>&1; then
-    # Caller is responsible for handling the no-jq case. We can't
-    # validate without jq, so return 1 to force fail-closed.
-    printf '  - (cannot validate: jq not installed)\n'
-    return 1
-  fi
   local invalid
+  if ! command -v jq >/dev/null 2>&1; then
+    # S315: python3 runs the same checks when jq is missing, so a reviewed file
+    # (OVERRIDE / CLEARED) is not refused on a jq-less host. Neither → fail closed.
+    if ! command -v python3 >/dev/null 2>&1; then
+      printf '  - (cannot validate: neither jq nor python3 installed)\n'
+      return 1
+    fi
+    invalid="$(python3 - "$file" <<'PY' 2>/dev/null
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("  - <root>: not a JSON object"); sys.exit(0)
+if not isinstance(d, dict):
+    print("  - <root>: not a JSON object"); sys.exit(0)
+ST = re.compile(r"^(CLEARED|ANONYMIZED|OVERRIDE|LOCAL_MODE|HALTED|NEEDS_REVIEW(:.+)?)$")
+for k, v in d.items():
+    if k.startswith("_"):
+        if k == "_safety_level":
+            if not isinstance(v, str):
+                print(f"  - {k}: non-string value ({type(v).__name__})")
+            elif v not in ("standard", "strict", "lockdown"):
+                print(f'  - {k}: unknown safety level "{v}" (want standard|strict|lockdown)')
+        elif k == "_meta":
+            if not isinstance(v, str):
+                print(f"  - {k}: non-string value ({type(v).__name__})")
+            elif v != "no-data-project":
+                print(f'  - {k}: unknown value "{v}" (only "no-data-project" is recognized)')
+        else:
+            print(f"  - {k}: unknown meta key (only _safety_level and _meta are allowed)")
+    elif not isinstance(v, str):
+        print(f"  - {k}: non-string value ({type(v).__name__})")
+    elif not ST.match(v):
+        print(f'  - {k}: unknown status "{v}"')
+PY
+)" || invalid="  - <root>: unreadable (python3 could not parse the sidecar)"
+    if [ -n "$invalid" ]; then printf '%s\n' "$invalid"; return 1; fi
+    return 0
+  fi
   invalid="$(jq -r '
       if type != "object" then
         "  - <root>: not a JSON object"
@@ -113,6 +146,8 @@ resolve_safety_level() {
   local sidecar="$1" lvl=""
   if [ -n "$sidecar" ] && [ -f "$sidecar" ] && command -v jq >/dev/null 2>&1; then
     lvl="$(jq -r '(._safety_level // empty) | if type=="string" then . else empty end' "$sidecar" 2>/dev/null || true)"
+  elif [ -n "$sidecar" ] && [ -f "$sidecar" ] && command -v python3 >/dev/null 2>&1; then
+    lvl="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get("_safety_level"); print(v if isinstance(v,str) else "", end="")' "$sidecar" 2>/dev/null || true)"
   fi
   case "$lvl" in standard|strict|lockdown) printf '%s' "$lvl"; return 0 ;; esac
   case "${SCHOLAR_SAFETY_LEVEL:-}" in standard|strict|lockdown) printf '%s' "${SCHOLAR_SAFETY_LEVEL}"; return 0 ;; esac

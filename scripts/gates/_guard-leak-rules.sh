@@ -22,7 +22,9 @@
 #      restricted source and a destination that is not itself protected (path shape or
 #      sidecar status); a converter writing to stdout counts as a dump, and `> out` on a
 #      converter or compressor (gzip -c, base64) names the destination.
-#   R2 HALTED: an interpreter, or a script it runs, that names a HALTED file.
+#   R2 HALTED or NEEDS_REVIEW: an interpreter, or a script it runs, that names a file the
+#      user refused or nobody has reviewed yet; R1 likewise refuses copying such a file
+#      anywhere (S313).
 #   R3 tainted write: code that loads a restricted file and writes that frame (or
 #      copies the file) to a path that is not itself protected.
 #   R4 row printing: in inline code (-c / heredoc) slices, .to_markdown, .iterrows,
@@ -197,11 +199,14 @@ for _ in range(3):
             if v is not None:
                 svar[n] = v
 
+DATA_EXT = re.compile(r"\.(csv|tsv|dta|sav|rds|rdata|xlsx|xls|parquet|feather|arrow|db|sqlite|jsonl|ndjson)$", re.I)
+
 def unprotected(t):
     if t is None:
         return False                      # unknown target: allowed (stated limit)
     p = t if os.path.isabs(t) else os.path.join(cwd, t)
-    return not PROTECTED.search(os.path.normpath(p))
+    # S313: protected only under a protected dir AND with a data extension (the Read gate's scope)
+    return not (PROTECTED.search(os.path.normpath(p)) and DATA_EXT.search(p))
 
 for m in re.finditer(READ + r'\s*\(' + src + r'[^)\n]*\)\s*\.\s*to_\w+\s*\(', code):
     a = args_of(m.end() - 1)
@@ -228,11 +233,17 @@ sys.exit(1)
 PY
 
 # Is a destination path protected in its own right? 0 = protected.
+# S313: a protected directory protects a copy only if the copy keeps a data extension
+# (DATA_EXTS) — the Read gate checks only those, so data/processed/cb.txt made from a
+# restricted PDF was readable by Read. $2 = the source, used when $1 is a directory.
 _lr_dest_protected() {
-  local p="$1" abs low st
+  local p="$1" src="${2:-}" abs low st name ext
   [ -n "$p" ] || return 1
   abs="$(lexical_abspath "$p" 2>/dev/null)"
   [ -n "$abs" ] || abs="$p"
+  if [ -d "$abs" ] || [ "${p%/}" != "$p" ]; then name="${src##*/}"; else name="${abs##*/}"; fi
+  case "$name" in *.*) ext="$(printf '%s' "${name##*.}" | tr 'A-Z' 'a-z')" ;; *) ext="" ;; esac
+  is_data_ext "$ext" || return 1
   low="$(printf '%s' "$abs" | tr 'A-Z' 'a-z')"
   # `cp f data/raw` (a directory) and `cp f data/raw/` both land inside it.
   is_rawdata_path "$low" && return 0
@@ -332,10 +343,17 @@ lr_copy_violation() {
     if [ -z "$dest" ]; then
       continue                                                         # stays beside its source
     fi
-    if [ "$dest" != stdout ] && _lr_dest_protected "$dest"; then continue; fi
     for src in "${ops[@]}"; do
       sens="$(bash_first_sensitive_target "$(printf '%q' "$src")")"
-      if [ -n "$sens" ]; then printf '%s -> %s (%s)\n' "$sens" "$dest" "$verb"; return 0; fi
+      [ -n "$sens" ] || continue
+      # S313: a file nobody has cleared (NEEDS_REVIEW / RED) or the user refused (HALTED)
+      # may not be copied at all — the copy would carry no status into data/processed/.
+      case "$(bash_sidecar_status "$sens")" in
+        NEEDS_REVIEW|NEEDS_REVIEW:*|HALTED)
+          printf '%s -> %s (%s; source is %s)\n' "$sens" "$dest" "$verb" "$(bash_sidecar_status "$sens")"; return 0 ;;
+      esac
+      if [ "$dest" != stdout ] && _lr_dest_protected "$dest" "$src"; then continue; fi
+      printf '%s -> %s (%s)\n' "$sens" "$dest" "$verb"; return 0
     done
   done <<EOF
 $segs
@@ -350,6 +368,17 @@ _lr_code_violation() {
   if [ "$st" = HALTED ]; then
     printf 'halted: the user declined processing of %s\n' "$sens"; return 0
   fi
+  # S313: an unreviewed INPUT (NEEDS_REVIEW / RED under a raw-data or qualitative path,
+  # e.g. a codebook in materials/) is not processed by code either — review it first
+  # (/scholar-init), then work under the status it is given. Pipeline artifacts that
+  # carry NEEDS_REVIEW (analysis/*.json, design/*.json) are read by the pipeline's own
+  # scripts; checked on a real project (9 such reads), so they are left to the other rules.
+  case "$st" in NEEDS_REVIEW|NEEDS_REVIEW:*)
+    local low; low="$(printf '%s' "$sens" | tr 'A-Z' 'a-z')"
+    if is_rawdata_path "$low" || is_qual_path "$low"; then
+      printf 'unreviewed: %s is %s; review it before code reads it\n' "$sens" "$st"; return 0
+    fi ;;
+  esac
   command -v python3 >/dev/null 2>&1 || return 1
   out="$(printf '%s' "$code" | python3 -c "$_LR_PY" "$mode" "$sens" "${CWD:-$PWD}" 2>/dev/null)" || return 1
   [ -n "$out" ] || return 1
@@ -466,11 +495,33 @@ _lr_project_scripts() {
   done < <(_lr_run_paths "$cmd")
 }
 
+# Does the command run a script that lives in the skill's own scripts/ tree?
+# Trusted roots: this helper's skill, the repo that bundles it (…/.claude/skills/<name>
+# → the repo root), and $SCHOLAR_SKILL_DIR.
+_lr_runs_skill_tool() {
+  local tok abs skill repo sd
+  skill="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." 2>/dev/null && pwd -P)"
+  case "$skill" in */.claude/skills/*) repo="${skill%/.claude/skills/*}" ;; *) repo="$skill" ;; esac
+  sd="$(cd "${SCHOLAR_SKILL_DIR:-/nonexistent}" 2>/dev/null && pwd -P)"
+  while IFS= read -r tok; do
+    [ -n "$tok" ] || continue
+    case "$tok" in /*) abs="$tok" ;; *) abs="${CWD:-$PWD}/$tok" ;; esac
+    [ -f "$abs" ] || continue
+    abs="$(cd "$(dirname "$abs")" 2>/dev/null && pwd -P)/$(basename "$abs")"
+    case "$abs" in "$skill"/scripts/*|"$repo"/scripts/*) return 0 ;; esac
+    if [ -n "$sd" ]; then case "$abs" in "$sd"/scripts/*) return 0 ;; esac; fi
+  done < <(_lr_run_paths "$1")
+  return 1
+}
+
 # Entry point. 0 = block (reason on stdout), 1 = allow.
 lr_bash_verdict() {
   local cmd="$1" sens hit script body cands _m
   hit="$(lr_copy_violation "$cmd")" && { printf 'R1 copy out of protection: %s\n' "$hit"; return 0; }
   sens="$(bash_first_sensitive_target "$cmd")"
+  # The skill's own tools (safety-scan, anonymize-presidio under scripts/gates/) are how
+  # an unreviewed file GETS reviewed; their runs are not inline analysis code.
+  if [ -n "$sens" ] && _lr_runs_skill_tool "$cmd"; then sens=""; fi
   if [ -n "$sens" ]; then
     case "$(bash_primary_verb "$cmd")" in
       python|python2|python3|rscript|r|ruby|node|nodejs|php|lua|perl)

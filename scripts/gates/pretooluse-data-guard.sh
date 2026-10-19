@@ -965,6 +965,16 @@ bash_first_sensitive_target() {
     # Classify by BOTH the symlink-resolved and lexical in-project path — a
     # data/raw/*.csv symlinked to an out-of-tree target must still be caught.
     if is_rawdata_any "$lower" "$lowerlex" || is_qual_any "$lower" "$lowerlex"; then
+      # Ported from dev (audit 2026-09-12 P2-3; S314): consult the sidecar before
+      # blocking on path shape alone. A file a human reviewed and marked CLEARED /
+      # ANONYMIZED / OVERRIDE is readable on the Bash channel too — under Codex the
+      # shell is the only channel, so without this an OVERRIDDEN public PDF in
+      # materials/ could never be read. An untracked path still blocks on shape.
+      st="$(bash_sidecar_status "$canon")"
+      [ -n "$st" ] || st="$(bash_sidecar_status "$lex")"
+      case "$st" in
+        CLEARED|ANONYMIZED|OVERRIDE) continue ;;
+      esac
       printf '%s\n' "$canon"; return 0
     fi
     st="$(bash_sidecar_status "$canon")"
@@ -994,10 +1004,10 @@ bash_command_is_dump() {
       # policy's own aggregate loaders pass: print(df.dtypes), print(summary(df)),
       # df.describe(), cat("N=", nrow(df)) must NOT match. We flag only:
       #   open(...).read() · readLines( · .to_string( · .to_csv() [stdout]
-      #   .head/.tail/.sample/.iloc/.values/.to_dict · head(df)/tail(df)/str(df)/View(df)
+      #   .head/.tail/.sample/.iloc/.values · <frame>.to_dict (S316: not .sum().to_dict()) · head(df)/tail(df)/str(df)/View(df)
       #   print(<bareframe>)  [no dot → excludes print(df.dtypes)]
       #   cat(df$col) · File.read / readFileSync / file_get_contents / io.read
-      if printf '%s' "$cmd" | grep -Eq 'open[[:space:]]*\([^)]*\)[[:space:]]*\.[[:space:]]*read[[:space:]]*\(|readLines[[:space:]]*\(|\.to_string[[:space:]]*\(|\.to_csv[[:space:]]*\([[:space:]]*\)|\.(head|tail|sample|iloc|values|to_dict)[[:space:]]*[([]|(^|[^A-Za-z0-9_.])(head|tail|str|View)[[:space:]]*\([[:space:]]*[A-Za-z_.]|(^|[^A-Za-z0-9_.])print[[:space:]]*\([[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)|cat[[:space:]]*\([^)]*\$|File\.read|readFileSync|file_get_contents|io\.read' 2>/dev/null; then
+      if printf '%s' "$cmd" | grep -Eq 'open[[:space:]]*\([^)]*\)[[:space:]]*\.[[:space:]]*read[[:space:]]*\(|readLines[[:space:]]*\(|\.to_string[[:space:]]*\(|\.to_csv[[:space:]]*\([[:space:]]*\)|\.(head|tail|sample|iloc|values)[[:space:]]*[([]|[A-Za-z0-9_]\.to_dict[[:space:]]*\(|(^|[^A-Za-z0-9_.])(head|tail|str|View)[[:space:]]*\([[:space:]]*[A-Za-z_.]|(^|[^A-Za-z0-9_.])print[[:space:]]*\([[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)|cat[[:space:]]*\([^)]*\$|File\.read|readFileSync|file_get_contents|io\.read' 2>/dev/null; then
         return 0
       fi
       return 1
@@ -1666,7 +1676,11 @@ EOF
   STATUS=""
   for KEY in "$FILE_PATH" "$LEXICAL_PATH" "$RAW_FILE_PATH"; do
     [ -z "$KEY" ] && continue
-    LOOKUP="$(jq -r --arg fp "$KEY" '(.[$fp] // empty) | if type=="string" then . else empty end' "$STATUS_FILE" 2>/dev/null || echo "")"
+    if command -v jq >/dev/null 2>&1; then
+      LOOKUP="$(jq -r --arg fp "$KEY" '(.[$fp] // empty) | if type=="string" then . else empty end' "$STATUS_FILE" 2>/dev/null || echo "")"
+    else  # S315: python3 lookup on a jq-less host
+      LOOKUP="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2]); print(v if isinstance(v,str) else "", end="")' "$STATUS_FILE" "$KEY" 2>/dev/null)"
+    fi
     if [ -n "$LOOKUP" ]; then
       STATUS="$LOOKUP"
       break
