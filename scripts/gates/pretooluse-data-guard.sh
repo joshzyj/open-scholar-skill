@@ -31,6 +31,10 @@
 #       sensitive data target (is_rawdata_path / is_qual_path / sidecar
 #       LOCAL_MODE|HALTED|NEEDS_REVIEW), and blocks obvious content-dump
 #       commands (cat/head/sed/awk/grep-rows/sqlite3/python|R row dumps).
+#     * _guard-leak-rules.sh (S310/S311) adds copies/conversions out of
+#       protection, tainted writes, HALTED processing, wider row printing, and
+#       the bodies of project scripts the command runs. Its LIMITS header says
+#       what still gets through.
 #     * NOT a containment boundary — arbitrary shell can bypass it (other
 #       interpreters, encodings, var-assembled paths). It FAILS OPEN on any
 #       ambiguity so the shell is never bricked. The real wall is the OS
@@ -60,6 +64,13 @@ GATE_SCRIPT="${HOOK_DIR}/safety-scan.sh"
 if [ -f "${HOOK_DIR}/sidecar-schema.sh" ]; then
   # shellcheck source=./sidecar-schema.sh
   . "${HOOK_DIR}/sidecar-schema.sh"
+fi
+
+# S310/S311 Bash leak rules (copies out of protection, tainted writes, row printing
+# beyond the dump regex, project-script bodies). Shared by every guard copy.
+if [ -f "${HOOK_DIR}/_guard-leak-rules.sh" ]; then
+  # shellcheck source=./_guard-leak-rules.sh
+  . "${HOOK_DIR}/_guard-leak-rules.sh"
 fi
 
 # ─── Fail-closed backstop on abnormal termination ───────────────────────
@@ -474,6 +485,27 @@ if command -v jq >/dev/null 2>&1; then
   # this to guard writes to .claude/safety-status.json (sidecar tamper).
   EDIT_NEW="$(printf '%s' "$INPUT" | jq -r '[.tool_input.new_string, .tool_input.content, (.tool_input.edits[]?.new_string)] | map(select(. != null)) | join("\n")' 2>/dev/null)"
   JQ_OK=1
+elif command -v python3 >/dev/null 2>&1 && printf '%s' "$INPUT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+  # S312: no jq but python3 (already required for gated tools, §2c) — parse the
+  # payload with json instead of falling through to the sed parser, which cannot
+  # extract a shell command and left the Bash branch FAIL OPEN. On a jq-less Codex
+  # host that meant no data guard at all, since Codex reaches files via the shell.
+  # Fields arrive NUL-separated, so commands with quotes and newlines survive.
+  { IFS= read -r -d '' TOOL_NAME; IFS= read -r -d '' FILE_PATH; IFS= read -r -d '' CWD
+    IFS= read -r -d '' GREP_PATH; IFS= read -r -d '' GLOB_PATTERN; IFS= read -r -d '' TOOL_CMD
+    IFS= read -r -d '' EDIT_NEW; IFS= read -r -d '' EDIT_OLD; } < <(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+d = json.load(sys.stdin); t = d.get("tool_input") or {}
+s = lambda v: v if isinstance(v, str) else ""
+ed = [e for e in (t.get("edits") or []) if isinstance(e, dict)]
+new = [s(t.get("new_string")), s(t.get("content"))] + [s(e.get("new_string")) for e in ed]
+old = [s(t.get("old_string"))] + [s(e.get("old_string")) for e in ed]
+for v in (s(d.get("tool_name")), s(t.get("file_path")) or s(t.get("notebook_path")), s(d.get("cwd")),
+          s(t.get("path")), s(t.get("pattern")), s(t.get("command")),
+          "\n".join(x for x in new if x), "\n".join(x for x in old if x)):
+    sys.stdout.write(v.replace("\0", "") + "\0")
+' 2>/dev/null)
+  JQ_OK=1
 else
   # Pure-bash fallback. We extract only the fields we need to make a
   # fail-closed decision on data-file reads.
@@ -614,7 +646,8 @@ esac
 bash_sidecar_status() {
   local p="$1" root sf=""
   [ -n "$p" ] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
+  # S312: python3 stands in for jq, so a jq-less host still sees LOCAL_MODE/HALTED.
+  command -v jq >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1 || return 0
   root="$(find_project_root "$p" 2>/dev/null || true)"
   [ -n "$root" ] && [ -f "${root}/.claude/safety-status.json" ] && sf="${root}/.claude/safety-status.json"
   if [ -z "$sf" ] && [ -n "${CWD:-}" ]; then
@@ -622,7 +655,13 @@ bash_sidecar_status() {
     [ -n "$root" ] && [ -f "${root}/.claude/safety-status.json" ] && sf="${root}/.claude/safety-status.json"
   fi
   [ -n "$sf" ] || return 0
-  jq -r --arg k "$p" '(.[$k] // empty) | if type=="string" then . else empty end' "$sf" 2>/dev/null || true
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg k "$p" '(.[$k] // empty) | if type=="string" then . else empty end' "$sf" 2>/dev/null || true
+  else
+    python3 -c 'import json,sys
+v = json.load(open(sys.argv[1])).get(sys.argv[2])
+print(v if isinstance(v, str) else "", end="")' "$sf" "$p" 2>/dev/null || true
+  fi
 }
 
 # Find the command's primary verb: skip leading VAR=val assignments and
@@ -1312,6 +1351,32 @@ EOF
     _DATA_RISK=0          # Bash gate fails OPEN on crash — never brick the shell
     set -f                # noglob: an unquoted `$cmd` split must not glob-expand
     [ -n "${TOOL_CMD:-}" ] || exit 0
+    # S310/S311: runs before the no-target exit, because a script the command runs
+    # can name a restricted file that the command line itself never mentions.
+    if declare -F lr_bash_verdict >/dev/null && _lr_why="$(lr_bash_verdict "$TOOL_CMD")"; then
+      cat >&2 <<EOF
+SAFETY GUARD: Bash blocked — restricted data would leave its protection.
+
+  $_lr_why
+
+R1 copy: a copy of a restricted file outside data/ (or another protected path) has no
+   safety status, so anything can read it afterwards. Keep working copies under data/.
+R2 HALTED: the user declined processing of this file; nothing may read it.
+R3 write: the code loads the restricted file and writes that frame (or the file) to an
+   unprotected path. Write derived row-level data under data/, aggregates elsewhere.
+R4 rows: the code prints rows of the restricted frame.
+R5 script: the same rules applied to the body of a project script this command runs.
+
+Aggregates only (counts, summaries, model output) may leave — see
+_shared/data-handling-policy.md §3a/§3b. Do not reword the command to get past this
+check; if the PI decides the content may be read, record that in
+.claude/safety-status.json (OVERRIDE) or route the file to the PI.
+
+NOTE: this Bash gate is a cooperative-agent SPEED-BUMP, not a containment wall.
+For a kernel-enforced boundary, enable the Lockdown safety level.
+EOF
+      exit 2
+    fi
     _SENS="$(bash_first_sensitive_target "$TOOL_CMD")"
     [ -n "$_SENS" ] || exit 0
     if bash_command_is_dump "$TOOL_CMD"; then

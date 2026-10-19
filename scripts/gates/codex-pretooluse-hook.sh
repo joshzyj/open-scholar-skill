@@ -60,6 +60,8 @@ if [ "$RC" -eq 2 ]; then
   [ -n "$REASON" ] || REASON="Blocked by scholar data-safety guard (restricted data file)."
   # JSON-escape the reason for the decision wire (jq -Rs slurps raw → JSON string).
   ESC="$(printf '%s' "$REASON" | jq -Rs . 2>/dev/null)"
+  # S312: no jq → python3 escapes it, so the model still sees the real reason.
+  [ -n "$ESC" ] || ESC="$(printf '%s' "$REASON" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null)"
   [ -n "$ESC" ] || ESC='"Blocked by scholar data-safety guard."'
   printf '{"decision":"block","reason":%s,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' "$ESC" "$ESC"
   # Also mirror a plain reason to stderr (some Codex surfaces show it).

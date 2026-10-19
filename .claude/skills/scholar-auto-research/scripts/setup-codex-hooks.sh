@@ -54,6 +54,16 @@ ADAPTER_REL="$SKILL_DIR/scripts/gates/codex-pretooluse-hook.sh"
 # against its own cwd, not the project).
 ADAPTER="$(cd "$(dirname "$ADAPTER_REL")" && pwd)/$(basename "$ADAPTER_REL")"
 
+# S312: without a JSON parser the guard cannot read a shell command, and Codex reaches
+# files only through the shell. jq or python3 is enough (the guard falls back to python3).
+if ! command -v jq >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+  echo "setup-codex-hooks: WARN neither jq nor python3 is on PATH — the data guard cannot" >&2
+  echo "  parse Codex's shell commands, so it will NOT block restricted reads. Install jq." >&2
+fi
+
+# The hook timeout key is timeoutSec: Codex 0.154.0 lists the command-hook fields as
+# command, commandWindows, timeoutSec, async, statusMessage, and migrates a Claude-style
+# `timeout` to timeoutSec (checked against the binary, 2026-10-19). Do not rename it.
 CODEX_DIR="$PROJ/.codex"
 CONFIG="$CODEX_DIR/config.toml"
 MARK_BEGIN="# scholar-codex-hooks:BEGIN v1"
